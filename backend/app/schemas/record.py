@@ -1,4 +1,4 @@
-"""Record request/response schemas — 20 fixed inspection fields."""
+"""Record request/response schemas (Step 12.5: yield/list-driven)."""
 from __future__ import annotations
 
 import datetime
@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from app.schemas.base import CamelBaseModel
 
@@ -16,25 +16,23 @@ class RecordCreate(CamelBaseModel):
     supplier_id: UUID
     record_date: datetime.date
 
-    crop_type: str | None = Field(None, max_length=100)
+    crop: str | None = Field(None, max_length=100)
+    variety: str | None = Field(None, max_length=100)
     growth_stage: str | None = Field(None, max_length=100)
-    area_rai: Decimal | None = Field(None, ge=0)
-    plant_height_cm: Decimal | None = Field(None, ge=0)
+    planting_date: datetime.date | None = None
 
-    pest_found: bool = False
-    pest_detail: str | None = None
-    pest_severity: int | None = Field(None, ge=1, le=5)
+    # Yield % 0–150 (default 100)
+    yield_pct: Decimal | None = Field(Decimal("100"), ge=0, le=150)
 
-    disease_found: bool = False
-    disease_detail: str | None = None
-    disease_severity: int | None = Field(None, ge=1, le=5)
-
-    weed_severity: int | None = Field(None, ge=0, le=5)
-    fertilizer_used: str | None = Field(None, max_length=255)
-    fertilizer_amount_kg: Decimal | None = Field(None, ge=0)
-
-    irrigation_method: str | None = Field(None, max_length=100)
     weather_condition: str | None = Field(None, max_length=100)
+    field_prep_level: str | None = Field(None, max_length=50)
+    care_level: str | None = Field(None, max_length=50)
+    pest_status: str | None = Field(None, max_length=50)
+    disease_status: str | None = Field(None, max_length=50)
+    weed_status: str | None = Field(None, max_length=50)
+    irrigation_method: str | None = Field(None, max_length=100)
+    fertilizer: str | None = Field(None, max_length=100)
+
     recommendation: str | None = None
     notes: str | None = None
 
@@ -42,39 +40,29 @@ class RecordCreate(CamelBaseModel):
     longitude: Decimal | None = Field(None, ge=-180, le=180)
     photo_urls: list[str] = Field(default_factory=list)
 
-    @model_validator(mode="after")
-    def _clear_detail_when_not_found(self) -> "RecordCreate":
-        if not self.pest_found:
-            self.pest_detail = None
-            self.pest_severity = None
-        if not self.disease_found:
-            self.disease_detail = None
-            self.disease_severity = None
-        return self
+    # Dynamic custom fields (Step 12) — keyed by FieldDefinition.key (slug).
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class RecordUpdate(CamelBaseModel):
     record_date: datetime.date | None = None
 
-    crop_type: str | None = Field(None, max_length=100)
+    crop: str | None = Field(None, max_length=100)
+    variety: str | None = Field(None, max_length=100)
     growth_stage: str | None = Field(None, max_length=100)
-    area_rai: Decimal | None = Field(None, ge=0)
-    plant_height_cm: Decimal | None = Field(None, ge=0)
+    planting_date: datetime.date | None = None
 
-    pest_found: bool | None = None
-    pest_detail: str | None = None
-    pest_severity: int | None = Field(None, ge=1, le=5)
+    yield_pct: Decimal | None = Field(None, ge=0, le=150)
 
-    disease_found: bool | None = None
-    disease_detail: str | None = None
-    disease_severity: int | None = Field(None, ge=1, le=5)
-
-    weed_severity: int | None = Field(None, ge=0, le=5)
-    fertilizer_used: str | None = Field(None, max_length=255)
-    fertilizer_amount_kg: Decimal | None = Field(None, ge=0)
-
-    irrigation_method: str | None = Field(None, max_length=100)
     weather_condition: str | None = Field(None, max_length=100)
+    field_prep_level: str | None = Field(None, max_length=50)
+    care_level: str | None = Field(None, max_length=50)
+    pest_status: str | None = Field(None, max_length=50)
+    disease_status: str | None = Field(None, max_length=50)
+    weed_status: str | None = Field(None, max_length=50)
+    irrigation_method: str | None = Field(None, max_length=100)
+    fertilizer: str | None = Field(None, max_length=100)
+
     recommendation: str | None = None
     notes: str | None = None
     is_active: bool | None = None
@@ -82,6 +70,7 @@ class RecordUpdate(CamelBaseModel):
     latitude: Decimal | None = Field(None, ge=-90, le=90)
     longitude: Decimal | None = Field(None, ge=-180, le=180)
     photo_urls: list[str] | None = None
+    custom_fields: dict[str, Any] | None = None
 
 
 class RecordRead(CamelBaseModel):
@@ -96,25 +85,21 @@ class RecordRead(CamelBaseModel):
     supplier_name: str = ""
 
     record_date: datetime.date
-    crop_type: str | None
+    crop: str | None
+    variety: str | None
     growth_stage: str | None
-    area_rai: Decimal | None
-    plant_height_cm: Decimal | None
+    planting_date: datetime.date | None
+    yield_pct: Decimal | None
 
-    pest_found: bool
-    pest_detail: str | None
-    pest_severity: int | None
-
-    disease_found: bool
-    disease_detail: str | None
-    disease_severity: int | None
-
-    weed_severity: int | None
-    fertilizer_used: str | None
-    fertilizer_amount_kg: Decimal | None
-
-    irrigation_method: str | None
     weather_condition: str | None
+    field_prep_level: str | None
+    care_level: str | None
+    pest_status: str | None
+    disease_status: str | None
+    weed_status: str | None
+    irrigation_method: str | None
+    fertilizer: str | None
+
     recommendation: str | None
     notes: str | None
 
@@ -134,10 +119,12 @@ class RecordSummary(CamelBaseModel):
     supplier_id: UUID
     recorded_by_id: UUID
     record_date: datetime.date
-    crop_type: str | None
+    crop: str | None
+    variety: str | None
     growth_stage: str | None
-    pest_found: bool
-    disease_found: bool
+    yield_pct: Decimal | None
+    pest_status: str | None
+    disease_status: str | None
     is_active: bool
     created_at: datetime.datetime
     # Denormalised display fields (populated by API layer from relationships)

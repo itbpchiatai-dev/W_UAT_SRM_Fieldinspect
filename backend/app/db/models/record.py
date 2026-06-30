@@ -1,4 +1,9 @@
-"""Record — FarmLog field inspection record (20 fixed typed columns)."""
+"""Record — FarmLog field inspection record (Step 12.5: yield/list-driven).
+
+Most assessment fields are list-coded (values picked from master_data) for fast
+on-site capture; `yield_pct` is the headline Yield % (0–150). Only recommendation
+and notes are free text. Custom fields live in `custom_fields` (Step 12).
+"""
 from __future__ import annotations
 
 import datetime
@@ -6,7 +11,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, SmallInteger, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,25 +40,28 @@ class Record(Base, UUIDMixin, TimestampMixin):
     )
 
     record_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    crop_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Crop identity (list ← master_data)
+    crop: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    variety: Mapped[str | None] = mapped_column(String(100), nullable=True)
     growth_stage: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    area_rai: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
-    plant_height_cm: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    planting_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
 
-    pest_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    pest_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    pest_severity: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # Yield — headline metric, % 0–150 (default 100)
+    yield_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 1), nullable=True, default=Decimal("100"), server_default="100")
 
-    disease_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    disease_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    disease_severity: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
-
-    weed_severity: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
-    fertilizer_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    fertilizer_amount_kg: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
-
-    irrigation_method: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Assessment (list ← master_data)
     weather_condition: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    field_prep_level: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    care_level: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pest_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    disease_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    weed_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    irrigation_method: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    fertilizer: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Free text
     recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

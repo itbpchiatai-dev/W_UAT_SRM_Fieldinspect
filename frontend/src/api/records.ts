@@ -1,5 +1,5 @@
 /**
- * Records API — FarmLog field inspection records
+ * Records API — FarmLog field inspection records (Step 12.5: yield/list-driven)
  */
 import { apiClient } from './client';
 
@@ -9,10 +9,12 @@ export interface RecordSummary {
   supplierId: string;
   recordedById: string;
   recordDate: string;
-  cropType: string | null;
+  crop: string | null;
+  variety: string | null;
   growthStage: string | null;
-  pestFound: boolean;
-  diseaseFound: boolean;
+  yieldPct: string | null;
+  pestStatus: string | null;
+  diseaseStatus: string | null;
   isActive: boolean;
   createdAt: string;
   plotCode: string;
@@ -31,21 +33,19 @@ export interface RecordDetail {
   plotName: string;
   supplierName: string;
   recordDate: string;
-  cropType: string | null;
+  crop: string | null;
+  variety: string | null;
   growthStage: string | null;
-  areaRai: string | null;
-  plantHeightCm: string | null;
-  pestFound: boolean;
-  pestDetail: string | null;
-  pestSeverity: number | null;
-  diseaseFound: boolean;
-  diseaseDetail: string | null;
-  diseaseSeverity: number | null;
-  weedSeverity: number | null;
-  fertilizerUsed: string | null;
-  fertilizerAmountKg: string | null;
-  irrigationMethod: string | null;
+  plantingDate: string | null;
+  yieldPct: string | null;
   weatherCondition: string | null;
+  fieldPrepLevel: string | null;
+  careLevel: string | null;
+  pestStatus: string | null;
+  diseaseStatus: string | null;
+  weedStatus: string | null;
+  irrigationMethod: string | null;
+  fertilizer: string | null;
   recommendation: string | null;
   notes: string | null;
   latitude: string | null;
@@ -71,26 +71,25 @@ export interface RecordCreatePayload {
   plotId: string;
   supplierId: string;
   recordDate: string;
-  cropType?: string | null;
+  crop?: string | null;
+  variety?: string | null;
   growthStage?: string | null;
-  areaRai?: number | null;
-  plantHeightCm?: number | null;
-  pestFound?: boolean;
-  pestDetail?: string | null;
-  pestSeverity?: number | null;
-  diseaseFound?: boolean;
-  diseaseDetail?: string | null;
-  diseaseSeverity?: number | null;
-  weedSeverity?: number | null;
-  fertilizerUsed?: string | null;
-  fertilizerAmountKg?: number | null;
-  irrigationMethod?: string | null;
+  plantingDate?: string | null;
+  yieldPct?: number | null;
   weatherCondition?: string | null;
+  fieldPrepLevel?: string | null;
+  careLevel?: string | null;
+  pestStatus?: string | null;
+  diseaseStatus?: string | null;
+  weedStatus?: string | null;
+  irrigationMethod?: string | null;
+  fertilizer?: string | null;
   recommendation?: string | null;
   notes?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   photoUrls?: string[];
+  customFields?: Record<string, unknown>;
 }
 
 export type RecordUpdatePayload = Partial<RecordCreatePayload> & { isActive?: boolean };

@@ -37,23 +37,28 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
         )
     ) or 0
 
-    # List-coded status (Step 12.5) — "found" = a status that is set and not "ไม่พบ".
-    pest_found_count = (
-        await db.scalar(
-            select(func.count(Record.id)).where(
-                Record.is_active == True,
-                Record.pest_status.is_not(None),
-                Record.pest_status.notin_(["ไม่พบ"]),
-            )
+    # Condition scores (Step 12.6) — overall average + records flagged for attention.
+    score_avgs = (
+        await db.execute(
+            select(
+                func.avg(Record.field_prep_score),
+                func.avg(Record.weather_score),
+                func.avg(Record.care_score),
+                func.avg(Record.variety_resistance_score),
+            ).where(Record.is_active == True)
         )
-    ) or 0
+    ).one()
+    _present = [float(v) for v in score_avgs if v is not None]
+    avg_condition_score = round(sum(_present) / len(_present), 1) if _present else None
 
-    disease_found_count = (
+    low_score_count = (
         await db.scalar(
             select(func.count(Record.id)).where(
                 Record.is_active == True,
-                Record.disease_status.is_not(None),
-                Record.disease_status.notin_(["ไม่พบ"]),
+                (Record.field_prep_score <= 3)
+                | (Record.weather_score <= 3)
+                | (Record.care_score <= 3)
+                | (Record.variety_resistance_score <= 3),
             )
         )
     ) or 0
@@ -88,8 +93,8 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
     return DashboardSummary(
         total_records=total_records,
         records_this_month=records_this_month,
-        pest_found_count=pest_found_count,
-        disease_found_count=disease_found_count,
+        avg_condition_score=avg_condition_score,
+        low_score_count=low_score_count,
         total_plots=total_plots,
         total_suppliers=total_suppliers,
         by_crop_type=by_crop_type,

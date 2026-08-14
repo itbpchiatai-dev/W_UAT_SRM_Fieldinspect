@@ -13,9 +13,11 @@ interface Props {
   onChange: (value: string | null) => void;
   parent?: string | null;
   disabled?: boolean;
+  /** Multi-select mode — see OptionButtons: `value` is a ", "-joined list. */
+  multiple?: boolean;
 }
 
-export function MasterDataButtons({ type, value, onChange, parent, disabled }: Props) {
+export function MasterDataButtons({ type, value, onChange, parent, disabled, multiple }: Props) {
   const { data: items = [], isLoading } = useQuery({
     queryKey: ['masterdata', type, parent ?? null],
     queryFn: () => listMasterData({ type, parent: parent ?? undefined, activeOnly: true }),
@@ -28,6 +30,7 @@ export function MasterDataButtons({ type, value, onChange, parent, disabled }: P
       onChange={onChange}
       disabled={disabled}
       loading={isLoading}
+      multiple={multiple}
     />
   );
 }

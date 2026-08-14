@@ -1,0 +1,4 @@
+# Security baseline marker — see docs/migration-security-v3.0.2.md
+SECURITY_BASELINE=v3.0.2
+APPLIED=2026-06-29
+SOURCE=scaffold

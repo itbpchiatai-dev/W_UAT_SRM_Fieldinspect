@@ -4,23 +4,40 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ClipboardList, Plus, PowerOff, Eye, FileText } from 'lucide-react';
+import { ClipboardList, Plus, PowerOff, FileText } from 'lucide-react';
 import { listRecords, deactivateRecord, type RecordSummary } from '../../api/records';
 import { listSuppliers } from '../../api/suppliers';
 import { listPlots } from '../../api/plots';
 import { useHasPermission } from '../../hooks/useHasPermission';
+import { CompactScores } from '../../components/farmlog/CompactScores';
+import { recordCycleDisplayName } from '../../lib/plot-cycle';
+import { formatYieldQuantity } from '../../lib/yield-planning';
+import { toNumberOrNull } from '../../lib/numeric';
 
 const PAGE_SIZE = 30;
 
-/** A list-coded status counts as an alert unless empty or the "ไม่พบ" option. */
-function StatusCell({ status }: { status: string | null }) {
-  if (!status) return <span className="text-gray-400 text-xs">—</span>;
-  if (status === 'ไม่พบ') return <span className="text-gray-400 text-xs">ไม่พบ</span>;
-  return (
-    <span className="inline-flex items-center rounded-full bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700">
-      {status}
-    </span>
-  );
+/** Round 8-8C — a kg-first record (yieldQuantityKg present) shows the kg
+ * amount as the primary value with the percent as secondary text below (same
+ * cell, no new column, so the table never grows wider than necessary); a
+ * legacy record (percent only) falls back to the original percent-only
+ * display. quantityKg=0 is a real value (shows "0 kg"), never the em dash —
+ * only truly missing data (both null) falls back to that. */
+function YieldCell({ record }: { record: RecordSummary }) {
+  const quantityKg = toNumberOrNull(record.yieldQuantityKg);
+  const pct = record.yieldPct != null ? parseFloat(record.yieldPct) : null;
+
+  if (quantityKg != null) {
+    return (
+      <div>
+        <div className="font-semibold text-green-700">{formatYieldQuantity(quantityKg, 'kg')}</div>
+        {pct != null && <div className="text-xs text-gray-400">{pct}%</div>}
+      </div>
+    );
+  }
+  if (pct != null) {
+    return <span className="font-semibold text-green-700">{pct}%</span>;
+  }
+  return <span className="text-gray-400 text-xs">—</span>;
 }
 
 export function RecordList() {
@@ -37,6 +54,7 @@ export function RecordList() {
   const { data: suppliers = [] } = useQuery({
     queryKey: ['suppliers', 'all'],
     queryFn: () => listSuppliers({ activeOnly: true, limit: 200 }),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: plots = [] } = useQuery({
@@ -46,6 +64,7 @@ export function RecordList() {
       activeOnly: true,
       limit: 200,
     }),
+    staleTime: 60 * 1000,
   });
 
   const { data: records = [], isLoading } = useQuery({
@@ -122,7 +141,7 @@ export function RecordList() {
       </div>
 
       {/* Table */}
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
         {isLoading ? (
           <div className="flex justify-center py-16 text-gray-400">กำลังโหลด...</div>
         ) : records.length === 0 ? (
@@ -134,7 +153,12 @@ export function RecordList() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                {['วันที่', 'Supplier / แปลง', 'พืช/ระยะ', 'Yield', 'แมลง', 'โรค', 'สถานะ', ''].map(h => (
+                {/* Score column is a single neutral "คะแนนตรวจ" (round 5.4):
+                    a record's 4 criteria are remapped by its growth stage,
+                    so fixed per-slot column labels would mislead across a
+                    mixed-stage list. The labelled breakdown is in the
+                    preview/detail (snapshot-driven). */}
+                {['วันที่', 'Supplier / แปลง', 'พืช/ระยะ', 'Yield', 'คะแนนตรวจ (4 หัวข้อ)', 'สถานะ', ''].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>
@@ -144,7 +168,17 @@ export function RecordList() {
             <tbody className="divide-y divide-gray-100">
               {records.map((r: RecordSummary) => (
                 <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">{r.recordDate}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700">
+                    {r.recordDate}
+                    {/* Which planting cycle this record belongs to (round
+                        8.0.5) — the record's OWN cycle, bound at create
+                        time; leads with cycleLabel, falls back to รอบที่ N. */}
+                    {(r.cycleLabel != null || r.cycleNo != null) && (
+                      <div className="mt-0.5 inline-block rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
+                        {recordCycleDisplayName(r)}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
                     {r.supplierName && <div className="text-xs text-gray-400">{r.supplierName}</div>}
                     <div className="font-medium">{r.plotCode || r.plotId}</div>
@@ -157,14 +191,11 @@ export function RecordList() {
                     {r.growthStage && <div className="text-xs text-gray-400">{r.growthStage}</div>}
                   </td>
                   <td className="px-4 py-3 text-sm">
-                    {r.yieldPct != null ? (
-                      <span className="font-semibold text-green-700">{parseFloat(r.yieldPct)}%</span>
-                    ) : (
-                      <span className="text-gray-400 text-xs">—</span>
-                    )}
+                    <YieldCell record={r} />
                   </td>
-                  <td className="px-4 py-3 text-sm"><StatusCell status={r.pestStatus} /></td>
-                  <td className="px-4 py-3 text-sm"><StatusCell status={r.diseaseStatus} /></td>
+                  <td className="px-4 py-3 text-sm">
+                    <CompactScores scores={[r.fieldPrepScore, r.weatherScore, r.careScore, r.varietyResistanceScore]} />
+                  </td>
                   <td className="px-4 py-3 text-sm">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${r.isActive ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
                       {r.isActive ? 'ใช้งาน' : 'ปิด'}
@@ -178,13 +209,6 @@ export function RecordList() {
                         title="One Page Preview"
                       >
                         <FileText className="h-4 w-4" />
-                      </Link>
-                      <Link
-                        to={`/farmlog/records/${r.id}`}
-                        className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                        title="แก้ไข"
-                      >
-                        <Eye className="h-4 w-4" />
                       </Link>
                       {canDelete && r.isActive && (
                         <button

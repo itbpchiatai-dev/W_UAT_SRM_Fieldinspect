@@ -1,0 +1,104 @@
+# Pre-commit hooks for CT Web App Standard v3.0
+#
+# Install:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually:
+#   pre-commit run --all-files
+#
+# Reference: docs/patterns/tooling.md
+
+repos:
+  # ─────────────────────────────────────────────────────────
+  # Secret detection (highest priority)
+  # ─────────────────────────────────────────────────────────
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: 'package-lock\.json|.*\.lock$|\.secrets\.baseline$'
+
+  # ─────────────────────────────────────────────────────────
+  # General file checks
+  # ─────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-case-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # ─────────────────────────────────────────────────────────
+  # Backend (Python) — only run on backend/ files
+  # ─────────────────────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: '^(backend|scripts)/.*\.py$'
+      - id: ruff-format
+        files: '^(backend|scripts)/.*\.py$'
+
+  # ─────────────────────────────────────────────────────────
+  # Custom CT Web App Standard checks
+  # ─────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: no-real-secrets-in-examples
+        name: No real values in .example files
+        entry: python scripts/checks/no_real_secrets_in_examples.py
+        language: python
+        files: '\.example$|project\.config\.example$'
+        pass_filenames: true
+
+      - id: no-direct-ai-sdk
+        name: No direct AI SDK calls outside app/integrations/
+        entry: python scripts/checks/no_direct_ai_sdk.py
+        language: python
+        files: '^backend/app/.*\.py$'
+        exclude: '^backend/app/integrations/'
+        pass_filenames: true
+
+      - id: camel-base-model-audit
+        name: Schemas must inherit CamelBaseModel
+        entry: python scripts/checks/camel_base_model_audit.py
+        language: python
+        files: '^backend/app/schemas/.*\.py$'
+        pass_filenames: true
+
+      - id: no-dict-in-endpoint
+        name: Endpoint params must not be raw dict
+        entry: python scripts/checks/no_dict_in_endpoint.py
+        language: python
+        files: '^backend/app/api/.*\.py$'
+        pass_filenames: true
+
+      - id: no-raw-colors
+        name: Frontend must use brand color tokens (add `brand-allow` to override)
+        entry: python scripts/checks/no_raw_colors.py
+        language: python
+        files: '^frontend/src/.*\.(tsx|ts|jsx|js)$'
+        pass_filenames: true
+
+      - id: no-unguarded-url-fetch
+        name: No server-side fetch of user-controlled URL (add `# ssrf-ok` to override)
+        entry: python scripts/checks/no_unguarded_url_fetch.py
+        language: python
+        files: '^backend/app/.*\.py$'
+        pass_filenames: true

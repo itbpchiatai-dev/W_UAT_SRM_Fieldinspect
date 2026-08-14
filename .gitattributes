@@ -1,0 +1,16 @@
+# Standard-internal files — kept in the repo for maintainers, but excluded from
+# the distribution archive (`git archive` / release zip) so projects generated
+# from the template don't carry the standard's own history, notes, or doc tooling.
+#
+# (docs/dev-journal/ and docs/*.pdf are already gitignored → not tracked → never
+#  in the archive; the filesystem-copy path is handled by cleanup-after-setup.py.)
+
+PROGRESS.md                       export-ignore
+CHANGELOG.md                      export-ignore
+docs/handover-2026-06-01.md       export-ignore
+docs/bugs-from-test-2026-05-28.md export-ignore
+docs/migration-security-v3.0.2.md export-ignore
+docs/mockups/                     export-ignore
+scripts/build-user-guide-pdf.py   export-ignore
+scripts/build-docs-pdf.py         export-ignore
+scripts/build-security-pdf.py     export-ignore

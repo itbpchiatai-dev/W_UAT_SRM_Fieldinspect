@@ -29,6 +29,7 @@ from app.db.models.permission import Permission
 from app.db.models.role import Role
 from app.db.models.user import User
 from app.db.session import close_db, get_db_session, init_db
+from app.services.external_submission import EXTERNAL_FIELD_HELPER_EMAIL
 
 
 # (key, display_name, category, is_menu)
@@ -137,9 +138,27 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
     ]),
     ("supplier:owner",       "Supplier Owner",      "external", [
         "suppliers.read", "plots.read",
-        "records.read",
+        # Self-service plots: an owner creates/edits plots for their OWN
+        # supplier only — RLS scope 'supplier' hides everyone else's rows,
+        # and create_plot (app/api/v1/plots.py) additionally rejects a
+        # payload naming another supplier with a clean 403.
+        "plots.create", "plots.update",
+        # Round 8-4F: an owner records inspections for their OWN supplier's
+        # plots. records.create only unlocks the ACTION — the data boundary
+        # stays RLS scope 'supplier' (app/api/deps/scope.py: owner + supplier_id
+        # → scope 'supplier'; no supplier_id → 'none'/fail-closed). The create
+        # endpoint (app/api/v1/records.py) additionally resolves the plot under
+        # that scope (a foreign plot returns a generic 404, never leaking that
+        # it exists) and derives supplier_id from the plot, never the client
+        # body. Authentication is not authorization: this key is the action,
+        # RLS + the endpoint's plot resolution are the limits. Deliberately NOT
+        # records.update/delete — owners append inspections, never edit/remove
+        # history.
+        "records.read", "records.create",
     ]),
     ("supplier:staff",       "Supplier Staff",      "external", [
+        # Read-only: staff view their supplier's records but cannot create
+        # (records.create stays owner-only in round 8-4F).
         "records.read",
     ]),
     ("farmlog:field_officer", "Field Officer",      "internal", [
@@ -179,6 +198,10 @@ DEFAULT_MENUS: list[tuple[str, str, str, str | None, str, str | None, int, str]]
     ("farmlog.admin.masterdata","Master Data",   "Master Data",   "ListChecks",   "/farmlog/admin/masterdata",    "farmlog.admin", 40, "masterdata.read"),
     # FarmLog — Records (visible to all roles with records.read)
     ("farmlog.records",        "บันทึกการตรวจ", "Records",       "ClipboardList", "/farmlog/records",             "farmlog",       30, "records.read"),
+    # FarmLog — Reports (gated by plots.read; the reports read from the
+    # plots table's denormalized status, so no separate report permission).
+    ("farmlog.reports",            "รายงาน",     "Reports",     "BarChart3", "/farmlog/reports",             "farmlog",         40, "plots.read"),
+    ("farmlog.reports.plotstatus", "สถานะแปลง",  "Plot Status", "Table2",    "/farmlog/reports/plot-status", "farmlog.reports", 10, "plots.read"),
 ]
 
 
@@ -353,6 +376,27 @@ async def _seed_bootstrap_user(db: AsyncSession, roles: dict[str, Role]) -> None
         user.roles = [super_admin_role]
 
 
+async def _seed_external_field_helper_user(db: AsyncSession) -> None:
+    """System user that recorded_by_id points to for records created via
+    the public (unauthenticated) inspection-code flow (round 8) —
+    recorded_by_id is NOT NULL and there's no real logged-in user in that
+    flow. No role, no password: never authenticated as, only ever
+    referenced as a foreign key."""
+    existing = (await db.execute(
+        select(User).where(func.lower(User.email) == EXTERNAL_FIELD_HELPER_EMAIL)
+    )).scalar_one_or_none()
+    if existing is not None:
+        return
+    db.add(User(
+        email=EXTERNAL_FIELD_HELPER_EMAIL,
+        full_name="External Field Helper (system)",
+        auth_provider="system",
+        is_active=True,
+        is_approved=True,
+        email_verified=True,
+    ))
+
+
 async def seed() -> None:
     async with get_db_session() as db:
         perms = await _seed_permissions(db)
@@ -360,6 +404,7 @@ async def seed() -> None:
         await _seed_menus(db)
         await _seed_app_settings(db)
         await _seed_bootstrap_user(db, roles)
+        await _seed_external_field_helper_user(db)
         await db.commit()
 
 

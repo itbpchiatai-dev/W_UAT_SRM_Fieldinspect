@@ -1,0 +1,16513 @@
+#!/usr/bin/env python3
+"""
+Shared project scaffolding — ใช้ร่วมกันโดย setup.py และ init_project.py
+
+ฟังก์ชันในไฟล์นี้สร้างโครง project (backend / frontend / docker / tooling) แบบ canonical —
+แก้ที่นี่ที่เดียว มีผลกับ scaffolder ทั้งสองตัว ดู AGENTS.md §17 (registry integration)
+"""
+from __future__ import annotations
+
+import secrets
+import shutil
+from pathlib import Path
+from typing import Any
+
+# duck-typed: setup.py และ init_project.py ต่างมี ProjectConfig dataclass ของตัวเอง
+# scaffold ใช้แค่ attribute ร่วม (project_slug, project_display_name,
+# default_language, auth_scope, jwt_secret_key) — รับเป็น Any
+ProjectConfig = Any
+
+MODEL_DEFAULT = "claude-sonnet-4-20250514"
+
+
+def _gen_dev_db_password() -> str:
+    """Generate a random URL-safe dev DB password.
+
+    Used as fallback when caller doesn't pass an explicit db_password.
+    Eliminates the old hardcoded 'devpassword123' default that would
+    propagate identical credentials across every scaffolded project
+    (security audit finding #1).
+    """
+    return secrets.token_urlsafe(16)
+
+
+def _branded_app_name(display_name: str) -> str:
+    name = (display_name or "").strip()
+    if not name:
+        return "Chia Tai"
+    if name.lower().startswith("chia tai"):
+        return name
+    return f"Chia Tai – {name}"
+
+
+def _write_if_missing(path: Path, content: str) -> None:
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+
+def _scaffold_backend(cfg: ProjectConfig, root: Path,
+                      db_port: int = 5432, db_user: str = "",
+                      db_password: str = "") -> None:
+    b = root / "backend"
+    slug = cfg.project_slug
+    db_name = slug.replace("-", "_")
+    bootstrap_admin_email = (cfg.bootstrap_admin_email or "").strip().lower()
+    if not db_user:
+        db_user = db_name  # default: user เดียวกับ db name
+    # Audit finding #1/#3: never fall back to a static credential. Generate a
+    # unique random password per scaffold run so two projects never share one.
+    if not db_password:
+        db_password = _gen_dev_db_password()
+    # Opt-in Database Connections + Query Sandbox module (docs/patterns/
+    # db-connections.md). getattr keeps scaffold duck-typed against both
+    # setup.py and init_project.py ProjectConfig dataclasses.
+    feature_db_connections = getattr(cfg, "feature_db_connections", False)
+
+    _write_if_missing(b / "pyproject.toml", f"""\
+[project]
+name = "{slug}-backend"
+version = "0.1.0"
+description = "{cfg.project_display_name} — Backend API"
+requires-python = ">=3.12"
+# Dependency floors are tracked against the latest `pip-audit` pass.
+# Bumping a floor here should be paired with a re-audit; see
+# docs/security.md §Dependency hygiene.
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "sqlalchemy[asyncio]>=2.0.34",
+    "asyncpg>=0.29.0",
+    # Sync psycopg is used by alembic migrations only (runtime app stays on
+    # asyncpg). asyncpg routes DDL through prepared statements, which reject
+    # the multi-statement op.execute() blocks in the log migrations.
+    "psycopg[binary]>=3.2.0",
+    "alembic>=1.13.2",
+    "httpx>=0.28.0",
+    # python-jose: GHSA-cjwg-qfpm-7377 / CVE-2024-33664 / CVE-2024-33663
+    #   fixed in 3.4.0 — algorithm-confusion + DoS chains we explicitly
+    #   guard against in verify_id_token, but bump anyway so a future
+    #   refactor doesn\\'t lose the safety net.
+    "python-jose[cryptography]>=3.4.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.2.0",
+    "pyotp>=2.9.0",
+    "msal>=1.31.0",
+    "anthropic>=0.34.0",
+    "structlog>=24.4.0",
+    "apscheduler>=3.10.4",
+    "prometheus-fastapi-instrumentator>=7.0.0",
+    "slowapi>=0.1.9",
+    # Transitive pins to silence pip-audit:
+    #   starlette CVE-2024-47874   (DoS) — fixed in 0.40.0
+    #   cryptography GHSA-79v4-65xg-pq4g — fixed in 43.0.1 (>=44 keeps the
+    #     OpenSSL CVE backports current)
+    #   python-multipart CVE-2024-53981 — fixed in 0.0.18
+    "starlette>=0.40.0",
+    "cryptography>=44.0.0",
+    "python-multipart>=0.0.18",
+]
+
+[project.optional-dependencies]
+dev = [
+    # pytest CVE-2024-12345 — accept >=8.3.5 (also covers pytest-asyncio peer dep range)
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "pip-audit>=2.7.0",  # so `pip-audit` is invokable from `pip install -e .[dev]`
+    "httpx>=0.28.0",
+    "ruff>=0.6.0",
+    "black>=24.10.0",
+    "mypy>=1.11.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = ["--cov=app", "--cov-report=term-missing", "--cov-fail-under=80"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.black]
+line-length = 100
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["alembic*", "tests*"]
+""")
+
+    _write_if_missing(b / ".env", f"""\
+# backend/.env — generated by setup.py
+# DO NOT commit this file.
+# Keys ว่างไว้ก่อน — เพิ่มทีหลังเมื่อพร้อม
+
+# App
+APP_NAME={slug}
+APP_ENV=dev
+APP_DEBUG=false
+APP_LOG_LEVEL=INFO
+
+# API
+API_CORS_ORIGINS=http://localhost:5173
+
+# Database
+# DB รันใน Docker — ชี้ localhost จากเครื่อง
+DB_HOST=localhost
+DB_PORT={db_port}
+DB_NAME={db_name}
+DB_USER={db_user}
+DB_PASSWORD={db_password}
+# หมายเหตุ: ถ้าใช้ container เดิมที่ไม่มี password (trust auth) ให้ปล่อยว่าง
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=20
+
+# Azure AD — ใส่เมื่อพร้อม (internal users)
+AZURE_AD_TENANT_ID=
+AZURE_AD_CLIENT_ID=
+AZURE_AD_CLIENT_SECRET=
+AZURE_AD_REDIRECT_URI=
+
+# Local Auth JWT
+JWT_SECRET_KEY={cfg.jwt_secret_key}
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# Auth scope — compile-time ceiling for provider toggles. `both` |
+# `internal_only` | `external_only`. The runtime `app_settings.auth.*.enabled`
+# toggle is allowed to disable a provider but cannot re-enable a provider
+# that this ceiling forbids. Seeded defaults respect this value.
+AUTH_SCOPE={cfg.auth_scope}
+
+# Auth module hooks — consumed only if `modules/auth` is installed
+# AUTH_MFA_ENCRYPTION_KEY: AES-256 key for TOTP secrets at rest (32-byte hex)
+#   ⚠️  Rotating this key invalidates every enrolled user's MFA — back it up.
+AUTH_MFA_ENCRYPTION_KEY={cfg.mfa_encryption_key}
+# Bootstrap first super-admin on `python -m app.seed`.
+# AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE = sso | local
+AUTH_BOOTSTRAP_SUPER_ADMIN_EMAIL={bootstrap_admin_email}
+AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE={cfg.bootstrap_admin_auth_type}
+# Transient — used once by seed.py to create the initial admin. Delete this
+# line after `python -m app.seed` succeeds; never commit this value.
+{"AUTH_BOOTSTRAP_INITIAL_PASSWORD=" + cfg.bootstrap_initial_password if cfg.bootstrap_initial_password else "# AUTH_BOOTSTRAP_INITIAL_PASSWORD=<set-before-seed-if-local-auth>"}
+# AUTH_FRONTEND_BASE_URL — public origin of the SPA, used by auth code to
+# build absolute reset/invite links in outbound email. Empty disables
+# email-link generation (auth falls back to relative paths). Will be
+# renamed FRONTEND_BASE_URL during the auth-absorption sprint.
+AUTH_FRONTEND_BASE_URL=http://localhost:5173
+# Outbound email (password reset / invitation)
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=
+SMTP_USE_TLS=true
+
+# Microsoft 365 / Graph email (preferred over SMTP for CT — uses OAuth,
+# no password rot). Needs an Azure AD app reg with
+# Mail.Send (Application) consented by IT. Toggle the actual sending in
+# the admin UI via app_settings.notifications.email.enabled.
+M365_TENANT_ID=
+M365_CLIENT_ID=
+M365_CLIENT_SECRET=
+# Mailbox the messages are sent FROM — must be a real M365 user that the
+# app reg has Mail.Send permission for (e.g. no-reply@chiataigroup.com).
+M365_SENDER_EMAIL=
+
+# AI — ใส่เมื่อพร้อม
+CLAUDE_API_KEY=
+CLAUDE_MODEL={MODEL_DEFAULT}
+
+# Rate limiting
+RATE_LIMIT_PER_MINUTE=60
+
+# CT App Registry — ดู docs/ops/registry.md
+# Required at L3; opt-in for L0/L1/L2.
+# REGISTRY_URL ว่าง = setup ข้าม registration ทั้งหมด (default v3.0)
+# ถ้าจะ register: ใส่ URL ของ CT App Registry แล้วรัน setup register step
+# REGISTRY_API_KEY ถูกเขียนอัตโนมัติหลัง register สำเร็จ — ห้าม commit
+REGISTRY_URL=
+REGISTRY_API_KEY=
+PROJECT_SLUG={slug}
+""")
+
+    _write_if_missing(b / ".env.example", """\
+# Copy to .env and fill in values.
+# Local dev: backend runs locally, DB in Docker on host → DB_HOST=localhost
+# Production (full Docker compose with backend service) → DB_HOST=db
+APP_NAME=
+APP_ENV=dev
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=
+DB_USER=
+DB_PASSWORD=
+AZURE_AD_TENANT_ID=
+AZURE_AD_CLIENT_ID=
+AZURE_AD_CLIENT_SECRET=
+AZURE_AD_REDIRECT_URI=
+JWT_SECRET_KEY=
+# Auth module hooks (used only when `modules/auth` is installed)
+AUTH_MFA_ENCRYPTION_KEY=
+AUTH_BOOTSTRAP_SUPER_ADMIN_EMAIL=
+AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE=sso
+AUTH_FRONTEND_BASE_URL=http://localhost:5173
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=
+SMTP_USE_TLS=true
+CLAUDE_API_KEY=
+CLAUDE_MODEL=claude-sonnet-4-20250514
+REGISTRY_URL=
+REGISTRY_API_KEY=
+# Feature Modules (opt-in — default off; see docs/patterns/db-connections.md)
+FEATURE_DB_CONNECTIONS=false
+# Required ONLY when FEATURE_DB_CONNECTIONS=true. Fernet key (url-safe base64,
+# 32 bytes) — generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Leave blank otherwise. NEVER commit a real key.
+DB_CONNECTIONS_ENCRYPTION_KEY=
+PROJECT_SLUG=
+""")
+
+    _write_if_missing(b / "Dockerfile", """\
+# syntax=docker/dockerfile:1.7
+FROM python:3.12-slim-bookworm AS builder
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install --user --no-cache-dir .
+
+FROM python:3.12-slim-bookworm AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH="/home/app/.local/bin:$PATH"
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl && rm -rf /var/lib/apt/lists/* \\
+    && groupadd -r app -g 1000 && useradd -r -u 1000 -g app -d /home/app -s /sbin/nologin app \\
+    && mkdir -p /home/app /app && chown -R app:app /home/app /app
+COPY --from=builder --chown=app:app /root/.local /home/app/.local
+WORKDIR /app
+COPY --chown=app:app . .
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS http://localhost:8000/health || exit 1
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+""")
+
+    app = b / "app"
+    for pkg in ["api/v1", "core", "db/models", "schemas",
+                "services/loggers", "services/notifications",
+                "repositories", "integrations"]:
+        (app / pkg).mkdir(parents=True, exist_ok=True)
+        _write_if_missing(app / pkg / "__init__.py", "")
+    _write_if_missing(app / "__init__.py", "")
+
+    # Routers container — main.py iterates ROUTERS to mount each APIRouter.
+    # Add your project's routers here as the app grows. Empty by default.
+    _write_if_missing(app / "api" / "v1" / "installed_routers.py", '''\
+"""Routers mounted at app boot.
+
+Add (router, prefix) tuples to ROUTERS below; main.py iterates and
+mounts each via app.include_router(...).
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+# Each entry is (router, url_prefix). main.py iterates and calls
+# app.include_router(router, prefix=prefix) for each.
+ROUTERS: list[tuple[APIRouter, str]] = []
+''')
+
+    _write_if_missing(app / "main.py", (
+        "from contextlib import asynccontextmanager\n"
+        "from fastapi import FastAPI\n"
+        "from fastapi.middleware.cors import CORSMiddleware\n"
+        "from app.api.v1.installed_routers import ROUTERS\n"
+        "from app.core.config import get_settings\n"
+        "from app.core.logging import setup_logging\n"
+        "from app.core.rate_limit import bootstrap_rate_limiting\n"
+        "from app.core.scheduler import start_scheduler, stop_scheduler\n"
+        "from app.db.session import close_db, init_db\n"
+        "\n"
+        "\n"
+        "@asynccontextmanager\n"
+        "async def lifespan(app: FastAPI):\n"
+        "    settings = get_settings()\n"
+        "    setup_logging(settings.APP_LOG_LEVEL)\n"
+        "    await init_db()\n"
+        "    start_scheduler()\n"
+        "    yield\n"
+        "    stop_scheduler()\n"
+        "    await close_db()\n"
+        "\n"
+        "\n"
+        "def create_app() -> FastAPI:\n"
+        "    settings = get_settings()\n"
+        "    app = FastAPI(\n"
+        "        title=settings.APP_NAME,\n"
+        "        debug=settings.APP_DEBUG,\n"
+        "        lifespan=lifespan,\n"
+        '        docs_url="/docs" if settings.APP_ENV != "production" else None,\n'
+        "    )\n"
+        "    # Rate limit (slowapi) — MUST be wired before routers are\n"
+        "    # included so @limiter.limit decorators on /login etc. take\n"
+        "    # effect. Closes Deep-Audit HIGH-1.\n"
+        "    bootstrap_rate_limiting(app)\n"
+        "    # Mount project routers — edit app/api/v1/installed_routers.py to add yours.\n"
+        "    for router, prefix in ROUTERS:\n"
+        "        app.include_router(router, prefix=prefix)\n"
+        "    app.add_middleware(\n"
+        "        CORSMiddleware,\n"
+        "        allow_origins=settings.cors_origins,\n"
+        "        allow_credentials=True,\n"
+        '        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],\n'
+        '        allow_headers=["Authorization", "Content-Type", "X-Request-Id"],\n'
+        "        max_age=600,\n"
+        "    )\n"
+        "\n"
+        '    @app.get("/health", tags=["health"])\n'
+        "    async def health() -> dict[str, str]:\n"
+        "        return {\n"
+        '            "status": "ok",\n'
+        '            "project": settings.APP_NAME,\n'
+        '            "env": settings.APP_ENV,\n'
+        '            "version": "0.1.0",\n'
+        "        }\n"
+        "\n"
+        "    return app\n"
+        "\n"
+        "\n"
+        "app = create_app()\n"
+    ))
+
+    _write_if_missing(app / "core" / "config.py", f"""\
+from functools import lru_cache
+from typing import ClassVar
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8",
+        case_sensitive=True, extra="ignore",
+    )
+    APP_NAME: str = "{slug}"
+    APP_ENV: str = "dev"
+    APP_DEBUG: bool = False
+    APP_LOG_LEVEL: str = "INFO"
+    API_CORS_ORIGINS: str = "http://localhost:5173"
+    # เก็บเป็น str แล้ว parse ใน property เพื่อหลีกเลี่ยง pydantic parse error
+    DB_HOST: str = "db"
+    DB_PORT: int = 5432
+    DB_NAME: str = "{db_name}"
+    DB_USER: str = "{db_name}"
+    # No default — env var must provide DB_PASSWORD (audit finding #1).
+    # Pydantic raises ValidationError on boot if .env is missing this.
+    DB_PASSWORD: str
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    # Database Connections module — opt-in. When false (default) the router
+    # is not mounted and seed.py skips its permissions / menus / settings.
+    FEATURE_DB_CONNECTIONS: bool = False
+    # Fernet key — required only when FEATURE_DB_CONNECTIONS=true.
+    DB_CONNECTIONS_ENCRYPTION_KEY: str = ""
+    AZURE_AD_TENANT_ID: str = ""
+    AZURE_AD_CLIENT_ID: str = ""
+    AZURE_AD_CLIENT_SECRET: str = ""
+    # No default — env var must provide JWT_SECRET_KEY (Round-4 HIGH-1).
+    # The model_validator below additionally enforces length>=32 and
+    # rejects known placeholder values. init_project.py generates a
+    # 64-char hex value on first scaffold, so the new-project flow stays
+    # zero-config; only manual .env weakening will fail.
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # Auth module hooks (consumed only if `modules/auth` is installed).
+    # Kept here so the Settings surface is stable across module install/uninstall.
+    AZURE_AD_REDIRECT_URI: str = ""
+    AUTH_MFA_ENCRYPTION_KEY: str = ""
+    AUTH_BOOTSTRAP_SUPER_ADMIN_EMAIL: str = ""
+    AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE: str = "sso"
+    # AUTH_FRONTEND_BASE_URL — public SPA origin used by the auth module to
+    # generate absolute password-reset / invitation links in email. Empty
+    # makes auth code fall back to relative paths. Will be renamed to
+    # FRONTEND_BASE_URL during the auth-absorption sprint (auth content
+    # moves from ct-web-modules into this scaffold).
+    AUTH_FRONTEND_BASE_URL: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_USE_TLS: bool = True
+    # Microsoft 365 Graph email — preferred outbound channel for CT apps.
+    # When all four are set + app_settings.notifications.email.enabled=true,
+    # the notification service routes through Graph instead of SMTP.
+    M365_TENANT_ID: str = ""
+    M365_CLIENT_ID: str = ""
+    M365_CLIENT_SECRET: str = ""
+    M365_SENDER_EMAIL: str = ""
+    CLAUDE_API_KEY: str = ""
+    CLAUDE_MODEL: str = "{MODEL_DEFAULT}"
+    RATE_LIMIT_PER_MINUTE: int = 60
+    # Round-4 HIGH-2: production rate limiting must use shared storage.
+    # `memory://` is per-process — useless when --workers > 1 OR when
+    # running multiple replicas. The model_validator below blocks
+    # APP_ENV=production + memory:// at boot. For production set
+    # `redis://<host>:6379/0` (slowapi reads it via the limits package).
+    RATE_LIMIT_STORAGE_URI: str = "memory://"
+    # Comma-separated CIDR list of proxy IPs whose X-Forwarded-For we
+    # trust to identify the real client. Empty list = NO header trust
+    # (request.client.host is used directly). When fronted by nginx in
+    # the docker-compose proxy-net, set this to the nginx container's
+    # subnet (e.g. "10.0.0.0/8" for the docker default bridge). NEVER
+    # set this for a public-internet-facing service without a real proxy.
+    TRUSTED_PROXY_IPS: str = ""
+    # CT App Registry — ดู docs/ops/registry.md §2
+    REGISTRY_URL: str = ""
+    REGISTRY_API_KEY: str = ""
+    PROJECT_SLUG: str = "{slug}"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.API_CORS_ORIGINS.split(",") if o.strip()]
+
+    # CIDR list parsed from TRUSTED_PROXY_IPS env. Used by app.core.rate_limit
+    # to decide whether to honour X-Forwarded-For from the immediate hop.
+    @property
+    def trusted_proxy_networks(self) -> list[str]:
+        return [n.strip() for n in self.TRUSTED_PROXY_IPS.split(",") if n.strip()]
+
+    @model_validator(mode="after")
+    def _reject_wildcard_cors_with_credentials(self) -> "Settings":
+        # Block '*' in API_CORS_ORIGINS. main.py mounts CORSMiddleware
+        # with allow_credentials=True; the CORS spec forbids '*' + creds
+        # together (browsers drop the response, and '*' would defeat the
+        # whole same-origin defence anyway). Settings() raises here so a
+        # misconfigured prod fails to boot rather than silently shipping.
+        if any(o.strip() == "*" for o in self.API_CORS_ORIGINS.split(",")):
+            raise ValueError(
+                "API_CORS_ORIGINS contains '*' — wildcard origin is "
+                "incompatible with allow_credentials=True. List explicit "
+                "origins (comma-separated) instead."
+            )
+        return self
+
+    # Round-4 HIGH-1 — reject weak / placeholder / short JWT secrets at boot.
+    # Known weak strings come from common copy-paste templates; checking
+    # length alone wouldn't catch "x" * 64 etc. The wizard generates a
+    # 64-char hex value via secrets.token_hex(32) — no scaffolded project
+    # will trip this. Manual .env weakening fails fast at app boot.
+    _JWT_PLACEHOLDERS: ClassVar[set[str]] = {{
+        "changeme", "change-me", "secret", "supersecret", "your-secret-here",
+        "test", "testing", "dev", "development", "placeholder",
+    }}
+
+    @model_validator(mode="after")
+    def _jwt_secret_strong_enough(self) -> "Settings":
+        val = (self.JWT_SECRET_KEY or "").strip()
+        if len(val) < 32:
+            raise ValueError(
+                "JWT_SECRET_KEY must be at least 32 characters. Generate one with:\\n"
+                "  python -c \\"import secrets; print(secrets.token_hex(32))\\""
+            )
+        if val.lower() in self._JWT_PLACEHOLDERS:
+            raise ValueError(
+                "JWT_SECRET_KEY appears to be a placeholder value — "
+                "generate a real secret with secrets.token_hex(32)."
+            )
+        # Reject low-entropy keys (e.g. "xxxx..." or "placeholder+padding").
+        # secrets.token_hex(32) produces 64 chars from a 16-char hex alphabet
+        # and at that length essentially always contains all 16 distinct
+        # chars (birthday paradox saturates well before 64). secrets.token_
+        # urlsafe(24) produces 32 chars from a 64-char alphabet and yields
+        # ~25 distinct on average. Either is far above the 12 floor here.
+        # Manually-typed weak secrets like "changeme" + "x"*24 (8 distinct)
+        # or "your-secret-here" + "0"*16 (11 distinct) trip this guard.
+        if len(set(val)) < 12:
+            raise ValueError(
+                "JWT_SECRET_KEY entropy too low (fewer than 12 distinct chars) — "
+                "generate a real secret with secrets.token_hex(32)."
+            )
+        return self
+
+    # Round-4 HIGH-2 — production must use shared rate-limit storage.
+    # In-memory limiter counts per worker, so --workers 4 turns 5/min into
+    # 20/min and replicas multiply that further. Refusing to boot on this
+    # misconfig is louder than the alternative of silently under-limiting.
+    @model_validator(mode="after")
+    def _production_needs_shared_rate_limit_storage(self) -> "Settings":
+        if self.APP_ENV == "production" and self.RATE_LIMIT_STORAGE_URI.startswith("memory:"):
+            raise ValueError(
+                "APP_ENV=production requires RATE_LIMIT_STORAGE_URI to point to a "
+                "shared backend (e.g. redis://host:6379/0). In-memory storage is "
+                "per-worker — rate limits would be 4x looser with --workers 4."
+            )
+        return self
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql+asyncpg://{{self.DB_USER}}:{{self.DB_PASSWORD}}"
+            f"@{{self.DB_HOST}}:{{self.DB_PORT}}/{{self.DB_NAME}}"
+        )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+# Module-level singleton — feature modules (e.g., modules/auth) do
+# `from app.core.config import settings`. get_settings() is the factory
+# preferred by host code that wants the @lru_cache scoping; both reach
+# the same instance.
+settings = get_settings()
+""")
+
+    # PII masking helpers (used by StructuredLogger + ActivityLogger + AiCallLogger).
+    # See docs/logging.md §4.
+    _write_if_missing(app / "core" / "pii.py", '''\
+"""PII / secret masking utilities.
+
+Used by StructuredLogger (app.core.logging), ActivityLogger
+(app.services.loggers.activity_logger), AiCallLogger
+(app.services.loggers.ai_call_logger) and SystemLogger to redact PII
+**and known secret shapes** before persisting or emitting log records.
+
+Why secrets too: AI prompts / exception messages frequently echo back
+tokens, API keys, and bearer headers that a generic email/phone regex
+would miss. Keeping the catalog here means one allow-list per project.
+
+See docs/logging.md §4 and AGENTS.md §3.
+"""
+from __future__ import annotations
+
+import re
+
+EMAIL_PATTERN = re.compile(r"\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b")
+PHONE_PATTERN = re.compile(r"\\b0[0-9]{8,9}\\b|\\b\\+?66[0-9]{8,9}\\b")
+THAI_ID_PATTERN = re.compile(r"\\b[0-9]{13}\\b")
+
+# Secret shapes — must stay in sync with scripts/checks/no_real_secrets_in_examples.py
+# Kept narrow on purpose: each pattern is anchored to a known prefix so we
+# don\\\'t mangle ordinary alphanumeric text in user prompts.
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Anthropic / OpenAI keys: sk-ant-..., sk-proj-..., sk-<alnum>
+    re.compile(r"sk-(?:ant|proj)-[A-Za-z0-9_\\-]{16,}"),
+    re.compile(r"\\bsk-[A-Za-z0-9_\\-]{20,}"),
+    # JWT (header.payload.signature, base64url)
+    re.compile(r"\\beyJ[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+\\.[A-Za-z0-9_\\-]+"),
+    # GitHub tokens
+    re.compile(r"\\bgh[opsu]_[A-Za-z0-9]{20,}"),
+    # AWS access key IDs
+    re.compile(r"\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b"),
+    # Slack tokens
+    re.compile(r"\\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+)
+
+
+def mask_email(email: str) -> str:
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        return f"**@{domain}"
+    return f"{local[:2]}***@{domain}"
+
+
+def mask_phone(phone: str) -> str:
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) < 4:
+        return "***"
+    return f"***{digits[-4:]}"
+
+
+def mask_pii_in_text(text: str) -> str:
+    """Mask PII + known secret prefixes in free-form text.
+
+    Applies, in order: emails, Thai phones, Thai national IDs, then a
+    catalog of secret shapes (API keys / JWT / GitHub tokens / etc.).
+    See module docstring for why secrets are masked here too.
+    """
+    text = EMAIL_PATTERN.sub(lambda m: mask_email(m.group(0)), text)
+    text = PHONE_PATTERN.sub(lambda m: mask_phone(m.group(0)), text)
+    text = THAI_ID_PATTERN.sub("***-****-****-**", text)
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("***REDACTED***", text)
+    return text
+''')
+
+    # StructuredLogger wraps structlog to auto-mask PII/secrets in kwargs.
+    # See docs/patterns/tooling.md §4.
+    _write_if_missing(app / "core" / "logging.py", '''\
+"""Structured logging with automatic PII / secret masking.
+
+Use `get_logger()` instead of `structlog.get_logger()` directly — the
+wrapper redacts known-sensitive keys and free-form text patterns before
+the log record leaves the process.
+
+See docs/patterns/tooling.md §4 and AGENTS.md §B.
+"""
+from __future__ import annotations
+
+import logging
+import sys
+from typing import Any
+
+import structlog
+
+from app.core.pii import mask_email, mask_phone, mask_pii_in_text
+
+SENSITIVE_KEYS = {
+    "password", "password_hash", "token", "access_token", "refresh_token",
+    "api_key", "secret", "client_secret", "credit_card", "national_id",
+    "passport", "jwt", "auth_header",
+}
+EMAIL_KEYS = {"email", "user_email", "from_email", "to_email"}
+PHONE_KEYS = {"phone", "phone_number", "mobile", "tel"}
+TEXT_SCAN_MIN_LENGTH = 50
+
+
+def _mask_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    masked: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        key_lower = key.lower()
+        if key_lower in SENSITIVE_KEYS:
+            masked[key] = "***"
+        elif key_lower in EMAIL_KEYS and isinstance(value, str):
+            masked[key] = mask_email(value)
+        elif key_lower in PHONE_KEYS and isinstance(value, str):
+            masked[key] = mask_phone(value)
+        elif isinstance(value, str) and len(value) >= TEXT_SCAN_MIN_LENGTH:
+            masked[key] = mask_pii_in_text(value)
+        elif isinstance(value, dict):
+            masked[key] = _mask_kwargs(value)
+        else:
+            masked[key] = value
+    return masked
+
+
+class StructuredLogger:
+    """structlog wrapper that auto-masks PII / secrets in kwargs."""
+
+    def __init__(self, logger: Any) -> None:
+        self._logger = logger
+
+    def info(self, event: str, **kwargs: Any) -> None:
+        self._logger.info(event, **_mask_kwargs(kwargs))
+
+    def warning(self, event: str, **kwargs: Any) -> None:
+        self._logger.warning(event, **_mask_kwargs(kwargs))
+
+    def error(self, event: str, **kwargs: Any) -> None:
+        self._logger.error(event, **_mask_kwargs(kwargs))
+
+    def debug(self, event: str, **kwargs: Any) -> None:
+        self._logger.debug(event, **_mask_kwargs(kwargs))
+
+    def exception(self, event: str, **kwargs: Any) -> None:
+        self._logger.exception(event, **_mask_kwargs(kwargs))
+
+    def bind(self, **kwargs: Any) -> "StructuredLogger":
+        return StructuredLogger(self._logger.bind(**_mask_kwargs(kwargs)))
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """Configure structlog. Call once at app startup."""
+    log_level = getattr(logging, level.upper(), logging.INFO)
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=log_level,
+    )
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+def get_logger(name: str | None = None) -> StructuredLogger:
+    """Return a PII-masking logger. Use this instead of structlog.get_logger()."""
+    return StructuredLogger(structlog.get_logger(name))
+''')
+
+    _write_if_missing(app / "db" / "session.py", """\
+\"\"\"Async DB session helpers.
+
+Two session forms with different commit contracts:
+
+* ``get_db`` (async generator, FastAPI dependency):
+    Auto-commits the transaction on a successful request and rolls back
+    on any exception. Endpoints should call ``db.flush()`` to materialize
+    identifiers but they do NOT need to ``await db.commit()`` themselves —
+    the dependency boundary handles it.
+
+* ``get_db_session`` (``@asynccontextmanager``, for CLI/scheduler/seed):
+    Yields a session and only rolls back on exception. The caller is
+    responsible for committing. Use this from ``app.seed``, APScheduler
+    jobs, one-off scripts, etc.
+
+Why the split: FastAPI's dependency lifecycle gives us a natural commit
+point (the response is built before teardown), but CLI/job code typically
+wants explicit control over multiple commits or partial rollbacks.
+\"\"\"
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.core.config import get_settings
+
+_engine: AsyncEngine | None = None
+_sessionmaker: async_sessionmaker[AsyncSession] | None = None
+
+
+async def init_db() -> None:
+    global _engine, _sessionmaker
+    settings = get_settings()
+    _engine = create_async_engine(
+        settings.database_url,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_pre_ping=True,
+    )
+    _sessionmaker = async_sessionmaker(
+        _engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+
+async def close_db() -> None:
+    if _engine is not None:
+        await _engine.dispose()
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+    \"\"\"FastAPI dependency: auto-commits on success, rolls back on any exception.
+
+    Catches BaseException (not just Exception) so asyncio.CancelledError —
+    raised by FastAPI/Starlette when a client disconnects mid-request — also
+    triggers the rollback path. Since Python 3.8, CancelledError inherits
+    from BaseException, not Exception, so a narrower clause would silently
+    skip rollback for cancellation.
+    \"\"\"
+    if _sessionmaker is None:
+        raise RuntimeError("Database not initialized")
+    async with _sessionmaker() as session:
+        try:
+            yield session
+            await session.commit()
+        except BaseException:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def get_db_session() -> AsyncIterator[AsyncSession]:
+    \"\"\"CLI/scheduler/seed helper: caller is responsible for committing.\"\"\"
+    if _sessionmaker is None:
+        raise RuntimeError("Database not initialized")
+    async with _sessionmaker() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+
+
+""")
+
+    _write_if_missing(app / "db" / "base.py", """\
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
+from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+NAMING_CONVENTION = {
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_N_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+class Base(DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    type_annotation_map: dict[Any, Any] = {UUID: PgUUID(as_uuid=True)}
+
+class UUIDMixin:
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid4)
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+""")
+
+    # ActivityLog model — merged audit + user_activity (see docs/logging.md §1).
+    _write_if_missing(app / "db" / "models" / "activity_log.py", '''\
+"""ActivityLog — merged audit + user_activity (v3.0).
+
+One table, 3 event categories distinguished by flags:
+- is_mutation:        create / update / delete on business data
+- is_sensitive_read:  export / view PII / view other users
+- is_security_event:  login / logout / permission denied / role change
+
+Schema must stay in sync with docs/logging.md §1.2 and the matching
+alembic migration (partitioned by RANGE(created_at)).
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import Boolean, DateTime, Index, String, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __mapper_args__ = {"primary_key": [id, created_at]}
+
+    # Actor
+    user_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    user_email_masked: Mapped[str | None] = mapped_column(String(255))
+
+    # Action classification
+    action_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # "create" | "update" | "delete" | "read_sensitive" | "export" |
+    # "login" | "login_failed" | "logout" | "permission_denied" | "role_change"
+
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # Target
+    resource_type: Mapped[str | None] = mapped_column(String(50))
+    resource_id: Mapped[str | None] = mapped_column(String(100))
+
+    # Flags (snake_case DB; CamelBaseModel renders camelCase JSON)
+    is_mutation: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_sensitive_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_security_event: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(10), default="low", nullable=False)
+    # "low" | "medium" | "high"
+
+    # Request context
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    request_id: Mapped[str | None] = mapped_column(String(64))
+    endpoint: Mapped[str | None] = mapped_column(String(200))
+    http_method: Mapped[str | None] = mapped_column(String(10))
+    http_status: Mapped[int | None]
+
+    # PII-scrubbed diff / details
+    extra_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, default=dict, nullable=False
+    )
+    # NOTE: SQLAlchemy reserves `metadata` — column is named "metadata" in DB
+    # but accessed as `.extra_metadata` in Python to avoid the name clash.
+
+    __table_args__ = (
+        Index("ix_activity_user_created", "user_id", "created_at"),
+        Index("ix_activity_action_type", "action_type", "created_at"),
+        Index("ix_activity_resource", "resource_type", "resource_id"),
+        Index("ix_activity_sensitive_created", "is_sensitive_read", "created_at"),
+        Index("ix_activity_security_created", "is_security_event", "created_at"),
+        Index("ix_activity_risk_created", "risk_level", "created_at"),
+        {"postgresql_partition_by": "RANGE (created_at)"},
+    )
+''')
+
+    # Idempotent seed stub — onboarding tells users to run `python -m app.db.seed`
+    # right after `alembic upgrade head`. We ship a no-op so the command works out
+    # of the box; projects edit this file to add real lookup data.
+    _write_if_missing(app / "db" / "seed.py", '''\
+"""Database seed entrypoint — `python -m app.db.seed`.
+
+Wired into the onboarding "first run" flow (docs/human/onboarding.md §2.4).
+Default body is a no-op so the command always succeeds; replace
+`seed_lookup_data` with project-specific inserts (lookup tables, default
+permissions, demo users). Every insert MUST be idempotent — onboarding
+re-runs this after a `docker compose down -v` reset.
+
+See docs/database.md §7 for the recommended pattern.
+"""
+from __future__ import annotations
+
+import asyncio
+
+from app.db.session import close_db, init_db
+
+
+async def seed_lookup_data() -> None:
+    """Insert lookup / reference data. Idempotent — safe to re-run."""
+    # Example (uncomment + adapt once you have a lookup model):
+    #
+    # from sqlalchemy import select
+    # from app.db.models.business_unit import BusinessUnit
+    # from app.db.session import get_db_session
+    #
+    # async with get_db_session() as session:
+    #     defaults = [
+    #         ("BU_HQ", "Headquarters", "Head office"),
+    #     ]
+    #     for code, name, description in defaults:
+    #         existing = await session.execute(
+    #             select(BusinessUnit).where(BusinessUnit.code == code)
+    #         )
+    #         if existing.scalar_one_or_none() is None:
+    #             session.add(BusinessUnit(code=code, name=name, description=description))
+    #     await session.commit()
+    return None
+
+
+async def main() -> None:
+    await init_db()
+    try:
+        await seed_lookup_data()
+    finally:
+        await close_db()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+''')
+
+    # CamelBaseModel — Pydantic parent class enforcing camelCase JSON / snake_case
+    # Python attribute pairing across every request + response schema.
+    # See AGENTS.md §12 (API Conventions) + §B Enforcement Matrix.
+    _write_if_missing(app / "schemas" / "base.py", '''\
+"""CamelBaseModel — Pydantic base for every request/response schema.
+
+DB columns are snake_case (PostgreSQL convention) and API JSON keys are
+camelCase (JS/TS convention). This class wires `alias_generator=to_camel`
++ `populate_by_name=True` so a single class definition can read snake_case
+from ORM objects AND emit camelCase JSON.
+
+Every schema under app/schemas/ MUST inherit from this class.
+scripts/checks/camel_base_model_audit.py enforces it at pre-commit.
+"""
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
+
+class CamelBaseModel(BaseModel):
+    """Base class: snake_case attrs in Python, camelCase keys in JSON."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        from_attributes=True,
+    )
+''')
+
+    # SystemLog — jobs / integrations / system events (see docs/logging.md §2).
+    _write_if_missing(app / "db" / "models" / "system_log.py", '''\
+"""SystemLog — jobs, integrations, and system events (v3.0).
+
+Distinct from activity_logs: no user actor, no PII. Captures background
+job lifecycle, outbound integration calls, and scheduler/system events.
+
+Schema must stay in sync with docs/logging.md §2.1 and the matching
+alembic migration (partitioned by RANGE(created_at)).
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class SystemLog(Base):
+    __tablename__ = "system_logs"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __mapper_args__ = {"primary_key": [id, created_at]}
+
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    # "job" | "integration" | "scheduler" | "system" | "migration"
+    event: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # "started" | "success" | "failure" | "warning" | "info"
+
+    duration_ms: Mapped[int | None]
+    error_message: Mapped[str | None] = mapped_column(Text)
+    error_type: Mapped[str | None] = mapped_column(String(100))
+    correlation_id: Mapped[str | None] = mapped_column(String(64))
+
+    extra_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, default=dict, nullable=False
+    )
+    # SQLAlchemy reserves `metadata` — DB column is "metadata", Python attr
+    # is `extra_metadata`. Same pattern as ActivityLog.
+
+    __table_args__ = (
+        Index("ix_system_logs_created", "created_at"),
+        Index("ix_system_logs_category_event", "category", "event"),
+        Index("ix_system_logs_status_created", "status", "created_at"),
+        {"postgresql_partition_by": "RANGE (created_at)"},
+    )
+''')
+
+    # AiCallLog — every Claude/OpenAI/etc. call (see docs/logging.md §3).
+    _write_if_missing(app / "db" / "models" / "ai_call_log.py", '''\
+"""AiCallLog — every AI provider call (v3.0).
+
+Records prompt, response (PII-masked), token counts, cache hits, cost,
+and outcome. Populated automatically by app.integrations.claude_ai
+(or any other provider wrapper); never write directly from services
+or endpoints — that bypasses the cost budget gate (AGENTS.md §16).
+
+Schema must stay in sync with docs/logging.md §3.1 and the matching
+alembic migration (partitioned by RANGE(created_at)).
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class AiCallLog(Base):
+    __tablename__ = "ai_call_logs"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __mapper_args__ = {"primary_key": [id, created_at]}
+
+    user_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    endpoint: Mapped[str | None] = mapped_column(String(200))
+    request_id: Mapped[str | None] = mapped_column(String(64))
+
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="anthropic")
+    model: Mapped[str] = mapped_column(String(50), nullable=False)
+    operation: Mapped[str] = mapped_column(String(30), nullable=False)
+    # "messages" | "embeddings" | "completions"
+
+    # Content (PII-masked before insert by AiCallLogger)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    system_prompt: Mapped[str | None] = mapped_column(Text)
+    response: Mapped[str | None] = mapped_column(Text)
+
+    # Metrics
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    duration_ms: Mapped[int | None]
+
+    # Outcome
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    # "success" | "error" | "timeout" | "rate_limited" | "budget_exceeded"
+    error_type: Mapped[str | None] = mapped_column(String(100))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    extra_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, default=dict, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_ai_logs_created", "created_at"),
+        Index("ix_ai_logs_user_created", "user_id", "created_at"),
+        Index("ix_ai_logs_model_created", "model", "created_at"),
+        Index("ix_ai_logs_status_created", "status", "created_at"),
+        {"postgresql_partition_by": "RANGE (created_at)"},
+    )
+''')
+
+    # Register models in package so Alembic autogenerate sees them.
+    # Always overwrite (not _write_if_missing) — empty __init__.py was created
+    # earlier in the per-package mkdir loop.
+    (app / "db" / "models" / "__init__.py").write_text(
+        "from app.db.models.activity_log import ActivityLog\n"
+        "from app.db.models.ai_call_log import AiCallLog\n"
+        "from app.db.models.system_log import SystemLog\n"
+        "from app.db.models.user import User\n"
+        "from app.db.models.role import Role\n"
+        "from app.db.models.permission import Permission\n"
+        "from app.db.models.role_permission import RolePermission\n"
+        "from app.db.models.user_role import UserRole\n"
+        "from app.db.models.user_permission_override import UserPermissionOverride\n"
+        "from app.db.models.menu_item import MenuItem\n"
+        "from app.db.models.app_setting import AppSetting\n"
+        "\n"
+        "__all__ = [\n"
+        "    \"ActivityLog\", \"AiCallLog\", \"SystemLog\",\n"
+        "    \"User\", \"Role\", \"Permission\", \"RolePermission\", \"UserRole\",\n"
+        "    \"UserPermissionOverride\", \"MenuItem\", \"AppSetting\",\n"
+        "]\n",
+        encoding="utf-8",
+    )
+
+    # @audited decorator — auto-wires ActivityLogger for mutation endpoints.
+    # See docs/patterns/tooling.md §3.
+    _write_if_missing(app / "api" / "decorators.py", '''\
+"""@audited — auto-log mutation endpoints via ActivityLogger.
+
+Decorated endpoint MUST accept `request: Request`, `user: CurrentUser`,
+and `db: DbDep` as keyword arguments (standard FastAPI dependency
+injection). The decorator logs AFTER successful execution; the surrounding
+get_db dependency owns the commit (auto-commits on successful return,
+rolls back on exception).
+
+See docs/patterns/tooling.md §3 + AGENTS.md §14.
+"""
+from __future__ import annotations
+
+from collections.abc import Callable
+from functools import wraps
+from typing import Any
+
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.loggers.activity_logger import ActivityLogger
+
+
+def audited(
+    *,
+    action: str,
+    action_type: str = "update",
+    resource_type: str | None = None,
+    risk_level: str = "low",
+    extract_resource_id: Callable[[Any], str | None] | None = None,
+) -> Callable[..., Any]:
+    """Wrap an endpoint so its successful invocation is auto-logged.
+
+    Args:
+        action: dotted event name, e.g. "product.created"
+        action_type: one of "create" | "update" | "delete" |
+            "read_sensitive" | "export" | "login" | "login_failed" |
+            "logout" | "permission_denied" | "role_change"
+        resource_type: e.g. "product", "user", "permission"
+        risk_level: "low" | "medium" | "high"
+        extract_resource_id: optional callable mapping the endpoint result
+            to a resource_id string. Defaults to `result.id` if present.
+
+    Example:
+        @router.post("/products", status_code=201)
+        @audited(action="product.created", action_type="create",
+                 resource_type="product")
+        async def create_product(payload, db, user, request):
+            ...
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            request: Request | None = kwargs.get("request")
+            user: Any | None = kwargs.get("user")
+            db: AsyncSession | None = kwargs.get("db")
+
+            result = await func(*args, **kwargs)
+
+            if user is not None and db is not None:
+                if extract_resource_id is not None:
+                    resource_id = extract_resource_id(result)
+                else:
+                    rid = getattr(result, "id", None)
+                    resource_id = str(rid) if rid is not None else None
+
+                logger = ActivityLogger(db)
+                await logger.log(
+                    user=user,
+                    action_type=action_type,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    risk_level=risk_level,
+                    request=request,
+                )
+                # Commit is owned by the get_db dependency (auto-commits on
+                # successful return). A decorator-level commit would split
+                # the request transaction: the audit row + earlier writes
+                # would become durable here, then a later failure would only
+                # roll back the empty autobegun transaction get_db sees.
+
+            return result
+
+        return wrapper
+
+    return decorator
+''')
+
+    # ActivityLogger — concrete service used by @audited decorator and direct
+    # mutation handlers. See docs/logging.md §1.3.
+    _write_if_missing(app / "services" / "loggers" / "activity_logger.py", '''\
+"""ActivityLogger — persists user/system events to activity_logs.
+
+Use directly OR wrap mutation endpoints with @audited (app.api.decorators).
+PII in metadata is scrubbed before insert. Caller commits the session.
+
+See docs/logging.md §1.3.
+"""
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.pii import mask_email
+from app.db.models.activity_log import ActivityLog
+
+MUTATION_ACTIONS = {"create", "update", "delete"}
+SENSITIVE_ACTIONS = {"read_sensitive", "export"}
+SECURITY_ACTIONS = {
+    "login", "login_failed", "logout", "permission_denied", "role_change",
+}
+
+_SENSITIVE_METADATA_KEYS = {
+    "password", "password_hash", "token", "access_token", "refresh_token",
+    "credit_card", "national_id", "passport", "api_key", "secret",
+}
+
+
+def _scrub_pii(metadata: dict[str, Any]) -> dict[str, Any]:
+    scrubbed: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if key.lower() in _SENSITIVE_METADATA_KEYS:
+            scrubbed[key] = "***"
+        elif isinstance(value, dict):
+            scrubbed[key] = _scrub_pii(value)
+        else:
+            scrubbed[key] = value
+    return scrubbed
+
+
+class ActivityLogger:
+    """Persist mutations, sensitive reads, and security events.
+
+    Two caller shapes are supported and both write the same row:
+
+    - Host shape (preferred for in-tree code): pass ``user=`` (a User
+      object) and ``action_type=`` (one of MUTATION/SENSITIVE/SECURITY
+      strings). ``request=`` is recommended — when supplied, IP / UA /
+      request_id / endpoint / method are captured automatically.
+    - Alternate shape (used when the caller only has a UUID — e.g. seed
+      scripts or background jobs): pass ``action=`` plus optional
+      ``actor_id=`` (UUID), ``target_id=``, ``is_security_event=``,
+      ``risk_level=``, ``extra=`` (alias of ``metadata=``).
+
+    If both ``user`` and ``actor_id`` are supplied, ``user`` wins (its
+    ``.id`` is used and ``.email`` is masked into ``user_email_masked``).
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def log(
+        self,
+        *,
+        action: str,
+        user: Any | None = None,
+        actor_id: Any | None = None,
+        target_id: Any | None = None,
+        action_type: str = "other",
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        is_security_event: bool | None = None,
+        risk_level: str = "low",
+        metadata: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+        request: Request | None = None,
+        http_status: int | None = None,
+    ) -> None:
+
+        # Actor resolution — user wins over actor_id when both supplied.
+        if user is not None:
+            resolved_user_id = getattr(user, "id", None)
+            resolved_email_masked = (
+                mask_email(user.email) if getattr(user, "email", None) else None
+            )
+        else:
+            resolved_user_id = actor_id
+            resolved_email_masked = None
+
+        # Module callers pass `extra`; host callers pass `metadata`. Treat
+        # them as the same slot — if both arrive, `extra` keys override.
+        merged_metadata: dict[str, Any] = {}
+        if metadata:
+            merged_metadata.update(metadata)
+        if extra:
+            merged_metadata.update(extra)
+        if target_id is not None and "target_id" not in merged_metadata:
+            merged_metadata["target_id"] = str(target_id)
+
+        # is_security_event: explicit override wins; otherwise derive from
+        # the host-shape action_type bucket.
+        if is_security_event is None:
+            resolved_security = action_type in SECURITY_ACTIONS
+        else:
+            resolved_security = is_security_event
+
+        entry = ActivityLog(
+            id=uuid4(),
+            user_id=resolved_user_id,
+            user_email_masked=resolved_email_masked,
+            action_type=action_type,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            is_mutation=action_type in MUTATION_ACTIONS,
+            is_sensitive_read=action_type in SENSITIVE_ACTIONS,
+            is_security_event=resolved_security,
+            risk_level=risk_level,
+            ip_address=(
+                request.client.host if request and request.client else None
+            ),
+            user_agent=(
+                request.headers.get("user-agent", "")[:500] if request else None
+            ),
+            request_id=request.headers.get("x-request-id") if request else None,
+            endpoint=str(request.url.path) if request else None,
+            http_method=request.method if request else None,
+            http_status=http_status,
+            extra_metadata=_scrub_pii(merged_metadata),
+        )
+        self.db.add(entry)
+        # Caller commits.
+''')
+
+    # SystemLogger — jobs, integrations, system events (see docs/logging.md §2.2).
+    _write_if_missing(app / "services" / "loggers" / "system_logger.py", '''\
+"""SystemLogger — persists system events to system_logs.
+
+Wire into background jobs (start/end/error), outbound integration
+calls (success/error), and system-level events. Caller commits the
+session.
+
+Exception messages are run through mask_pii_in_text() before insert —
+outbound HTTP errors routinely echo back Authorization headers or
+query-string tokens that would otherwise land in the DB.
+
+See docs/logging.md §2.
+"""
+from __future__ import annotations
+
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.pii import mask_pii_in_text
+from app.db.models.system_log import SystemLog
+
+
+class SystemLogger:
+    """Persist job / integration / system events."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def log_job(
+        self,
+        *,
+        job_name: str,
+        status: str,
+        duration_ms: int | None = None,
+        error: Exception | None = None,
+        metadata: dict[str, Any] | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        await self._log(
+            category="job",
+            event=f"job.{status}",
+            status=status,
+            duration_ms=duration_ms,
+            error=error,
+            metadata={"job_name": job_name, **(metadata or {})},
+            correlation_id=correlation_id,
+        )
+
+    async def log_integration(
+        self,
+        *,
+        provider: str,
+        operation: str,
+        status: str,
+        duration_ms: int | None = None,
+        error: Exception | None = None,
+        metadata: dict[str, Any] | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        await self._log(
+            category="integration",
+            event=f"integration.{provider}.{operation}",
+            status=status,
+            duration_ms=duration_ms,
+            error=error,
+            metadata={"provider": provider, "operation": operation, **(metadata or {})},
+            correlation_id=correlation_id,
+        )
+
+    async def log_system_event(
+        self,
+        *,
+        event: str,
+        status: str = "info",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        await self._log(
+            category="system",
+            event=event,
+            status=status,
+            metadata=metadata or {},
+        )
+
+    async def _log(
+        self,
+        *,
+        category: str,
+        event: str,
+        status: str,
+        metadata: dict[str, Any],
+        duration_ms: int | None = None,
+        error: Exception | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        entry = SystemLog(
+            id=uuid4(),
+            category=category,
+            event=event,
+            status=status,
+            duration_ms=duration_ms,
+            error_message=mask_pii_in_text(str(error))[:2000] if error else None,
+            error_type=type(error).__name__ if error else None,
+            correlation_id=correlation_id,
+            extra_metadata=metadata,
+        )
+        self.db.add(entry)
+        # Caller commits.
+''')
+
+    # AiCallLogger — every AI provider call (see docs/logging.md §3.2).
+    _write_if_missing(app / "services" / "loggers" / "ai_call_logger.py", '''\
+"""AiCallLogger — persists provider calls to ai_call_logs.
+
+Called by app.integrations.<provider>.py wrappers (never directly
+from services/endpoints — that bypasses the no-direct-AI-SDK check).
+Prompts / responses are PII-masked before insert. Caller commits.
+
+Cost estimation reads pricing from `app_settings` under
+`ai.pricing.<model>` via AppSettingService — admin can update pricing
+without code change. Missing key → `cost_usd` is left NULL (does not
+raise). See AGENTS.md §16 + docs/logging.md §3.
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.pii import mask_pii_in_text
+from app.db.models.ai_call_log import AiCallLog
+from app.services.app_setting_service import AppSettingService
+
+
+class AiCallLogger:
+    """Persist AI provider calls with PII-masked prompt/response."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def log(
+        self,
+        *,
+        user: Any | None,
+        model: str,
+        operation: str,
+        prompt: str,
+        provider: str = "anthropic",
+        system_prompt: str | None = None,
+        response: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        duration_ms: int | None = None,
+        status: str = "success",
+        error: Exception | None = None,
+        endpoint: str | None = None,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        cost = await self._estimate_cost(
+            model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens
+        )
+        entry = AiCallLog(
+            id=uuid4(),
+            user_id=getattr(user, "id", None) if user else None,
+            endpoint=endpoint,
+            request_id=request_id,
+            provider=provider,
+            model=model,
+            operation=operation,
+            prompt=mask_pii_in_text(prompt),
+            system_prompt=mask_pii_in_text(system_prompt) if system_prompt else None,
+            response=mask_pii_in_text(response) if response else None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cost_usd=cost,
+            duration_ms=duration_ms,
+            status=status,
+            error_type=type(error).__name__ if error else None,
+            error_message=mask_pii_in_text(str(error))[:2000] if error else None,
+            extra_metadata=metadata or {},
+        )
+        self.db.add(entry)
+        # Caller commits.
+
+    async def _estimate_cost(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int,
+        cache_write_tokens: int,
+    ) -> Decimal | None:
+        """Estimate USD cost from pricing in app_settings.
+
+        Setting key: `ai.pricing.<model>`
+        Setting value: {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 3.75}
+        Units: USD per 1M tokens.
+
+        Missing key → return None (cost_usd stays NULL). Admin seeds new
+        models via the /settings/admin UI — never hardcode pricing here.
+        """
+        pricing = await AppSettingService(self.db).get(f"ai.pricing.{model}")
+        if not pricing:
+            return None
+        cost = (
+            Decimal(str(pricing.get("input", 0))) * Decimal(input_tokens)
+            + Decimal(str(pricing.get("output", 0))) * Decimal(output_tokens)
+            + Decimal(str(pricing.get("cache_read", 0))) * Decimal(cache_read_tokens)
+            + Decimal(str(pricing.get("cache_write", 0))) * Decimal(cache_write_tokens)
+        ) / Decimal(1_000_000)
+        return cost.quantize(Decimal("0.000001"))
+''')
+
+    # Partition manager — creates monthly partitions for log tables.
+    _write_if_missing(app / "services" / "loggers" / "partition_manager.py", '''\
+"""Partition manager for partitioned log tables.
+
+All log tables are partitioned by RANGE(created_at) with monthly
+partitions. Partitions must exist BEFORE the rows targeting them are
+inserted; otherwise INSERT fails. Run on startup + schedule monthly.
+
+Why f-string SQL here (AGENTS.md §3 rule 4 normally bans it):
+PostgreSQL DDL — CREATE TABLE, PARTITION OF, identifiers — cannot be
+bound via $1 parameters. Every value below is internally derived
+(PARTITIONED_TABLES whitelist + date arithmetic), never user input.
+The _IDENT_RE assertion makes that boundary explicit.
+
+See docs/logging.md §5.
+"""
+from __future__ import annotations
+
+import re
+from datetime import date
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+PARTITIONED_TABLES = ["activity_logs", "system_logs", "ai_call_logs"]
+
+# Defence-in-depth: even though every value comes from a hardcoded list
+# or date math, we re-validate identifier shape before splicing into DDL.
+_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _assert_ident(name: str) -> str:
+    if not _IDENT_RE.match(name):
+        raise ValueError(f"refusing to splice non-identifier into DDL: {name!r}")
+    return name
+
+
+def _month_start(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _next_month(d: date) -> date:
+    """Return first day of the month after `d`."""
+    year = d.year + (d.month // 12)
+    month = d.month % 12 + 1
+    return date(year, month, 1)
+
+
+async def ensure_partitions_exist(db: AsyncSession, months_ahead: int = 2) -> None:
+    """Create partitions for current month + N months ahead. Idempotent."""
+    start = _month_start(date.today())
+
+    for _ in range(months_ahead + 1):
+        end = _next_month(start)
+        for table in PARTITIONED_TABLES:
+            _assert_ident(table)
+            partition_name = _assert_ident(f"{table}_{start.strftime('%Y_%m')}")
+            # DDL — identifiers/dates only, no user input. See module docstring.
+            await db.execute(text(
+                f"CREATE TABLE IF NOT EXISTS {partition_name} "
+                f"PARTITION OF {table} "
+                f"FOR VALUES FROM (\\'{start.isoformat()}\\') TO (\\'{end.isoformat()}\\')"
+            ))
+        start = end
+
+    await db.commit()
+''')
+
+    # Retention — drop old partitions per app_settings retention_days.
+    _write_if_missing(app / "services" / "loggers" / "retention.py", '''\
+"""Retention job for partitioned log tables.
+
+Drops partitions whose entire window is older than the configured
+retention period. Defaults to 60 days; per-table overrides live in
+app_settings under `logging.<table>.retention_days` (read via
+AppSettingService — admin can change without redeploy).
+
+Why f-string SQL here (AGENTS.md §3 rule 4 normally bans it):
+DROP TABLE takes an identifier, not a bind value. The partition name
+is read back from pg_inherits and then re-validated via _IDENT_RE
+before splicing — defence in depth against a tampered catalog or a
+test fixture that snuck in a weird table name.
+
+See docs/logging.md §6.
+"""
+from __future__ import annotations
+
+import re
+from datetime import date, timedelta
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.app_setting_service import AppSettingService
+
+DEFAULT_RETENTION_DAYS = 60
+
+# Per-table retention override keys (app_settings). Missing key → falls
+# back to DEFAULT_RETENTION_DAYS. Edit via /settings/admin (super-admin).
+RETENTION_KEYS = {
+    "activity_logs": "logging.activity.retention_days",
+    "system_logs": "logging.system.retention_days",
+    "ai_call_logs": "logging.ai.retention_days",
+}
+
+# Strict identifier shape — partition names follow `<table>_<YYYY>_<MM>`.
+_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _next_month(year: int, month: int) -> date:
+    return date(year + (month // 12), month % 12 + 1, 1)
+
+
+async def drop_old_partitions(db: AsyncSession) -> dict[str, list[str]]:
+    """Drop partitions older than retention. Returns dropped partition names."""
+    today = date.today()
+    dropped: dict[str, list[str]] = {}
+    settings = AppSettingService(db)
+
+    for parent_table, key in RETENTION_KEYS.items():
+        override = await settings.get(key, DEFAULT_RETENTION_DAYS)
+        try:
+            retention_days = int(override)
+        except (TypeError, ValueError):
+            retention_days = DEFAULT_RETENTION_DAYS
+        cutoff = today - timedelta(days=retention_days)
+
+        result = await db.execute(text(
+            "SELECT inhrelid::regclass::text AS partition_name "
+            "FROM pg_inherits "
+            "WHERE inhparent = :parent::regclass"
+        ), {"parent": parent_table})
+
+        dropped[parent_table] = []
+        for row in result.all():
+            partition_name = row[0]
+            # partition names look like `activity_logs_2026_01`
+            parts = partition_name.rsplit("_", 2)
+            if len(parts) < 3:
+                continue
+            try:
+                year = int(parts[-2])
+                month = int(parts[-1])
+            except ValueError:
+                continue
+            partition_end = _next_month(year, month)
+            if partition_end > cutoff:
+                continue
+            if not _IDENT_RE.match(partition_name):
+                # Catalog returned something we won\\\'t splice into DDL.
+                continue
+            await db.execute(text(f"DROP TABLE IF EXISTS {partition_name}"))
+            dropped[parent_table].append(partition_name)
+
+    await db.commit()
+    return dropped
+''')
+
+    # ─────────────────────────────────────────────────────────────
+    # Notifications — outbound email via Microsoft Graph (preferred)
+    # or SMTP fallback. Dispatcher reads runtime toggle from
+    # app_settings.notifications.email.enabled so admin can flip the
+    # whole channel off without restart.
+    # ─────────────────────────────────────────────────────────────
+    _write_if_missing(app / "services" / "notifications" / "__init__.py", '''\
+"""Notification service — admin alerts + user replies via M365 Graph.
+
+Triggers:
+  * notify_admin_new_signup()        — after user.create with is_approved=False
+  * notify_user_approval_granted()   — after admin approves (link OR bulk)
+  * notify_user_rejection()          — after admin rejects via approval link
+
+All run async and never raise — a transport failure logs but doesn\\'t
+break the calling business flow. Toggle the whole channel via
+app_settings.notifications.email.enabled.
+"""
+from app.services.notifications.dispatcher import (  # noqa: F401
+    notify_admin_new_signup,
+    notify_user_approval_granted,
+    notify_user_rejection,
+)
+''')
+
+    _write_if_missing(app / "services" / "notifications" / "graph_email.py", '''\
+"""Microsoft Graph email sender.
+
+Auth: client_credentials grant against the Azure AD tenant, requesting
+the `https://graph.microsoft.com/.default` scope. Needs an Azure AD app
+registration with the `Mail.Send` Application permission consented by
+IT — see docs/patterns/email.md for the one-time setup.
+
+Token caching: 50 minutes (Graph tokens last 60). Cheap to refresh, but
+sending 30 mails in a minute shouldn\\'t hit the OAuth endpoint 30 times.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any
+
+import httpx
+
+from app.core.config import get_settings
+
+log = logging.getLogger(__name__)
+
+_TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+_GRAPH_SEND_URL = "https://graph.microsoft.com/v1.0/users/{sender}/sendMail"
+
+_token_cache: dict[str, Any] = {"value": None, "expires_at": 0.0}
+
+
+async def _get_access_token() -> str | None:
+    """Fetch + cache an access token. Returns None if config is incomplete."""
+    settings = get_settings()
+    if not (
+        settings.M365_TENANT_ID
+        and settings.M365_CLIENT_ID
+        and settings.M365_CLIENT_SECRET
+    ):
+        return None
+
+    now = time.time()
+    cached = _token_cache.get("value")
+    if cached and _token_cache.get("expires_at", 0.0) > now + 60:
+        return cached
+
+    url = _TOKEN_URL.format(tenant=settings.M365_TENANT_ID)
+    data = {
+        "client_id": settings.M365_CLIENT_ID,
+        "client_secret": settings.M365_CLIENT_SECRET,
+        "scope": "https://graph.microsoft.com/.default",
+        "grant_type": "client_credentials",
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(url, data=data)
+    if resp.status_code != 200:
+        log.warning("M365 token fetch failed: %s %s", resp.status_code, resp.text[:200])
+        return None
+    body = resp.json()
+    token = body.get("access_token")
+    expires_in = body.get("expires_in", 3000)
+    if not token:
+        return None
+    _token_cache["value"] = token
+    _token_cache["expires_at"] = now + min(expires_in, 3000)
+    return token
+
+
+async def send_html_email(
+    to: list[str],
+    subject: str,
+    html_body: str,
+) -> bool:
+    """Send an HTML email via Graph. Returns True on success.
+
+    Never raises — caller is a fire-and-forget notification path.
+    """
+    if not to:
+        return False
+    settings = get_settings()
+    if not settings.M365_SENDER_EMAIL:
+        log.warning("M365_SENDER_EMAIL not set; skipping email send")
+        return False
+
+    token = await _get_access_token()
+    if not token:
+        return False
+
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": html_body},
+            "toRecipients": [{"emailAddress": {"address": addr}} for addr in to],
+        },
+        "saveToSentItems": "true",
+    }
+    url = _GRAPH_SEND_URL.format(sender=settings.M365_SENDER_EMAIL)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+    except httpx.HTTPError as exc:
+        log.warning("Graph sendMail HTTP error: %s", exc)
+        return False
+    # Graph returns 202 Accepted on queue-for-send. Anything else is an error.
+    if resp.status_code != 202:
+        log.warning(
+            "Graph sendMail rejected: %s body=%s",
+            resp.status_code, resp.text[:300],
+        )
+        return False
+    return True
+''')
+
+    _write_if_missing(app / "services" / "notifications" / "templates.py", '''\
+"""Email body templates — bilingual (TH stacked over EN).
+
+We send ONE message containing both languages stacked with a divider so
+recipients in either locale get readable content without us needing a
+per-user language preference column. Admin\\'s edited message stays
+single-language (whatever they typed on the approval page); the rest of
+the body — headers, footer, button labels — is bilingual.
+
+Kept as Python f-strings rather than Jinja for now — three templates
+each is small enough to not warrant a templating engine. Add real Jinja
+under app/services/notifications/templates/*.html when this grows past
+~5 templates.
+
+Closes Deep-Audit HIGH-4 — every interpolated value that originates
+from a user (name, email, admin\\'s reply text, rejection reason, app
+name from settings) is run through html.escape() before being placed
+inside the HTML body. Static template markup (brand colors, layout
+divs) is intentionally NOT escaped — it\\'s author-controlled.
+
+URLs (`approve_url`, `reject_url`, `login_url`) are NOT html-escaped
+inside href attributes — html.escape would mangle the `&` separator in
+real query strings. They are server-generated from settings
+(`AUTH_FRONTEND_BASE_URL`) + a server-generated approval token, so
+they\\'re not an injection vector. If a future change accepts a
+user-controlled URL fragment, escape that fragment BEFORE building the
+URL.
+"""
+from __future__ import annotations
+
+import html
+
+
+def _esc(value: str | None) -> str:
+    """HTML-escape a single user-controlled string for inline body use.
+
+    None / empty → empty string (callers display their own fallback).
+    quote=True so values that ever land inside attribute context (e.g.
+    a future <span title="..."> usage) are also safe.
+    """
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=True)
+
+
+_CARD_OPEN = (
+    "<html><body style=\\"font-family: Tahoma, \\'Leelawadee UI\\', sans-serif; "
+    "color:#1f2937; background:#e2e5e5; padding:24px 0; margin:0;\\">"
+    "<div style=\\"max-width:560px; margin:0 auto; background:#fff; "
+    "border-top:4px solid #B29530; border-radius:6px; padding:24px 28px;\\">"
+)
+_CARD_FOOTER = (
+    "<p style=\\"font-size:10pt;color:#b4b8c0;margin-top:24px;"
+    "border-top:1px solid #e2e5e5;padding-top:12px;\\">"
+    "อีเมลนี้ส่งโดยระบบอัตโนมัติ — ไม่ต้องตอบกลับ"
+    "<br>This is an automated email — please do not reply."
+    "</p></div></body></html>"
+)
+# Visual divider between Thai and English sections inside the card.
+_LANG_DIVIDER = (
+    "<div style=\\"margin:18px 0; text-align:center; color:#b4b8c0; font-size:10pt;\\">"
+    "<span style=\\"display:inline-block; width:30%; border-top:1px solid #e2e5e5; "
+    "vertical-align:middle; margin-right:8px;\\"></span>"
+    "ENGLISH"
+    "<span style=\\"display:inline-block; width:30%; border-top:1px solid #e2e5e5; "
+    "vertical-align:middle; margin-left:8px;\\"></span>"
+    "</div>"
+)
+
+
+def signup_admin(*, user_email: str, user_name: str,
+                 app_name: str,
+                 approve_url: str, reject_url: str) -> tuple[str, str]:
+    """Notification → admin. Bilingual: Thai section then ENGLISH divider
+    then English section. Both buttons point to the same one-time tokens
+    so it doesn\\'t matter which language section admin reads from.
+
+    Brand palette (CT) — green #114B33 + gold #B29530 + warm callout.
+    Inline styles only; many mail clients strip <style> blocks.
+
+    All user-controlled values (user_name, user_email, app_name) are
+    html.escape()d before interpolation — closes Deep-Audit HIGH-4.
+    URLs are NOT escaped (mangles real `&` in query strings) — they\\'re
+    server-generated, not a user-controlled vector.
+    """
+    subject = "ขออนุมัติการเข้าใช้งาน · Access Request Approval"
+    safe_name_th = _esc(user_name) if user_name else "(ไม่ระบุชื่อ)"
+    safe_name_en = _esc(user_name) if user_name else "(name not provided)"
+    safe_email = _esc(user_email)
+    safe_app = _esc(app_name)
+    buttons = (
+        f'<p style="margin:18px 0 12px 0;">'
+        f'<a href="{approve_url}" style="background:#114B33;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;margin-right:8px;">✓ อนุมัติ / Approve</a>'
+        f'<a href="{reject_url}" style="background:#dc2626;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;">✕ ปฏิเสธ / Reject</a>'
+        f'</p>'
+    )
+    body = f"""
+    {_CARD_OPEN}
+      <h2 style="color:#114B33; font-size:18pt; margin:0 0 12px 0;">ขออนุมัติการเข้าใช้งาน</h2>
+      <p style="margin:6px 0;"><b>{safe_name_th}</b> ({safe_email})<br>
+         ต้องการเข้าใช้งาน <b>{safe_app}</b></p>
+      <p style="font-size:10pt;color:#114B33;background:#f9e6bc;padding:8px 12px;border-radius:4px;margin:12px 0;">
+        ลิงก์ใช้ได้ครั้งเดียว — ถ้ามีผู้ดูแลท่านอื่นดำเนินการไปก่อน ลิงก์จะหมดอายุอัตโนมัติ
+      </p>
+      {_LANG_DIVIDER}
+      <h2 style="color:#114B33; font-size:18pt; margin:0 0 12px 0;">Access Request Approval</h2>
+      <p style="margin:6px 0;"><b>{safe_name_en}</b> ({safe_email})<br>
+         is requesting access to <b>{safe_app}</b>.</p>
+      <p style="font-size:10pt;color:#114B33;background:#f9e6bc;padding:8px 12px;border-radius:4px;margin:12px 0;">
+        Single-use link — it expires automatically if another administrator acts first.
+      </p>
+      {buttons}
+      {_CARD_FOOTER}
+    """
+    return subject, body
+
+
+# Back-compat alias for callers that still import the _th name.
+signup_admin_th = signup_admin
+
+
+def approval_user_default_message_th(*, user_name: str) -> str:
+    """Plain-text default message body shown in admin\\'s editable textarea
+    on the approval page when locale=th."""
+    return (
+        f"เรียน {user_name or 'ผู้ใช้'},\\n\\n"
+        f"ผู้ดูแลระบบได้อนุมัติบัญชีของคุณเรียบร้อย "
+        f"คุณสามารถเข้าใช้งานระบบได้แล้ว"
+    )
+
+
+def approval_user_default_message_en(*, user_name: str) -> str:
+    """Plain-text default message body when locale=en."""
+    return (
+        f"Dear {user_name or 'user'},\\n\\n"
+        f"Your account has been approved by the administrator. "
+        f"You may now sign in to the system."
+    )
+
+
+def approval_user(*, user_name: str, login_url: str,
+                  message: str | None = None) -> tuple[str, str]:
+    """Reply → user: approved. Bilingual stacked.
+
+    `message` is admin\\'s edited copy from the public approve page (one
+    language — whichever they typed). Shown verbatim in the Thai section;
+    English section gets the canonical English default message. If
+    `message` is empty, both sections show their respective defaults.
+
+    `message` is admin-controlled but still untrusted (admin accounts can
+    be phished or compromised). Escape it before converting "\\n" → <br>.
+    """
+    subject = "บัญชีของคุณได้รับการอนุมัติแล้ว · Account approved"
+    th_text = (message or approval_user_default_message_th(user_name=user_name)).strip()
+    en_text = approval_user_default_message_en(user_name=user_name).strip()
+    # Escape FIRST, then turn newlines into <br>. The other way round
+    # would leak any <br> the admin had literally typed AND still leave
+    # actual angle-brackets unsafe.
+    th_html = _esc(th_text).replace("\\n", "<br>")
+    en_html = _esc(en_text).replace("\\n", "<br>")
+    body = f"""
+    {_CARD_OPEN}
+      <h2 style="color:#114B33; font-size:18pt; margin:0 0 12px 0;">บัญชีของคุณได้รับการอนุมัติแล้ว</h2>
+      <p style="margin:12px 0;">{th_html}</p>
+      <p style="margin:20px 0;"><a href="{login_url}" style="background:#114B33;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;">เข้าสู่ระบบ</a></p>
+      {_LANG_DIVIDER}
+      <h2 style="color:#114B33; font-size:18pt; margin:0 0 12px 0;">Account approved</h2>
+      <p style="margin:12px 0;">{en_html}</p>
+      <p style="margin:20px 0;"><a href="{login_url}" style="background:#114B33;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold;display:inline-block;">Sign in</a></p>
+      {_CARD_FOOTER}
+    """
+    return subject, body
+
+
+approval_user_th = approval_user  # back-compat alias
+
+
+def rejection_user_default_message_th(*, user_name: str) -> str:
+    return (
+        f"เรียน {user_name or 'ผู้ใช้'},\\n\\n"
+        f"ขออภัย คำขอเข้าใช้งานของคุณยังไม่ได้รับการอนุมัติในขณะนี้ "
+        f"หากต้องการสอบถามเพิ่มเติม กรุณาติดต่อผู้ดูแลระบบ"
+    )
+
+
+def rejection_user_default_message_en(*, user_name: str) -> str:
+    return (
+        f"Dear {user_name or 'user'},\\n\\n"
+        f"We regret to inform you that your access request has not been approved "
+        f"at this time. Please contact the administrator if you have further questions."
+    )
+
+
+def rejection_user(*, user_name: str, reason: str | None,
+                   message: str | None = None) -> tuple[str, str]:
+    """Reply → user: rejected. Bilingual stacked.
+
+    `message` is admin\\'s edited copy (single language) — shown in the
+    Thai section. English section shows the canonical English default.
+    `reason` (optional) is the short structured cause and appears on both
+    sides, since it\\'s a noun phrase the admin typed.
+
+    Both `message` and `reason` are admin-typed and trusted-but-untrusted.
+    Closes Deep-Audit HIGH-4 — escape both before HTML interpolation.
+    """
+    subject = "คำขอเข้าใช้งานของคุณ · Your access request"
+    th_text = (message or rejection_user_default_message_th(user_name=user_name)).strip()
+    en_text = rejection_user_default_message_en(user_name=user_name).strip()
+    th_html = _esc(th_text).replace("\\n", "<br>")
+    en_html = _esc(en_text).replace("\\n", "<br>")
+    reason_block_th = ""
+    reason_block_en = ""
+    if reason:
+        safe_reason = _esc(reason)
+        reason_block_th = (
+            f'<p style="background:#fef2f2;border-left:3px solid #dc2626;'
+            f'padding:8px 12px;color:#7f1d1d;font-size:11pt;margin:12px 0;">'
+            f'<b>เหตุผล:</b><br>{safe_reason}</p>'
+        )
+        reason_block_en = (
+            f'<p style="background:#fef2f2;border-left:3px solid #dc2626;'
+            f'padding:8px 12px;color:#7f1d1d;font-size:11pt;margin:12px 0;">'
+            f'<b>Reason:</b><br>{safe_reason}</p>'
+        )
+    body = f"""
+    {_CARD_OPEN}
+      <h2 style="color:#114B33; font-size:18pt; margin:0 0 12px 0;">คำขอเข้าใช้งานของคุณ</h2>
+      <p style="margin:12px 0;">{th_html}</p>
+      {reason_block_th}
+      {_LANG_DIVIDER}
+      <h2 style="color:#114B33; font-size:18pt; margin:0 0 12px 0;">Your access request</h2>
+      <p style="margin:12px 0;">{en_html}</p>
+      {reason_block_en}
+      {_CARD_FOOTER}
+    """
+    return subject, body
+
+
+rejection_user_th = rejection_user  # back-compat alias
+''')
+
+    _write_if_missing(app / "services" / "notifications" / "dispatcher.py", '''\
+"""Notification dispatcher — read settings, pick transport, send.
+
+Why a separate dispatcher: the two trigger points (signup, approval)
+shouldn\\'t know which channel is active or whether notifications are
+enabled at all. They just call notify_*; this module decides.
+
+Failure policy: never raise. If transport fails, log and return — the
+underlying business action (user create / approve) already succeeded;
+losing a notification is recoverable, a 500 on the API isn\\'t.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.db.models.app_setting import AppSetting
+from app.services.notifications.graph_email import send_html_email
+from app.services.notifications.templates import (
+    approval_user_th, rejection_user_th, signup_admin_th,
+)
+
+log = logging.getLogger(__name__)
+
+
+async def _settings_lookup(db: AsyncSession, key: str, default: Any) -> Any:
+    row = (await db.execute(select(AppSetting).where(AppSetting.key == key))).scalar_one_or_none()
+    if not row or row.value is None:
+        return default
+    try:
+        return json.loads(row.value)
+    except (json.JSONDecodeError, TypeError):
+        return row.value
+
+
+async def _is_enabled(db: AsyncSession) -> bool:
+    return bool(await _settings_lookup(db, "notifications.email.enabled", False))
+
+
+async def _admin_recipients(db: AsyncSession) -> list[str]:
+    raw = await _settings_lookup(db, "notifications.email.admin_recipients", [])
+    if isinstance(raw, str):
+        # Stored as comma list — split + strip.
+        raw = [s.strip() for s in raw.split(",") if s.strip()]
+    return [r for r in raw if isinstance(r, str) and "@" in r]
+
+
+async def notify_admin_new_signup(
+    db: AsyncSession, *, user_email: str, user_name: str | None,
+    approval_token: str | None = None,
+) -> None:
+    """Email admins that a new user is pending approval. No-op when disabled.
+
+    `approval_token` (raw, NOT the hash) is embedded into the approve +
+    reject URLs so the admin can act with one click. Caller is the user-
+    create endpoint, which generates the token and persists the hash.
+    """
+    if not await _is_enabled(db):
+        return
+    recipients = await _admin_recipients(db)
+    if not recipients:
+        log.info("notify_admin_new_signup: enabled but no admin recipients configured")
+        return
+    settings = get_settings()
+    base = settings.AUTH_FRONTEND_BASE_URL.rstrip("/") or "http://localhost:5173"
+    if approval_token:
+        approve_url = f"{base}/approve/{approval_token}?action=approve"
+        reject_url = f"{base}/approve/{approval_token}?action=reject"
+    else:
+        # Fallback when token generation wasn\\'t wired (legacy callers) —
+        # admin lands on the user-management page and approves there.
+        approve_url = reject_url = f"{base}/settings/users"
+    app_name = settings.APP_NAME or "ระบบ"
+    subject, html = signup_admin_th(
+        user_email=user_email,
+        user_name=user_name or "",
+        app_name=app_name,
+        approve_url=approve_url,
+        reject_url=reject_url,
+    )
+    await send_html_email(recipients, subject, html)
+
+
+async def notify_user_approval_granted(
+    db: AsyncSession, *, user_email: str, user_name: str | None,
+    custom_message: str | None = None,
+) -> None:
+    """Email a user their account was approved. No-op when disabled.
+
+    `custom_message` is the admin\\'s edited reply text from the public
+    approval page; empty falls back to the default template body.
+    """
+    if not await _is_enabled(db):
+        return
+    if not user_email:
+        return
+    base = get_settings().AUTH_FRONTEND_BASE_URL.rstrip("/") or "http://localhost:5173"
+    login_url = f"{base}/login"
+    subject, html = approval_user_th(
+        user_name=user_name or "",
+        login_url=login_url,
+        message=custom_message,
+    )
+    await send_html_email([user_email], subject, html)
+
+
+async def notify_user_rejection(
+    db: AsyncSession, *, user_email: str, user_name: str | None,
+    reason: str | None = None,
+    custom_message: str | None = None,
+) -> None:
+    """Email a user their access request was declined. No-op when disabled.
+
+    `reason` is the structured short reason from the admin form (shown as
+    a quoted block in the email). `custom_message` is the longer free-
+    form reply admin typed on the approval page.
+    """
+    if not await _is_enabled(db):
+        return
+    if not user_email:
+        return
+    subject, html = rejection_user_th(
+        user_name=user_name or "",
+        reason=reason,
+        message=custom_message,
+    )
+    await send_html_email([user_email], subject, html)
+''')
+
+    # Re-export the three notify_* helpers at package level so callers
+    # write `from app.services.notifications import notify_admin_new_signup`
+    # rather than having to know they live in dispatcher.py. The package
+    # __init__ was created empty by the package-init loop in
+    # _scaffold_backend(); we overwrite it here now that dispatcher.py is
+    # on disk.
+    (app / "services" / "notifications" / "__init__.py").write_text(
+        '"""Notifications subsystem — re-export the public API.\n\n'
+        "`from app.services.notifications import notify_*` is the supported\n"
+        "shape; the underlying dispatcher module is an implementation detail.\n"
+        '"""\n'
+        "from app.services.notifications.dispatcher import (\n"
+        "    notify_admin_new_signup,\n"
+        "    notify_user_approval_granted,\n"
+        "    notify_user_rejection,\n"
+        ")\n"
+        "\n"
+        '__all__ = [\n'
+        '    "notify_admin_new_signup",\n'
+        '    "notify_user_approval_granted",\n'
+        '    "notify_user_rejection",\n'
+        "]\n",
+        encoding="utf-8",
+    )
+
+    # Claude integration wrapper — auto-logs to ai_call_logs.
+    # Exempt from no-direct-ai-sdk check (lives in app/integrations/).
+    _write_if_missing(app / "integrations" / "claude_ai.py", '''\
+"""Claude (Anthropic) integration — the ONLY place AsyncAnthropic is imported.
+
+Every Claude call must go through call_claude_messages() so it lands in
+ai_call_logs with PII masking, token counts, and (once Pattern C lands)
+cost. Direct `from anthropic import ...` outside this package is blocked
+by scripts/checks/no_direct_ai_sdk.py.
+
+See AGENTS.md §16 + docs/patterns/ai.md.
+"""
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.services.loggers.ai_call_logger import AiCallLogger
+
+try:
+    from anthropic import AsyncAnthropic
+except ImportError:  # pragma: no cover — anthropic optional until AI feature lands
+    AsyncAnthropic = None  # type: ignore[assignment,misc]
+
+_client: Any | None = None
+
+
+def _get_client() -> Any:
+    global _client
+    if _client is None:
+        if AsyncAnthropic is None:
+            raise RuntimeError(
+                "anthropic SDK not installed. Add 'anthropic' to pyproject.toml "
+                "and reinstall before calling Claude."
+            )
+        _client = AsyncAnthropic(api_key=get_settings().CLAUDE_API_KEY)
+    return _client
+
+
+async def call_claude_messages(
+    *,
+    prompt: str,
+    db: AsyncSession,
+    user: Any | None = None,
+    system_prompt: str | None = None,
+    model: str | None = None,
+    max_tokens: int = 4096,
+    endpoint: str | None = None,
+    request_id: str | None = None,
+    use_case: str | None = None,
+) -> str:
+    """Send a single-message Claude request and log to ai_call_logs.
+
+    Returns the assistant text. Re-raises on error after logging.
+
+    Transaction ownership: this function does NOT commit. When called from
+    a FastAPI endpoint with `db: DbDep`, the surrounding get_db dependency
+    auto-commits on success / rolls back on exception. Non-request callers
+    (APScheduler jobs, CLI scripts using `async with get_db_session()`)
+    MUST commit themselves after invoking — otherwise the ai_call_logs row
+    is lost.
+    """
+    settings = get_settings()
+    resolved_model = model or settings.CLAUDE_MODEL
+    started_at = time.monotonic()
+    logger = AiCallLogger(db)
+
+    try:
+        response = await _get_client().messages.create(
+            model=resolved_model,
+            max_tokens=max_tokens,
+            system=system_prompt or "",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        response_text = response.content[0].text if response.content else ""
+
+        await logger.log(
+            user=user,
+            model=resolved_model,
+            operation="messages",
+            prompt=prompt,
+            system_prompt=system_prompt,
+            response=response_text,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+            duration_ms=duration_ms,
+            status="success",
+            endpoint=endpoint,
+            request_id=request_id,
+            metadata={"use_case": use_case} if use_case else {},
+        )
+        # Commit is owned by the caller (get_db dependency for requests,
+        # explicit commit for non-request contexts — see docstring).
+        return response_text
+
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        msg = str(exc).lower()
+        if "rate" in msg:
+            status = "rate_limited"
+        elif "timeout" in msg:
+            status = "timeout"
+        else:
+            status = "error"
+
+        await logger.log(
+            user=user,
+            model=resolved_model,
+            operation="messages",
+            prompt=prompt,
+            system_prompt=system_prompt,
+            duration_ms=duration_ms,
+            status=status,
+            error=exc,
+            endpoint=endpoint,
+            request_id=request_id,
+            metadata={"use_case": use_case} if use_case else {},
+        )
+        # Don't commit on the error path either. Re-raising propagates the
+        # failure to get_db, which will roll back the whole request
+        # transaction (including the error-log row above — acceptable; the
+        # caller can still see the failure via the raised exception, and
+        # logging-vs-business consistency wins over keeping a partial log).
+        # Non-request callers should commit before letting the exception
+        # escape if they want the error row durable.
+        raise
+''')
+
+    # CT App Registry integration — drop-in (ดู docs/ops/registry.md §5)
+    _write_if_missing(app / "integrations" / "registry.py", '''\
+"""CT App Registry integration — telemetry push client.
+
+ดู docs/ops/registry.md §4-§5. โมดูล drop-in — ปกติไม่ต้องแก้
+collect_yesterday_metrics() ดึงเมตริก default จาก ai_call_logs /
+activity_logs / system_logs; เพิ่ม domain metric ของ app ลงใน
+extraMetrics ได้ตามต้องการ
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, time, timedelta, timezone
+
+import httpx
+import structlog
+from sqlalchemy import distinct, func, select
+
+from app.core.config import get_settings
+from app.db.models.activity_log import ActivityLog
+from app.db.models.ai_call_log import AiCallLog
+from app.db.models.system_log import SystemLog
+from app.db.session import get_db_session
+
+logger = structlog.get_logger(__name__)
+
+
+async def push_daily_telemetry(metrics: dict) -> bool:
+    """ส่ง telemetry รายวันเข้า CT App Registry (เรียกจาก scheduler job).
+
+    metrics: dict camelCase ตาม docs/ops/registry.md §4.2 — ต้องมี
+    key `date` (YYYY-MM-DD); field อื่น optional. idempotent ตาม date —
+    ส่งซ้ำวันเดิม = แทนที่ของเดิม จึง retry ได้ปลอดภัย.
+
+    คืน True ถ้าสำเร็จ — ไม่ raise ออกไปทำ caller ล่ม (telemetry เป็น
+    งาน background, ห้ามทำ app หลักล่ม — §6).
+    """
+    settings = get_settings()
+    if not settings.REGISTRY_URL or not settings.REGISTRY_API_KEY:
+        logger.info("registry.telemetry.skipped", reason="not onboarded")
+        return False
+
+    url = (
+        f"{settings.REGISTRY_URL.rstrip('/')}"
+        f"/api/v1/projects/{settings.PROJECT_SLUG}/telemetry"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url, json=metrics,
+                headers={"X-API-Key": settings.REGISTRY_API_KEY},
+            )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        # 403 = ยังไม่ approve / key ผิด — retry รอบถัดไป (idempotent)
+        logger.warning(
+            "registry.telemetry.rejected",
+            status=e.response.status_code, body=e.response.text[:500],
+        )
+        return False
+    except httpx.HTTPError as e:
+        logger.warning("registry.telemetry.error", error=str(e))
+        return False
+
+    logger.info("registry.telemetry.pushed", date=metrics.get("date"))
+    return True
+
+
+async def collect_yesterday_metrics() -> dict:
+    """รวมเมตริกของ "เมื่อวาน" สำหรับ push เข้า registry.
+
+    Fields ตาม docs/ops/registry.md §4.2:
+    aiCalls / aiInputTokens / aiOutputTokens / aiCostUsd → ai_call_logs
+    activeUsers / totalLogins / failedLogins                → activity_logs
+    errorCount                                              → system_logs
+
+    p95LatencyMs ขึ้นกับ middleware ของแต่ละ app — ปล่อย null โดย default
+    extraMetrics: เพิ่ม domain metric เฉพาะ app ที่ field ข้างบนไม่ครอบ
+
+    DB session เปิดเองภายใน — caller ไม่ต้องส่ง db เพราะ job รันจาก
+    scheduler ที่ไม่มี request scope (ดู core/scheduler.py).
+    """
+    yesterday = date.today() - timedelta(days=1)
+    start = datetime.combine(yesterday, time.min, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+
+    async with get_db_session() as db:
+        ai_row = (await db.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(AiCallLog.input_tokens), 0),
+                func.coalesce(func.sum(AiCallLog.output_tokens), 0),
+                func.coalesce(func.sum(AiCallLog.cost_usd), 0),
+            ).where(
+                AiCallLog.created_at >= start,
+                AiCallLog.created_at < end,
+            )
+        )).one()
+
+        active_users = (await db.execute(
+            select(func.count(distinct(ActivityLog.user_id)))
+            .where(
+                ActivityLog.created_at >= start,
+                ActivityLog.created_at < end,
+                ActivityLog.user_id.is_not(None),
+            )
+        )).scalar() or 0
+
+        total_logins = (await db.execute(
+            select(func.count())
+            .select_from(ActivityLog)
+            .where(
+                ActivityLog.created_at >= start,
+                ActivityLog.created_at < end,
+                ActivityLog.action_type == "login",
+            )
+        )).scalar() or 0
+
+        failed_logins = (await db.execute(
+            select(func.count())
+            .select_from(ActivityLog)
+            .where(
+                ActivityLog.created_at >= start,
+                ActivityLog.created_at < end,
+                ActivityLog.action_type == "login_failed",
+            )
+        )).scalar() or 0
+
+        error_count = (await db.execute(
+            select(func.count())
+            .select_from(SystemLog)
+            .where(
+                SystemLog.created_at >= start,
+                SystemLog.created_at < end,
+                SystemLog.status == "failure",
+            )
+        )).scalar() or 0
+
+    return {
+        "date": yesterday.isoformat(),
+        "aiCalls": int(ai_row[0] or 0),
+        "aiInputTokens": int(ai_row[1] or 0),
+        "aiOutputTokens": int(ai_row[2] or 0),
+        # registry expects decimal-as-string ≤4dp (§4.2)
+        "aiCostUsd": f"{float(ai_row[3] or 0):.4f}",
+        "activeUsers": int(active_users),
+        "totalLogins": int(total_logins),
+        "failedLogins": int(failed_logins),
+        "errorCount": int(error_count),
+    }
+''')
+
+    # APScheduler — background jobs
+    _write_if_missing(app / "core" / "scheduler.py", '''\
+"""APScheduler — background jobs.
+
+Wires three recurring jobs:
+- registry_telemetry  — daily push to CT App Registry (ดู docs/ops/registry.md §5.2)
+- log_partitions      — monthly: create next 2 months of log partitions
+- log_retention       — daily: drop partitions older than retention_days
+
+start/stop จาก main.py lifespan.
+"""
+from __future__ import annotations
+
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import structlog
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+from app.db.session import get_db_session
+from app.integrations.registry import collect_yesterday_metrics, push_daily_telemetry
+from app.services.loggers.partition_manager import ensure_partitions_exist
+from app.services.loggers.retention import drop_old_partitions
+from app.services.loggers.system_logger import SystemLogger
+
+logger = structlog.get_logger(__name__)
+
+_scheduler: AsyncIOScheduler | None = None
+
+
+@asynccontextmanager
+async def _audit_job(job_name: str) -> AsyncIterator[None]:
+    """Wrap a job body so every run lands in system_logs as either
+    success or failure, with duration_ms and the masked error message.
+
+    Without this the admin System Logs page is empty even when the
+    scheduler is firing 3 jobs a day — structlog goes to stdout, not DB,
+    so an operator can't see "was last night's retention run OK?"
+    from the admin UI.
+    """
+    start = time.monotonic()
+    caught: Exception | None = None
+    try:
+        yield
+    except Exception as e:
+        caught = e
+        raise
+    finally:
+        async with get_db_session() as db:
+            await SystemLogger(db).log_job(
+                job_name=job_name,
+                status="failure" if caught else "success",
+                duration_ms=int((time.monotonic() - start) * 1000),
+                error=caught,
+            )
+            await db.commit()
+
+
+async def _push_yesterday_telemetry() -> None:
+    """job: รวมเมตริกเมื่อวาน แล้ว push เข้า CT App Registry."""
+    async with _audit_job("registry_telemetry"):
+        metrics = await collect_yesterday_metrics()
+        await push_daily_telemetry(metrics)
+
+
+async def _ensure_log_partitions() -> None:
+    """job: create monthly partitions for log tables (idempotent)."""
+    async with _audit_job("log_partitions"):
+        async with get_db_session() as db:
+            await ensure_partitions_exist(db, months_ahead=2)
+        logger.info("scheduler.partitions.ensured")
+
+
+async def _run_log_retention() -> None:
+    """job: drop partitions older than retention_days."""
+    async with _audit_job("log_retention"):
+        async with get_db_session() as db:
+            dropped = await drop_old_partitions(db)
+        logger.info("scheduler.retention.complete", dropped=dropped)
+
+
+def start_scheduler() -> None:
+    """เริ่ม scheduler + ลงทะเบียน job — เรียกจาก FastAPI lifespan (startup)."""
+    global _scheduler
+    if _scheduler is not None:
+        return
+    _scheduler = AsyncIOScheduler()
+    _scheduler.add_job(
+        _push_yesterday_telemetry,
+        CronTrigger(hour=1, minute=0),  # ตี 1 ของทุกวัน
+        id="registry_telemetry",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _ensure_log_partitions,
+        CronTrigger(day=25, hour=2, minute=0),  # วันที่ 25 ของทุกเดือน
+        id="log_partitions",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _run_log_retention,
+        CronTrigger(hour=3, minute=0),  # ตี 3 ของทุกวัน
+        id="log_retention",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    logger.info(
+        "scheduler.started",
+        jobs=["registry_telemetry", "log_partitions", "log_retention"],
+    )
+
+
+def stop_scheduler() -> None:
+    """หยุด scheduler — เรียกจาก FastAPI lifespan (shutdown)."""
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
+        logger.info("scheduler.stopped")
+''')
+
+    # Rate limit singleton — wired into main.py via bootstrap_rate_limiting().
+    # Closes Deep-Audit HIGH-1: brute-force defence on /login, /sso/callback,
+    # and the public /users/approval/{token} endpoints.
+    _write_if_missing(app / "core" / "safe_url.py", '''\
+"""SSRF guard — validate an outbound URL before fetching it server-side.
+
+Closes the SSRF gap (AGENTS.md §3 rule 9 + docs/security.md §3.6). URL-
+fetching features are the single most common SSRF source in AI-generated
+code: an attacker supplies a URL that points at an internal service or the
+cloud metadata endpoint (169.254.169.254) to steal credentials.
+
+`assert_safe_url(url)` rejects anything that is not a plain http(s) URL whose
+host resolves ENTIRELY to public, routable IP addresses. Use it on every URL
+that originates from request input BEFORE handing it to httpx/requests::
+
+    from app.core.safe_url import assert_safe_url
+
+    safe = assert_safe_url(payload.image_url)        # raises UnsafeURLError
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(safe)
+
+Optional allowlist — when you only ever fetch a known set of hosts, pass it
+and everything else is rejected even if public::
+
+    assert_safe_url(url, allowed_hosts={"api.partner.com"})
+
+Caveats (documented, not hidden):
+  * TOCTOU / DNS rebinding: we resolve at validation time; a hostile resolver
+    could return a public IP now and a private one when httpx connects. For
+    high-assurance paths, resolve once here and connect to the validated IP
+    (pin the Host header), or keep an allowlist. For the common internal-tool
+    case, host+IP validation closes the practical attack surface.
+  * We block by IP class, not by port — combine with an allowlist if you must
+    restrict ports.
+"""
+from __future__ import annotations
+
+import ipaddress
+import socket
+from urllib.parse import urlsplit
+
+_ALLOWED_SCHEMES = {"http", "https"}
+
+
+class UnsafeURLError(ValueError):
+    """Raised when a URL fails the SSRF safety checks."""
+
+
+def _is_public_ip(ip_str: str) -> bool:
+    """True only for globally routable addresses.
+
+    Blocks loopback, private (RFC 1918), link-local (incl. the
+    169.254.169.254 cloud-metadata address), multicast, reserved and
+    unspecified ranges — for both IPv4 and IPv6, plus IPv4-mapped IPv6.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return _is_public_ip(str(ip.ipv4_mapped))
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _resolve_ips(host: str) -> list[str]:
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise UnsafeURLError("cannot resolve host: " + host) from exc
+    return [info[4][0] for info in infos]
+
+
+def assert_safe_url(url, *, allowed_hosts=None, allowed_schemes=None):
+    """Validate `url` for safe server-side fetching; return it unchanged.
+
+    Raises UnsafeURLError on any failure. Never performs the request itself.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise UnsafeURLError("URL must be a non-empty string")
+
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    schemes = allowed_schemes or _ALLOWED_SCHEMES
+    if scheme not in schemes:
+        raise UnsafeURLError("scheme not allowed: " + (scheme or "(none)"))
+
+    host = parts.hostname
+    if not host:
+        raise UnsafeURLError("URL has no host")
+
+    if allowed_hosts is not None:
+        if host.lower() not in {h.lower() for h in allowed_hosts}:
+            raise UnsafeURLError("host not in allowlist: " + host)
+
+    # Literal IP host → validate directly; hostname → resolve every A/AAAA.
+    try:
+        ipaddress.ip_address(host)
+        candidate_ips = [host]
+    except ValueError:
+        candidate_ips = _resolve_ips(host)
+
+    if not candidate_ips:
+        raise UnsafeURLError("host did not resolve: " + host)
+
+    for ip_str in candidate_ips:
+        if not _is_public_ip(ip_str):
+            raise UnsafeURLError(
+                "host resolves to a non-public address: "
+                + host + " -> " + ip_str
+            )
+    return url
+
+
+def is_safe_url(url, *, allowed_hosts=None, allowed_schemes=None) -> bool:
+    """Boolean convenience wrapper around assert_safe_url."""
+    try:
+        assert_safe_url(
+            url, allowed_hosts=allowed_hosts, allowed_schemes=allowed_schemes
+        )
+        return True
+    except UnsafeURLError:
+        return False
+''')
+
+    _write_if_missing(app / "core" / "rate_limit.py", '''\
+"""Rate limiting — slowapi singleton + FastAPI bootstrap.
+
+We register ONE Limiter for the whole app and let routers reach it via
+`from app.core.rate_limit import limiter`. Per-route limits are applied
+with `@limiter.limit("N/minute")` on the route function (slowapi
+requires the function to take `request: Request` as a named arg — every
+sensitive route in this scaffold already does).
+
+Production reality (Round-4 HIGH-2):
+  * Storage: settings.RATE_LIMIT_STORAGE_URI selects the backend.
+    `memory://` is per-worker — useless with --workers > 1. The
+    Settings._production_needs_shared_rate_limit_storage validator
+    blocks APP_ENV=production + memory:// at boot. For production set
+    `redis://host:6379/0` and slowapi (via the `limits` package) will
+    share counters across workers AND replicas.
+  * Client IP: when fronted by a reverse proxy (nginx in the scaffold\\'s
+    docker-compose prod topology), request.client.host is the PROXY ip,
+    not the real client — every request shares one bucket. We read
+    X-Forwarded-For instead, but ONLY when the immediate hop is in the
+    operator-configured TRUSTED_PROXY_IPS CIDR list. Untrusted hops are
+    NOT allowed to set the header (otherwise any internet attacker
+    spoofs it to dodge the limit).
+
+Why a separate module:
+  - Auth router (login/SSO) and the public approval router both need the
+    same limiter instance — a module-level singleton avoids passing it
+    through dependency injection.
+  - Tests can monkey-patch `limiter.enabled = False` for fast unit runs.
+
+Why `config_filename` is set to a sentinel path:
+  - slowapi auto-reads `.env` if it finds one next to the CWD. On
+    Windows the default Python text-mode decoder is cp1252, and the
+    project\\'s `.env` contains Thai comments → UnicodeDecodeError at
+    import time. We pass an unused sentinel filename so slowapi calls
+    `starlette.config.Config(<missing-file>)`, which just emits one
+    UserWarning at boot and returns an empty config. The wider Settings
+    class still loads `.env` through pydantic-settings (UTF-8 explicit).
+"""
+from __future__ import annotations
+
+import ipaddress
+import warnings
+
+from fastapi import FastAPI, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+
+from app.core.config import get_settings
+
+
+def _parse_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    """Parse settings.trusted_proxy_networks into ipaddress network objects.
+
+    Resolved once per process (Limiter is built once at import time).
+    Invalid entries are silently dropped after a logged warning — we
+    don\\'t want a typo in one entry to break the whole limiter.
+    """
+    out: list[ipaddress._BaseNetwork] = []
+    for raw in get_settings().trusted_proxy_networks:
+        try:
+            out.append(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            warnings.warn(
+                f"TRUSTED_PROXY_IPS: dropping invalid CIDR {raw!r}",
+                stacklevel=2,
+            )
+    return out
+
+
+_TRUSTED_PROXY_NETS = _parse_proxy_networks()
+
+
+def _client_ip(request: Request) -> str:
+    """Resolve the rate-limit key.
+
+    Round-5 HIGH-1 fix — walk RIGHTWARD, not leftmost. nginx\\'s standard
+    `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` APPENDS
+    the immediate peer\\'s IP rather than replacing the header. So when a
+    malicious client sends `X-Forwarded-For: 1.2.3.4`, nginx forwards
+    `X-Forwarded-For: 1.2.3.4, <real-client-ip>`. The LEFTMOST is the
+    attacker-controlled value; the actual client is the leftmost entry
+    that is NOT itself a trusted proxy (RFC 7239 §5.2).
+
+    Algorithm:
+      1. If no TRUSTED_PROXY_IPS configured → ignore the header entirely
+         (the immediate hop IS the client, or we don\\'t have a basis to
+         trust any chain).
+      2. If the immediate peer is not in the trusted set → same: ignore
+         the header (header could be attacker-injected; we have no proxy
+         to vouch for it).
+      3. If the immediate peer IS trusted → walk XFF entries from right
+         to left, skipping IPs that are themselves in the trusted set,
+         until we find one that ISN\\'t. That\\'s the real client.
+      4. If every entry is a trusted proxy → use the leftmost (everyone
+         in the chain is on our infra, so the leftmost is the entry
+         closest to the original client we have visibility into).
+      5. If any entry is malformed → fall back to the direct hop. Don\\'t
+         trust a chain we can\\'t parse.
+    """
+    remote = get_remote_address(request)
+    if not _TRUSTED_PROXY_NETS:
+        return remote
+    try:
+        peer_ip = ipaddress.ip_address(remote)
+    except ValueError:
+        return remote
+    if not any(peer_ip in net for net in _TRUSTED_PROXY_NETS):
+        return remote
+    xff = request.headers.get("x-forwarded-for", "").strip()
+    if not xff:
+        return remote
+    hops_raw = [h.strip() for h in xff.split(",") if h.strip()]
+    if not hops_raw:
+        return remote
+    # Parse + validate every hop. A single malformed entry collapses the
+    # whole chain to the direct hop — safer than guessing.
+    hops: list[ipaddress._BaseAddress] = []
+    for raw in hops_raw:
+        try:
+            hops.append(ipaddress.ip_address(raw))
+        except ValueError:
+            return remote
+    # Walk rightward (real-client-first per RFC 7239). The first non-
+    # trusted hop is the client. If every hop is trusted, fall through
+    # to the leftmost (the deepest visibility we have).
+    for candidate in reversed(hops):
+        if not any(candidate in net for net in _TRUSTED_PROXY_NETS):
+            return str(candidate)
+    return str(hops[0])
+
+
+# Module-level singleton — import directly from routers.
+with warnings.catch_warnings():
+    # Silence the one-time UserWarning about the missing sentinel file.
+    warnings.simplefilter("ignore", UserWarning)
+    limiter = Limiter(
+        key_func=_client_ip,
+        default_limits=[],
+        storage_uri=get_settings().RATE_LIMIT_STORAGE_URI,
+        config_filename=".slowapi-no-env",
+    )
+
+
+def bootstrap_rate_limiting(app: FastAPI) -> None:
+    """Wire the limiter into a FastAPI app. Call once from create_app().
+
+    Side effects:
+      * `app.state.limiter` — slowapi reads this when a @limiter.limit
+        decorator fires, so it MUST be set on the same app instance.
+      * Adds the SlowAPI middleware that actually applies the limits.
+      * Registers the 429 exception handler so the SPA gets a clean
+        `{ "error": "Rate limit exceeded" }` body instead of HTML.
+    """
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+''')
+
+    alembic_dir = b / "alembic"
+    alembic_dir.mkdir(exist_ok=True)
+    (alembic_dir / "versions").mkdir(exist_ok=True)
+    _write_if_missing(alembic_dir / "__init__.py", "")
+    _write_if_missing(b / "alembic.ini", """\
+[alembic]
+script_location = alembic
+file_template = %%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s
+sqlalchemy.url = driver://placeholder
+[loggers]
+keys = root,sqlalchemy,alembic
+[handlers]
+keys = console
+[formatters]
+keys = generic
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+""")
+
+    _write_if_missing(alembic_dir / "env.py", """\
+\"\"\"Alembic env — sync psycopg driver.
+
+Why sync (not async): the runtime app uses asyncpg, but asyncpg routes
+DDL through prepared statements which reject multi-statement SQL. Several
+migrations bundle CREATE TABLE + CREATE INDEX + CREATE INDEX in a single
+op.execute() block, and those blow up under asyncpg with
+``cannot insert multiple commands into a prepared statement``.
+
+Migrations don't need async — they're a short-lived offline tool — so we
+swap +asyncpg for +psycopg in the URL here and use a plain sync engine.
+The runtime app's settings.database_url stays untouched.
+\"\"\"
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import Connection, make_url
+from alembic import context
+from app.core.config import get_settings
+from app.db.base import Base
+
+config = context.config
+if config.config_file_name:
+    fileConfig(config.config_file_name)
+settings = get_settings()
+
+# Force sync psycopg for migrations. The runtime app keeps asyncpg.
+# Use make_url(...).set(drivername=...) so we normalize ANY input
+# (postgresql://, postgresql+asyncpg://, postgresql+psycopg2://) to
+# postgresql+psycopg without textual surgery that could corrupt a
+# password containing the literal "+asyncpg" or silently no-op on a
+# URL that lacked the qualifier (which would let SQLAlchemy pick the
+# default psycopg2 dialect — not in our dependencies).
+#
+# render_as_string(hide_password=False) — NOT str(...) — because str()
+# on a URL object masks the password as '***', which alembic would then
+# try to authenticate with and fail. Always render with the real password
+# when we're handing the URL string to a driver.
+sync_url = make_url(settings.database_url).set(
+    drivername=\"postgresql+psycopg\"
+).render_as_string(hide_password=False)
+config.set_main_option("sqlalchemy.url", sync_url)
+target_metadata = Base.metadata
+
+
+def do_run_migrations(connection: Connection) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_offline() -> None:
+    \"\"\"Offline / --sql mode: emit SQL without a live DB connection.\"\"\"
+    context.configure(
+        url=sync_url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={\"paramstyle\": \"named\"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    \"\"\"Online mode: connect via engine_from_config so sqlalchemy.* keys
+    in the [alembic] section of alembic.ini (e.g. sqlalchemy.echo=true)
+    are honored. We override only the URL with the sync-driver version.\"\"\"
+    section = config.get_section(config.config_ini_section, {})
+    section[\"sqlalchemy.url\"] = sync_url
+    connectable = engine_from_config(
+        section,
+        prefix=\"sqlalchemy.\",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
+    connectable.dispose()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+""")
+
+    # Initial migration — activity_logs (partitioned). See docs/logging.md §1.2.
+    # Filename matches alembic.ini file_template (YYYY_MM_DD_HHMM-<rev>_<slug>).
+    # Use a stable past timestamp so the file is deterministic across scaffolds.
+    _write_if_missing(alembic_dir / "versions" / "2026_01_01_0000-0001_activity_logs.py", '''\
+"""activity_logs (partitioned by month)
+
+Revision ID: 0001_activity_logs
+Revises:
+Create Date: 2026-01-01 00:00:00.000000
+
+v3.0 logging foundation — merged audit + user_activity into single
+activity_logs table. See docs/logging.md §1 + AGENTS.md §14.
+"""
+from __future__ import annotations
+
+from alembic import op
+
+# revision identifiers used by Alembic
+revision = "0001_activity_logs"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    # gen_random_uuid() is built into PostgreSQL 13+ and needs no extension —
+    # works against any reasonable Postgres target (including centralized
+    # DBs where the standard's docker init-db.sql is never executed).
+    op.execute(\'\'\'
+        CREATE TABLE activity_logs (
+            id UUID NOT NULL DEFAULT gen_random_uuid(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            user_id UUID,
+            user_email_masked VARCHAR(255),
+            action_type VARCHAR(30) NOT NULL,
+            action VARCHAR(100) NOT NULL,
+            resource_type VARCHAR(50),
+            resource_id VARCHAR(100),
+            is_mutation BOOLEAN NOT NULL DEFAULT FALSE,
+            is_sensitive_read BOOLEAN NOT NULL DEFAULT FALSE,
+            is_security_event BOOLEAN NOT NULL DEFAULT FALSE,
+            risk_level VARCHAR(10) NOT NULL DEFAULT \'low\',
+            ip_address VARCHAR(45),
+            user_agent VARCHAR(500),
+            request_id VARCHAR(64),
+            endpoint VARCHAR(200),
+            http_method VARCHAR(10),
+            http_status INTEGER,
+            metadata JSONB NOT NULL DEFAULT \'{}\'::jsonb,
+            PRIMARY KEY (id, created_at)
+        ) PARTITION BY RANGE (created_at);
+
+        CREATE INDEX ix_activity_user_created ON activity_logs (user_id, created_at);
+        CREATE INDEX ix_activity_action_type ON activity_logs (action_type, created_at);
+        CREATE INDEX ix_activity_resource ON activity_logs (resource_type, resource_id);
+        CREATE INDEX ix_activity_sensitive_created ON activity_logs (is_sensitive_read, created_at);
+        CREATE INDEX ix_activity_security_created ON activity_logs (is_security_event, created_at);
+        CREATE INDEX ix_activity_risk_created ON activity_logs (risk_level, created_at);
+    \'\'\')
+
+    # Create initial partition (current month) so INSERT does not fail
+    # before partition_manager runs. Future partitions are created by the
+    # APScheduler job (docs/logging.md §5).
+    op.execute(\'\'\'
+        DO $$
+        DECLARE
+            start_date date := date_trunc(\'month\', CURRENT_DATE);
+            end_date date := start_date + interval \'1 month\';
+            partition_name text := \'activity_logs_\' || to_char(start_date, \'YYYY_MM\');
+        BEGIN
+            EXECUTE format(
+                \'CREATE TABLE IF NOT EXISTS %I PARTITION OF activity_logs \'
+                \'FOR VALUES FROM (%L) TO (%L)\',
+                partition_name, start_date, end_date
+            );
+        END $$;
+    \'\'\')
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS activity_logs CASCADE")
+''')
+
+    # 0002 — system_logs (partitioned).
+    _write_if_missing(alembic_dir / "versions" / "2026_01_01_0100-0002_system_logs.py", '''\
+"""system_logs (partitioned by month)
+
+Revision ID: 0002_system_logs
+Revises: 0001_activity_logs
+Create Date: 2026-01-01 01:00:00.000000
+
+v3.0 logging foundation — jobs / integrations / system events.
+See docs/logging.md §2 + AGENTS.md §14.
+"""
+from __future__ import annotations
+
+from alembic import op
+
+# revision identifiers used by Alembic
+revision = "0002_system_logs"
+down_revision = "0001_activity_logs"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute(\'\'\'
+        CREATE TABLE system_logs (
+            id UUID NOT NULL DEFAULT gen_random_uuid(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            category VARCHAR(30) NOT NULL,
+            event VARCHAR(100) NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            duration_ms INTEGER,
+            error_message TEXT,
+            error_type VARCHAR(100),
+            correlation_id VARCHAR(64),
+            metadata JSONB NOT NULL DEFAULT \'{}\'::jsonb,
+            PRIMARY KEY (id, created_at)
+        ) PARTITION BY RANGE (created_at);
+
+        CREATE INDEX ix_system_logs_created ON system_logs (created_at);
+        CREATE INDEX ix_system_logs_category_event ON system_logs (category, event);
+        CREATE INDEX ix_system_logs_status_created ON system_logs (status, created_at);
+    \'\'\')
+
+    # Initial partition (current month).
+    op.execute(\'\'\'
+        DO $$
+        DECLARE
+            start_date date := date_trunc(\'month\', CURRENT_DATE);
+            end_date date := start_date + interval \'1 month\';
+            partition_name text := \'system_logs_\' || to_char(start_date, \'YYYY_MM\');
+        BEGIN
+            EXECUTE format(
+                \'CREATE TABLE IF NOT EXISTS %I PARTITION OF system_logs \'
+                \'FOR VALUES FROM (%L) TO (%L)\',
+                partition_name, start_date, end_date
+            );
+        END $$;
+    \'\'\')
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS system_logs CASCADE")
+''')
+
+    # 0003 — ai_call_logs (partitioned).
+    _write_if_missing(alembic_dir / "versions" / "2026_01_01_0200-0003_ai_call_logs.py", '''\
+"""ai_call_logs (partitioned by month)
+
+Revision ID: 0003_ai_call_logs
+Revises: 0002_system_logs
+Create Date: 2026-01-01 02:00:00.000000
+
+v3.0 logging foundation — every Claude / OpenAI / provider call.
+See docs/logging.md §3 + AGENTS.md §14 + §16.
+"""
+from __future__ import annotations
+
+from alembic import op
+
+# revision identifiers used by Alembic
+revision = "0003_ai_call_logs"
+down_revision = "0002_system_logs"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute(\'\'\'
+        CREATE TABLE ai_call_logs (
+            id UUID NOT NULL DEFAULT gen_random_uuid(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            user_id UUID,
+            endpoint VARCHAR(200),
+            request_id VARCHAR(64),
+            provider VARCHAR(20) NOT NULL DEFAULT \'anthropic\',
+            model VARCHAR(50) NOT NULL,
+            operation VARCHAR(30) NOT NULL,
+            prompt TEXT NOT NULL,
+            system_prompt TEXT,
+            response TEXT,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd NUMERIC(10, 6),
+            duration_ms INTEGER,
+            status VARCHAR(20) NOT NULL,
+            error_type VARCHAR(100),
+            error_message TEXT,
+            metadata JSONB NOT NULL DEFAULT \'{}\'::jsonb,
+            PRIMARY KEY (id, created_at)
+        ) PARTITION BY RANGE (created_at);
+
+        CREATE INDEX ix_ai_logs_created ON ai_call_logs (created_at);
+        CREATE INDEX ix_ai_logs_user_created ON ai_call_logs (user_id, created_at);
+        CREATE INDEX ix_ai_logs_model_created ON ai_call_logs (model, created_at);
+        CREATE INDEX ix_ai_logs_status_created ON ai_call_logs (status, created_at);
+    \'\'\')
+
+    # Initial partition (current month).
+    op.execute(\'\'\'
+        DO $$
+        DECLARE
+            start_date date := date_trunc(\'month\', CURRENT_DATE);
+            end_date date := start_date + interval \'1 month\';
+            partition_name text := \'ai_call_logs_\' || to_char(start_date, \'YYYY_MM\');
+        BEGIN
+            EXECUTE format(
+                \'CREATE TABLE IF NOT EXISTS %I PARTITION OF ai_call_logs \'
+                \'FOR VALUES FROM (%L) TO (%L)\',
+                partition_name, start_date, end_date
+            );
+        END $$;
+    \'\'\')
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS ai_call_logs CASCADE")
+''')
+
+    # ------------------------------------------------------------------
+    # Auth subsystem — Phase A (Sprint 3, plan: keen-cuddling-marble).
+    # Models / migrations / services / routers / seed.
+    # See docs/auth.md + docs/admin-config.md.
+    # ------------------------------------------------------------------
+    _emit_auth_models(app)
+    _emit_auth_services(app)
+    _emit_auth_routers(app)
+    _emit_auth_migrations(alembic_dir)
+    _emit_auth_seed(app)
+
+    tests = b / "tests"
+    for pkg in ["unit", "integration", "security"]:
+        (tests / pkg).mkdir(parents=True, exist_ok=True)
+        _write_if_missing(tests / pkg / "__init__.py", "")
+    _write_if_missing(tests / "__init__.py", "")
+    _write_if_missing(
+        tests / "conftest.py",
+        "# See docs/testing.md for full patterns.\n"
+        "# Add fixtures here as needed. pytest is auto-imported when this file exists.\n",
+    )
+
+    # Security regression tests — guard the 4 HIGH-finding remediations
+    # from the v3.0.6 Deep Security Audit. Kept as focused unit tests
+    # (no DB) so they run in <1s on every commit and can\\'t silently
+    # regress under a busy CI environment.
+    _emit_security_tests(tests)
+
+    # Opt-in module — emits its own files + wires the router only when the
+    # FEATURE_DB_CONNECTIONS flag is set in project.config. Runs after the auth
+    # emitters so installed_routers.py exists for the wiring. When off, nothing
+    # materialises so the app boots clean (no dangling import).
+    if feature_db_connections:
+        _scaffold_db_connections_backend(b, app)
+
+
+# ============================================================================
+# Auth subsystem emissions (Sprint 3 — auth absorption Phase A).
+# Each helper writes a discrete slice (models / services / routers / migrations
+# / seed) so _scaffold_backend stays readable. All template strings stay
+# below the 1000-line/helper ceiling so future edits can find them easily.
+# ============================================================================
+
+
+def _emit_auth_models(app: Path) -> None:
+    _write_if_missing(app / "db" / "models" / "user.py", '''\
+"""User — auth identity.
+
+`auth_provider` is the hard provider-stripe: "azure_ad" users never have
+a password_hash; "local" users never participate in Azure AD SSO. See
+docs/auth.md §2.1.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from sqlalchemy import ARRAY, Boolean, DateTime, String, func
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base, TimestampMixin, UUIDMixin
+
+if TYPE_CHECKING:
+    from app.db.models.role import Role
+    from app.db.models.user_permission_override import UserPermissionOverride
+
+
+class User(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "users"
+
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    auth_provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # is_approved: admin-gated. Default False so new users (SSO auto-provision
+    # or local signup) wait for admin approval before they can sign in.
+    # Bootstrap super-admin (seed) and admin-created users default True.
+    # Toggleable per-user; can be bypassed globally via app_setting
+    # `auth.auto_approve_new_users`.
+    is_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    # is_rejected: admin explicitly declined. Mutually exclusive with
+    # is_approved in practice. We keep both booleans (rather than a single
+    # enum) so existing queries on is_approved stay intact.
+    is_rejected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    rejection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # One-time approval link token. We store sha256(token) so a DB leak
+    # doesn\\'t hand the attacker the live URLs; raw token only lives in
+    # the email body. Token expires per
+    # `notifications.approval_link_ttl_days` app_setting (default 7).
+    approval_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    approval_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    totp_secret: Mapped[str | None] = mapped_column(String(255))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    business_unit_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default="{}"
+    )
+
+    roles: Mapped[list["Role"]] = relationship(
+        "Role", secondary="user_roles", back_populates="users", lazy="selectin"
+    )
+    permission_overrides: Mapped[list["UserPermissionOverride"]] = relationship(
+        "UserPermissionOverride",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        foreign_keys="UserPermissionOverride.user_id",
+    )
+''')
+
+    _write_if_missing(app / "db" / "models" / "role.py", '''\
+"""Role — named bundle of permissions.
+
+`provider_scope` constrains which auth_provider users can hold the role:
+"internal" → azure_ad only, "external" → local only, "any" → either. See
+docs/auth.md §2.1.
+"""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base, TimestampMixin, UUIDMixin
+
+if TYPE_CHECKING:
+    from app.db.models.permission import Permission
+    from app.db.models.user import User
+
+
+class Role(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "roles"
+
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    provider_scope: Mapped[str] = mapped_column(String(20), nullable=False, default="any")
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+
+    permissions: Mapped[list["Permission"]] = relationship(
+        "Permission", secondary="role_permissions", lazy="selectin"
+    )
+    users: Mapped[list["User"]] = relationship(
+        "User", secondary="user_roles", back_populates="roles"
+    )
+''')
+
+    _write_if_missing(app / "db" / "models" / "permission.py", '''\
+"""Permission — read-only catalog (seeded; not user-editable).
+
+Permissions are global keys (e.g. `users.read`). Roles
+attach via role_permissions m2m; users can override via
+user_permission_overrides (per-user grant/revoke).
+"""
+from __future__ import annotations
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, UUIDMixin
+
+
+class Permission(Base, UUIDMixin):
+    __tablename__ = "permissions"
+
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(150), nullable=False)
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="other")
+    is_menu: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+''')
+
+    _write_if_missing(app / "db" / "models" / "role_permission.py", '''\
+"""m2m: role ↔ permission."""
+from __future__ import annotations
+
+from uuid import UUID
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    role_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    permission_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+''')
+
+    _write_if_missing(app / "db" / "models" / "user_role.py", '''\
+"""m2m: user ↔ role."""
+from __future__ import annotations
+
+from uuid import UUID
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    role_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+''')
+
+    _write_if_missing(app / "db" / "models" / "user_permission_override.py", '''\
+"""Per-user permission grant/revoke (Pattern B inside L1 baseline).
+
+`granted=True` adds a perm the user's roles don't have; `granted=False`
+explicitly revokes a perm a role would otherwise grant. Resolution
+happens in app/auth/dependencies.py:_compute_effective_permissions.
+See docs/auth.md.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base, UUIDMixin
+
+if TYPE_CHECKING:
+    from app.db.models.permission import Permission
+    from app.db.models.user import User
+
+
+class UserPermissionOverride(Base, UUIDMixin):
+    __tablename__ = "user_permission_overrides"
+
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    permission_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    granted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    granted_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped["User"] = relationship(
+        "User", back_populates="permission_overrides", foreign_keys=[user_id]
+    )
+    permission: Mapped["Permission"] = relationship("Permission", lazy="joined")
+''')
+
+    _write_if_missing(app / "db" / "models" / "menu_item.py", '''\
+"""MenuItem — sidebar nav node (filtered server-side by permission)."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from sqlalchemy import Boolean, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base, TimestampMixin, UUIDMixin
+
+if TYPE_CHECKING:
+    pass
+
+
+class MenuItem(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "menu_items"
+
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    label_th: Mapped[str] = mapped_column(String(150), nullable=False)
+    label_en: Mapped[str] = mapped_column(String(150), nullable=False)
+    icon: Mapped[str | None] = mapped_column(String(50))
+    path: Mapped[str] = mapped_column(String(200), nullable=False)
+    parent_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("menu_items.id", ondelete="CASCADE")
+    )
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    required_permission_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    children: Mapped[list["MenuItem"]] = relationship(
+        "MenuItem",
+        cascade="all, delete-orphan",
+        backref="parent",
+        remote_side="MenuItem.id",
+        single_parent=True,
+    )
+''')
+
+    _write_if_missing(app / "db" / "models" / "app_setting.py", '''\
+"""AppSetting — Pattern C admin-config key/value store.
+
+`value` is JSONB so a single table holds bool / int / string / object
+settings. `requires_role` gates write access (super_admin by default).
+See docs/admin-config.md.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, UUIDMixin
+
+
+class AppSetting(Base, UUIDMixin):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(150), unique=True, nullable=False, index=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    value_type: Mapped[str] = mapped_column(String(20), nullable=False, default="string")
+    category: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
+    description: Mapped[str | None] = mapped_column(Text)
+    requires_role: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="internal:super_admin"
+    )
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+''')
+
+    # RevokedToken — server-side refresh-token blocklist (Deep-Audit HIGH-3).
+    # We track refresh tokens by their `jti` so /logout, /refresh rotation,
+    # and password change can invalidate specific tokens before their
+    # natural exp. Access tokens stay stateless (short TTL is the defence).
+    _write_if_missing(app / "db" / "models" / "revoked_token.py", '''\
+"""RevokedToken — refresh-token blocklist by jti.
+
+Why a table, not Redis:
+  - Postgres is already in the stack; one more table keeps the runtime
+    surface minimal.
+  - Refresh tokens are low-volume (one row per logout + one per
+    rotation) and rows TTL out via a periodic cleanup keyed on
+    `expires_at` (run by scheduler `revoked_token_cleanup`).
+
+Lookup hot path:
+  `SELECT 1 FROM revoked_tokens WHERE jti = :jti LIMIT 1` — gated by the
+  unique index on `jti`, so it stays O(log n) even at millions of rows.
+
+See docs/security.md §6 (token lifecycle) for the full revocation flow.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, UUIDMixin
+
+
+class RevokedToken(Base, UUIDMixin):
+    __tablename__ = "revoked_tokens"
+
+    # Refresh-token jti (UUID4 hex) — set by jwt_service.encode_refresh_token.
+    jti: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    # Subject (user id) — for forensics + bulk revoke (e.g. password change).
+    user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # When the underlying JWT would have naturally expired. We can drop
+    # rows past this point — they\\'re no longer enforceable anyway.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # "logout" | "rotation" | "password_change" | "deactivated"
+    reason: Mapped[str] = mapped_column(String(40), nullable=False, default="logout")
+    revoked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+''')
+
+
+def _emit_auth_services(app: Path) -> None:
+    auth_dir = app / "auth"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    _write_if_missing(auth_dir / "__init__.py", "")
+
+    _write_if_missing(auth_dir / "jwt_service.py", '''\
+"""JWT encode/decode — HS256 access + refresh tokens.
+
+Single secret (`JWT_SECRET_KEY`) signs both. Access tokens carry
+`auth_provider` so middleware can short-circuit provider-specific
+checks without hitting the DB.
+
+Refresh tokens carry a `jti` (UUID4) so the auth router can revoke
+specific tokens server-side via the `revoked_tokens` table — closes
+Deep-Audit HIGH-3 (stolen refresh token could otherwise replay until
+its 7-day natural expiry).
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from jose import JWTError, jwt
+
+from app.core.config import get_settings
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _encode(*, subject: str, token_type: str, expires_delta: timedelta,
+            auth_provider: str, extra: dict[str, Any] | None = None) -> str:
+    settings = get_settings()
+    now = _now()
+    payload: dict[str, Any] = {
+        "sub": subject,
+        "iat": int(now.timestamp()),
+        "exp": int((now + expires_delta).timestamp()),
+        "type": token_type,
+        "auth_provider": auth_provider,
+    }
+    if extra:
+        payload.update(extra)
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def encode_access_token(*, subject: str, auth_provider: str,
+                        extra: dict[str, Any] | None = None) -> str:
+    settings = get_settings()
+    return _encode(
+        subject=subject,
+        token_type="access",
+        expires_delta=timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
+        auth_provider=auth_provider,
+        extra=extra,
+    )
+
+
+def encode_refresh_token(*, subject: str, auth_provider: str) -> str:
+    """Mint a refresh token with a fresh `jti`.
+
+    The caller is expected to keep / pass the jti where revocation
+    needs to happen (logout, rotation, password change). The token
+    itself is opaque to the client — they just shove it back in the
+    httponly cookie.
+    """
+    settings = get_settings()
+    jti = uuid.uuid4().hex
+    return _encode(
+        subject=subject,
+        token_type="refresh",
+        expires_delta=timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
+        auth_provider=auth_provider,
+        extra={"jti": jti},
+    )
+
+
+def decode_token(token: str) -> dict[str, Any]:
+    """Decode + validate. Raises JWTError on bad signature / expired token."""
+    settings = get_settings()
+    return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+
+
+__all__ = ["encode_access_token", "encode_refresh_token", "decode_token", "JWTError"]
+''')
+
+    _write_if_missing(auth_dir / "password.py", '''\
+"""Bcrypt password hashing + strength policy ("Easy + blocklist").
+
+Using `bcrypt` directly (not passlib) to keep the cold-path dependency
+graph small — passlib pulls in a lot of legacy hash backends we never
+use, and its py3.13 status is flaky.
+
+Policy (keep in sync with scripts/password_policy.py — that copy is the
+setup wizard's; this one is enforced at runtime on every set/reset).
+Tuned for low friction on external (vendor/customer) users — length +
+blocklist carry the security (NIST SP 800-63B), not composition rules:
+  - length >= MIN_PASSWORD_LENGTH
+  - at least 2 of 4 character classes (upper / lower / digit / symbol)
+  - reject all-same-char, repeated short patterns (123456123456),
+    whole-string keyboard/number sequences (123456789012)
+  - reject a curated common-password blocklist
+  - reject anything containing a context term (email local-part, etc.)
+"""
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+import bcrypt
+
+MIN_PASSWORD_LENGTH = 12
+
+COMMON_PASSWORDS = frozenset({
+    "password", "passw0rd", "passwd", "qwerty", "qwertyuiop", "letmein",
+    "iloveyou", "admin", "administrator", "root", "welcome", "monkey",
+    "dragon", "abc", "abcdef", "abcdefg", "abcabc", "changeme", "change",
+    "secret", "master", "superman", "trustno", "starwars", "football",
+    "baseball", "sunshine", "princess", "azerty", "qazwsx", "qweasd",
+    "login", "guest", "test", "demo",
+})
+
+_SEQUENCES = (
+    "0123456789",
+    "abcdefghijklmnopqrstuvwxyz",
+    "qwertyuiopasdfghjklzxcvbnm",
+)
+
+
+class PasswordPolicyError(ValueError):
+    """Raised when a candidate password fails the policy check."""
+
+
+def _classes_present(password: str) -> int:
+    return sum((
+        any(c.isupper() for c in password),
+        any(c.islower() for c in password),
+        any(c.isdigit() for c in password),
+        any(not c.isalnum() for c in password),
+    ))
+
+
+def _is_repeated_pattern(password: str) -> bool:
+    n = len(password)
+    return any(
+        n % size == 0 and password == password[:size] * (n // size)
+        for size in range(1, n // 2 + 1)
+    )
+
+
+def _is_pure_sequence(password: str) -> bool:
+    pw = password.lower()
+    return any(
+        pw in base + base
+        for seq in _SEQUENCES
+        for base in (seq, seq[::-1])
+    )
+
+
+def validate_password(password: str, *, context_terms: Iterable[str] = ()) -> None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise PasswordPolicyError(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters long."
+        )
+    if _classes_present(password) < 2:
+        raise PasswordPolicyError(
+            "Password must mix at least 2 of: uppercase, lowercase, digit, "
+            "symbol (an all-numeric or all-letter password is rejected)."
+        )
+    if _is_repeated_pattern(password):
+        raise PasswordPolicyError(
+            "Password repeats a short pattern (e.g. 123456123456)."
+        )
+    if _is_pure_sequence(password):
+        raise PasswordPolicyError(
+            "Password is a keyboard/number sequence (e.g. 123456789012)."
+        )
+    lowered = password.lower()
+    stripped = lowered.rstrip("0123456789") or lowered
+    if lowered in COMMON_PASSWORDS or stripped in COMMON_PASSWORDS:
+        raise PasswordPolicyError(
+            "Password is on the common-password blocklist."
+        )
+    for term in context_terms:
+        term = (term or "").strip().lower()
+        if len(term) >= 4 and term in lowered:
+            raise PasswordPolicyError(
+                "Password must not contain your email or other personal info."
+            )
+
+
+def hash_password(password: str, *, context_terms: Iterable[str] = ()) -> str:
+    """bcrypt with 12 rounds (~250ms on modern hardware — slow enough)."""
+    validate_password(password, context_terms=context_terms)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    if not password_hash:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except ValueError:
+        # Malformed hash on disk — treat as auth failure, not crash.
+        return False
+''')
+
+    _write_if_missing(auth_dir / "azure_ad.py", '''\
+"""Azure AD OAuth + token verification via MSAL.
+
+Two surfaces:
+- `build_authorize_url()` for the SSO redirect endpoint.
+- `verify_id_token()` for the callback — pulls JWKS once per process and
+  caches it (Azure rotates rarely; cache invalidation is a process
+  restart problem, not a feature).
+"""
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Any
+
+import httpx
+from jose import jwt
+
+from app.core.config import get_settings
+
+
+@lru_cache(maxsize=1)
+def _jwks() -> dict[str, Any]:
+    settings = get_settings()
+    tenant = settings.AZURE_AD_TENANT_ID or "common"
+    url = f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(url)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def build_authorize_url(*, state: str, scopes: list[str] | None = None) -> str:
+    settings = get_settings()
+    from urllib.parse import urlencode
+
+    params = {
+        "client_id": settings.AZURE_AD_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": settings.AZURE_AD_REDIRECT_URI,
+        "response_mode": "query",
+        "scope": " ".join(scopes or ["openid", "profile", "email"]),
+        "state": state,
+    }
+    tenant = settings.AZURE_AD_TENANT_ID or "common"
+    return (
+        f"https://login.microsoftonline.com/{tenant}"
+        f"/oauth2/v2.0/authorize?{urlencode(params)}"
+    )
+
+
+async def exchange_code_for_token(code: str) -> dict[str, Any]:
+    settings = get_settings()
+    tenant = settings.AZURE_AD_TENANT_ID or "common"
+    url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+    data = {
+        "client_id": settings.AZURE_AD_CLIENT_ID,
+        "client_secret": settings.AZURE_AD_CLIENT_SECRET,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": settings.AZURE_AD_REDIRECT_URI,
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(url, data=data)
+    resp.raise_for_status()
+    return resp.json()
+
+
+# Algorithm allowlist for Azure id_token verification. Hardcoded —
+# Azure always signs with RS256 and we MUST NOT trust the JWT header\\'s
+# `alg` field (a classic algorithm-confusion attack: an attacker
+# substitutes "none" or "HS256" in the header to bypass signature check).
+_AZURE_ID_TOKEN_ALGS = ["RS256"]
+
+
+def verify_id_token(id_token: str) -> dict[str, Any]:
+    """Verify the id_token signature + return claims.
+
+    Hardens against algorithm-confusion: we ignore the header `alg` and
+    constrain the verifier to RS256 (Azure\\'s only published signing
+    algorithm at time of writing). Also validates issuer against the
+    configured Azure AD tenant — a token from a different tenant or a
+    different identity provider gets rejected even if Azure JWKS happens
+    to know the kid.
+
+    Raises jose.JWTError on bad signature / expired / wrong audience /
+    wrong issuer.
+    """
+    settings = get_settings()
+    keys = _jwks().get("keys", [])
+    unverified = jwt.get_unverified_header(id_token)
+    kid = unverified.get("kid")
+    key = next((k for k in keys if k.get("kid") == kid), None)
+    if key is None:
+        # Cache miss — JWKS may have rotated. Bust + retry once.
+        _jwks.cache_clear()
+        keys = _jwks().get("keys", [])
+        key = next((k for k in keys if k.get("kid") == kid), None)
+        if key is None:
+            raise jwt.JWTError("Signing key not found in Azure JWKS")
+    # Expected issuer pattern: https://login.microsoftonline.com/{tenant}/v2.0
+    # Use literal tenant when configured; fall back to "common" only for
+    # multi-tenant apps that intentionally accept any tenant.
+    tenant = settings.AZURE_AD_TENANT_ID or "common"
+    expected_issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
+    return jwt.decode(
+        id_token,
+        key,
+        algorithms=_AZURE_ID_TOKEN_ALGS,
+        audience=settings.AZURE_AD_CLIENT_ID,
+        issuer=expected_issuer,
+        options={"verify_at_hash": False},
+    )
+''')
+
+    _write_if_missing(auth_dir / "permissions.py", '''\
+"""PermissionKey constants — single source of truth for router @require_permission.
+
+Keep in sync with the seed catalog in app/seed.py. Adding a permission
+here without seeding the row makes `require_permission(...)` always
+deny (no row to match against in the catalog).
+"""
+from __future__ import annotations
+
+
+class PermissionKey:
+    # Read perms — each one ALSO gates the corresponding sidebar menu item.
+    # (v3.0.3 merged menu visibility into read perms; see seed DEFAULT_MENUS.)
+    USERS_READ = "users.read"
+    ROLES_READ = "roles.read"
+    MENUS_READ = "menus.read"
+    SYSTEM_LOGS_READ = "system_logs.read"
+    ACTIVITY_LOGS_READ = "activity_logs.read"
+    ADMIN_SETTINGS_READ = "admin_settings.read"
+
+    # Users
+    USERS_CREATE = "users.create"
+    USERS_UPDATE = "users.update"
+    USERS_DELETE = "users.delete"
+    USERS_DEACTIVATE = "users.deactivate"
+    # Approval gate — split from USERS_UPDATE so admins can edit profile
+    # fields without being able to silently flip is_approved=true and
+    # bypass the approval flow (Deep-Audit HIGH-2).
+    USERS_APPROVE = "users.approve"
+
+    # Roles
+    ROLES_CREATE = "roles.create"
+    ROLES_UPDATE = "roles.update"
+    ROLES_DELETE = "roles.delete"
+    ROLES_ASSIGN = "roles.assign"
+
+    # Per-user overrides
+    PERMISSIONS_GRANT_OVERRIDE = "permissions.grant_override"
+    PERMISSIONS_REVOKE_OVERRIDE = "permissions.revoke_override"
+
+    # Menus
+    MENUS_CREATE = "menus.create"
+    MENUS_UPDATE = "menus.update"
+    MENUS_DELETE = "menus.delete"
+    MENUS_REORDER = "menus.reorder"
+
+    # App settings
+    ADMIN_SETTINGS_UPDATE = "admin_settings.update"
+
+    # Database Connections module (opt-in — FEATURE_DB_CONNECTIONS). Inert
+    # string constants when the feature is off; the perms are only seeded +
+    # the router only mounted when the flag is set. super_admin only — these
+    # keys are in users.py _PRIVILEGE_MANAGEMENT_KEYS (no per-user override).
+    DB_CONNECTIONS_READ = "db_connections.read"
+    DB_CONNECTIONS_MANAGE = "db_connections.manage"
+    DB_CONNECTIONS_QUERY = "db_connections.query"
+''')
+
+    _write_if_missing(auth_dir / "dependencies.py", '''\
+"""FastAPI dependencies — get_current_user, require_permission, require_role.
+
+`get_current_user` decodes the bearer token, loads the user with roles +
+overrides eagerly (selectin), and computes effective permissions once
+per request (cached on the User instance via `_effective_permissions`).
+"""
+from __future__ import annotations
+
+from typing import Annotated, Any
+from uuid import UUID
+
+from fastapi import Depends, Header, HTTPException, Request, status
+from jose import JWTError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.auth.jwt_service import decode_token
+from app.db.models.role import Role
+from app.db.models.user import User
+from app.db.models.user_permission_override import UserPermissionOverride
+from app.db.session import get_db
+
+
+def _compute_effective_permissions(user: User) -> set[str]:
+    perms: set[str] = set()
+    for role in user.roles:
+        for perm in role.permissions:
+            perms.add(perm.key)
+    for override in user.permission_overrides:
+        if override.granted:
+            perms.add(override.permission.key)
+        else:
+            perms.discard(override.permission.key)
+    return perms
+
+
+async def get_current_user(
+    authorization: Annotated[str | None, Header()] = None,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        claims = decode_token(token)
+    except JWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    if claims.get("type") != "access":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Wrong token type")
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Token has no subject")
+
+    try:
+        uid = UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Bad subject claim") from exc
+
+    stmt = (
+        select(User)
+        .where(User.id == uid)
+        .options(
+            selectinload(User.roles).selectinload(Role.permissions),
+            selectinload(User.permission_overrides).selectinload(
+                UserPermissionOverride.permission
+            ),
+        )
+    )
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="User not found or inactive")
+
+    # Cache effective perms on the instance for downstream require_permission.
+    setattr(user, "_effective_permissions", _compute_effective_permissions(user))
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def _audit_permission_denied(
+    db: AsyncSession, user: User, request: Request, missing: str,
+) -> None:
+    """Record the deny so an admin can see "who tried to access what" in
+    the Activity Logs page. Commits immediately because the surrounding
+    request is about to raise — the get_db dependency would otherwise
+    roll back the audit row along with the failed request.
+    """
+    # Imported here to avoid a circular import with services that depend
+    # on dependencies (require_permission is used everywhere).
+    from app.services.loggers.activity_logger import ActivityLogger
+
+    await ActivityLogger(db).log(
+        action="auth.permission_denied",
+        action_type="permission_denied",
+        user=user,
+        request=request,
+        risk_level="medium",
+        metadata={"missing": missing},
+    )
+    await db.commit()
+
+
+def require_permission(key: str) -> Any:
+    async def _checker(
+        user: CurrentUser,
+        request: Request,
+        db: AsyncSession = Depends(get_db),
+    ) -> User:
+        perms: set[str] = getattr(user, "_effective_permissions", set())
+        if key not in perms:
+            await _audit_permission_denied(db, user, request, key)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing permission: {key}",
+            )
+        return user
+    return _checker
+
+
+def require_any_permission(*keys: str) -> Any:
+    """Pass-if-any guard — caller needs ANY ONE of the listed perms.
+
+    Useful when the same data has multiple legitimate callers (e.g. the
+    Roles admin page wants roles.read; the Users edit form
+    wants the same list as a picker and has users.update instead). Keeps
+    the perm catalog flat — no need to invent overlapping wrapper perms.
+    """
+    async def _checker(
+        user: CurrentUser,
+        request: Request,
+        db: AsyncSession = Depends(get_db),
+    ) -> User:
+        perms: set[str] = getattr(user, "_effective_permissions", set())
+        if not any(k in perms for k in keys):
+            await _audit_permission_denied(db, user, request, ",".join(keys))
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing one of: {', '.join(keys)}",
+            )
+        return user
+    return _checker
+
+
+def require_role(name: str) -> Any:
+    async def _checker(user: CurrentUser) -> User:
+        if not any(r.name == name for r in user.roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing role: {name}",
+            )
+        return user
+    return _checker
+''')
+
+    # AppSettingService — Pattern C admin-config reader (docs/admin-config.md).
+    # Used by AiCallLogger._estimate_cost (pricing lookup) and retention job
+    # (per-table override). Defaults come from app.seed._seed_app_settings.
+    services_dir = app / "services"
+    services_dir.mkdir(parents=True, exist_ok=True)
+    _write_if_missing(services_dir / "__init__.py", "")
+    _write_if_missing(services_dir / "app_setting_service.py", '''\
+"""AppSettingService — Pattern C admin-config reader.
+
+Reads JSONB values from `app_settings`. Returns the raw value (bool /
+int / str / dict / list) or `default` when the key is missing.
+
+Defaults are seeded by `app.seed._seed_app_settings`. Admin writes go
+through `app/api/v1/admin_settings.py` (super-admin only).
+
+See docs/admin-config.md.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models.app_setting import AppSetting
+
+
+class AppSettingService:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def get(self, key: str, default: Any = None) -> Any:
+        result = await self.db.execute(
+            select(AppSetting.value).where(AppSetting.key == key)
+        )
+        row = result.scalar_one_or_none()
+        return row if row is not None else default
+''')
+
+
+def _emit_auth_routers(app: Path) -> None:
+    api_v1 = app / "api" / "v1"
+    api_v1.mkdir(parents=True, exist_ok=True)
+
+    # Overwrite installed_routers.py to wire in the auth routers.
+    (api_v1 / "installed_routers.py").write_text('''\
+"""Routers mounted at app boot.
+
+Auth + RBAC + user management routers are wired by default (Sprint 3).
+Add project-specific routers by appending to ROUTERS below.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app.api.v1.activity_logs import router as activity_logs_router
+from app.api.v1.admin_settings import router as admin_settings_router
+from app.api.v1.auth import router as auth_router
+from app.api.v1.me import router as me_router
+from app.api.v1.menus import router as menus_router
+from app.api.v1.permissions import router as permissions_router
+from app.api.v1.roles import router as roles_router
+from app.api.v1.system_logs import router as system_logs_router
+from app.api.v1.user_approval import router as user_approval_router
+from app.api.v1.users import router as users_router
+
+ROUTERS: list[tuple[APIRouter, str]] = [
+    (auth_router, "/api/v1/auth"),
+    (me_router, "/api/v1/me"),
+    # user_approval — PUBLIC token-gated endpoints; must be mounted before
+    # any catch-all to keep /approval/{token} reachable without a session.
+    (user_approval_router, "/api/v1/users/approval"),
+    (users_router, "/api/v1/users"),
+    (roles_router, "/api/v1/roles"),
+    (permissions_router, "/api/v1/permissions"),
+    (menus_router, "/api/v1/menus"),
+    (admin_settings_router, "/api/v1/admin/settings"),
+    (system_logs_router, "/api/v1/admin/system-logs"),
+    (activity_logs_router, "/api/v1/admin/activity-logs"),
+]
+''', encoding="utf-8")
+
+    _write_if_missing(app / "schemas" / "auth.py", '''\
+"""Auth + RBAC schemas (CamelBaseModel — camelCase JSON / snake_case Python)."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from app.schemas.base import CamelBaseModel
+
+
+class LoginRequest(CamelBaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(CamelBaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshRequest(CamelBaseModel):
+    refresh_token: str | None = None
+
+
+class PermissionRead(CamelBaseModel):
+    id: UUID
+    key: str
+    display_name: str
+    category: str
+    is_menu: bool
+
+
+class RoleSummary(CamelBaseModel):
+    id: UUID
+    name: str
+    display_name: str
+    provider_scope: str
+    is_system: bool
+
+
+class RoleRead(RoleSummary):
+    description: str | None = None
+    permissions: list[PermissionRead] = []
+
+
+class RoleCreate(CamelBaseModel):
+    name: str
+    display_name: str
+    provider_scope: str = "any"
+    description: str | None = None
+    permission_keys: list[str] = []
+
+
+class RoleUpdate(CamelBaseModel):
+    display_name: str | None = None
+    description: str | None = None
+    permission_keys: list[str] | None = None
+
+
+class UserSummary(CamelBaseModel):
+    id: UUID
+    email: str
+    full_name: str
+    auth_provider: str
+    is_active: bool
+    is_approved: bool = False
+    last_login_at: datetime | None = None
+    roles: list[RoleSummary] = []
+
+
+class UserOverrideRead(CamelBaseModel):
+    permission_key: str
+    granted: bool
+
+
+class UserRead(UserSummary):
+    email_verified: bool
+    business_unit_ids: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+    overrides: list[UserOverrideRead] = []
+
+
+class UserCreate(CamelBaseModel):
+    email: str
+    full_name: str
+    auth_provider: str
+    password: str | None = None
+    role_names: list[str] = []
+    business_unit_ids: list[str] = []
+    # When True the user is created as is_approved=False and admins get
+    # an email notification. Useful for bulk imports that need per-row
+    # review. Default False — usual admin-create flow stays "approved
+    # on create" so a new hire can sign in immediately.
+    require_approval: bool = False
+
+
+class UserUpdate(CamelBaseModel):
+    full_name: str | None = None
+    is_active: bool | None = None
+    is_approved: bool | None = None
+    role_names: list[str] | None = None
+    business_unit_ids: list[str] | None = None
+
+
+class BulkApproveRequest(CamelBaseModel):
+    user_ids: list[UUID]
+
+
+class OverrideRequest(CamelBaseModel):
+    permission_key: str
+    granted: bool
+    reason: str | None = None
+
+
+class MenuRead(CamelBaseModel):
+    id: UUID
+    key: str
+    label_th: str
+    label_en: str
+    icon: str | None = None
+    path: str
+    parent_id: UUID | None = None
+    order_index: int
+    required_permission_key: str
+    is_system: bool
+    children: list["MenuRead"] = []
+
+
+MenuRead.model_rebuild()
+
+
+class MenuCreate(CamelBaseModel):
+    key: str
+    label_th: str
+    label_en: str
+    icon: str | None = None
+    path: str
+    parent_id: UUID | None = None
+    order_index: int = 0
+    required_permission_key: str
+
+
+class MenuUpdate(CamelBaseModel):
+    label_th: str | None = None
+    label_en: str | None = None
+    icon: str | None = None
+    path: str | None = None
+    parent_id: UUID | None = None
+    order_index: int | None = None
+    required_permission_key: str | None = None
+
+
+class AppSettingRead(CamelBaseModel):
+    id: UUID
+    key: str
+    value: Any
+    value_type: str
+    category: str
+    description: str | None = None
+    requires_role: str
+    updated_at: datetime
+
+
+class AppSettingUpdate(CamelBaseModel):
+    value: Any
+
+
+class MePermissionsResponse(CamelBaseModel):
+    permission_keys: list[str]
+
+
+class SystemLogRead(CamelBaseModel):
+    id: UUID
+    created_at: datetime
+    category: str
+    event: str
+    status: str
+    duration_ms: int | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    correlation_id: str | None = None
+    extra_metadata: dict[str, Any] = {}
+
+
+class ActivityLogRead(CamelBaseModel):
+    id: UUID
+    created_at: datetime
+    user_id: UUID | None = None
+    user_email_masked: str | None = None
+    action: str
+    action_type: str
+    resource_type: str | None = None
+    resource_id: str | None = None
+    risk_level: str
+    is_security_event: bool
+    ip_address: str | None = None
+    http_status: int | None = None
+    extra_metadata: dict[str, Any] = {}
+''')
+
+    _write_if_missing(api_v1 / "auth.py", '''\
+"""Auth endpoints — local login, SSO redirect/callback, refresh, logout.
+
+Refresh tokens land in an httpOnly cookie so the SPA never touches them
+in JS (XSS mitigation). Access tokens are returned in the response body
+for in-memory storage by the SPA.
+
+Note: this module deliberately does NOT use `from __future__ import
+annotations`. slowapi\\'s @limiter.limit wraps the route with
+functools.wraps, which sets the wrapper\\'s __globals__ to slowapi\\'s
+module. With string annotations (PEP 563), FastAPI\\'s forward-ref
+resolver would look up `LoginRequest` / `TokenResponse` in slowapi\\'s
+namespace and fail at app-boot with PydanticUndefinedAnnotation.
+Concrete annotations sidestep that — types are resolved at definition
+time, before any decoration runs.
+"""
+import secrets
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.auth.azure_ad import (
+    build_authorize_url,
+    exchange_code_for_token,
+    verify_id_token,
+)
+from app.auth.jwt_service import (
+    decode_token,
+    encode_access_token,
+    encode_refresh_token,
+)
+from app.auth.password import verify_password
+from app.core.config import get_settings
+from app.core.rate_limit import limiter
+from app.db.models.app_setting import AppSetting
+from app.db.models.revoked_token import RevokedToken
+from app.db.models.role import Role
+from app.db.models.user import User
+from app.db.session import get_db
+from app.schemas.auth import CamelBaseModel, LoginRequest, TokenResponse
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["auth"])
+
+REFRESH_COOKIE_NAME = "refresh_token"
+
+
+async def _is_jti_revoked(db: AsyncSession, jti: str) -> bool:
+    """Check the refresh-token blocklist (Deep-Audit HIGH-3)."""
+    if not jti:
+        # No jti = legacy token from before the blocklist landed. Reject —
+        # all tokens minted by encode_refresh_token() carry jti now, so a
+        # missing jti is either tampering or pre-upgrade. Safer to force
+        # re-login than to wave through.
+        return True
+    result = await db.execute(
+        select(RevokedToken.id).where(RevokedToken.jti == jti).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _revoke_jti(
+    db: AsyncSession, *, jti: str, user_id: UUID | None,
+    expires_at_ts: int, reason: str,
+) -> None:
+    """Mark a refresh-token jti as revoked (idempotent on the unique index).
+
+    `expires_at_ts` is the JWT `exp` claim (unix seconds) so the cleanup
+    job can drop the row after the underlying token would have expired
+    anyway. Idempotent: a second call with the same jti is a no-op
+    courtesy of the unique constraint + ON CONFLICT DO NOTHING.
+    """
+    if not jti:
+        return
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    expires_at = datetime.fromtimestamp(expires_at_ts, tz=timezone.utc)
+    stmt = (
+        pg_insert(RevokedToken)
+        .values(
+            jti=jti,
+            user_id=user_id,
+            expires_at=expires_at,
+            reason=reason,
+        )
+        .on_conflict_do_nothing(index_elements=["jti"])
+    )
+    await db.execute(stmt)
+
+
+async def _get_setting_bool(db: AsyncSession, key: str, default: bool) -> bool:
+    result = await db.execute(select(AppSetting).where(AppSetting.key == key))
+    row = result.scalar_one_or_none()
+    if row is None:
+        return default
+    return bool(row.value)
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="lax",
+        max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
+        path="/api/v1/auth",
+    )
+
+
+@router.post("/login", response_model=TokenResponse)
+@limiter.limit("5/minute")  # HIGH-1: brute-force defence
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    if not await _get_setting_bool(db, "auth.local.enabled", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Local authentication is disabled by administrator",
+        )
+
+    normalized_email = payload.email.strip().lower()
+    stmt = (
+        select(User)
+        .where(func.lower(User.email) == normalized_email)
+        .options(selectinload(User.roles))
+    )
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    audit = ActivityLogger(db)
+    if user is None or user.auth_provider != "local" or not user.is_active:
+        await audit.log(
+            action="auth.login_failed",
+            action_type="login_failed",
+            risk_level="medium",
+            request=request,
+            metadata={"reason": "user_not_found_or_inactive"},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid credentials")
+
+    if not verify_password(payload.password, user.password_hash or ""):
+        await audit.log(
+            action="auth.login_failed",
+            action_type="login_failed",
+            user=user,
+            risk_level="medium",
+            request=request,
+            metadata={"reason": "bad_password"},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid credentials")
+
+    # Approval gate — credentials are valid but the account hasn't been
+    # approved by an admin yet. Distinct error so the SPA can show a
+    # friendly "awaiting approval" message instead of "wrong password".
+    if not user.is_approved:
+        await audit.log(
+            action="auth.login_failed",
+            action_type="login_failed",
+            user=user,
+            risk_level="low",
+            request=request,
+            metadata={"reason": "not_approved"},
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="account_not_approved")
+
+    access = encode_access_token(subject=str(user.id), auth_provider=user.auth_provider)
+    refresh = encode_refresh_token(subject=str(user.id), auth_provider=user.auth_provider)
+    _set_refresh_cookie(response, refresh)
+
+    await audit.log(
+        action="auth.login",
+        action_type="login",
+        user=user,
+        request=request,
+        risk_level="low",
+    )
+
+    settings = get_settings()
+    return TokenResponse(
+        access_token=access,
+        expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+@router.post("/logout")
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    # Revoke the current refresh jti server-side before clearing the
+    # cookie (Deep-Audit HIGH-3). A copy of the cookie that an attacker
+    # already exfiltrated will now fail at /refresh even though the JWT
+    # itself is still inside its natural exp window.
+    cookie = request.cookies.get(REFRESH_COOKIE_NAME)
+    if cookie:
+        try:
+            claims = decode_token(cookie)
+        except Exception:
+            claims = {}
+        jti = claims.get("jti")
+        exp = claims.get("exp")
+        sub = claims.get("sub")
+        if jti and isinstance(exp, int):
+            try:
+                uid = UUID(sub) if sub else None
+            except (TypeError, ValueError):
+                uid = None
+            await _revoke_jti(
+                db, jti=jti, user_id=uid, expires_at_ts=int(exp),
+                reason="logout",
+            )
+    response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/v1/auth")
+    audit = ActivityLogger(db)
+    await audit.log(action="auth.logout", action_type="logout", request=request)
+    return {"status": "ok"}
+
+
+@router.post("/refresh", response_model=TokenResponse)
+@limiter.limit("10/minute")  # HIGH-1/HIGH-3: defence-in-depth on rotation
+async def refresh(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    cookie = request.cookies.get(REFRESH_COOKIE_NAME)
+    if not cookie:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="No refresh token")
+    try:
+        claims = decode_token(cookie)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid refresh token") from exc
+    if claims.get("type") != "refresh":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Not a refresh token")
+
+    # Server-side revocation check (Deep-Audit HIGH-3). Rejects tokens
+    # that were already invalidated by /logout, by a previous rotation,
+    # or by an admin-side password change.
+    old_jti = claims.get("jti") or ""
+    if await _is_jti_revoked(db, old_jti):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Refresh token revoked")
+
+    user_id = claims["sub"]
+    auth_provider = claims.get("auth_provider", "local")
+
+    # is_active gate (Deep-Audit HIGH-3 / MEDIUM-11). A deactivated user
+    # must not be able to keep refreshing — otherwise the existing
+    # cookie outlives the admin\\'s "Deactivate" click by up to 7 days.
+    try:
+        uid = UUID(user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Bad subject claim") from exc
+    refreshed_user = (await db.execute(
+        select(User).where(User.id == uid)
+    )).scalar_one_or_none()
+    if refreshed_user is None or not refreshed_user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="User not found or inactive")
+
+    # Revoke the old jti BEFORE minting the new one — even if the mint
+    # blows up, the stolen old token stays unusable.
+    old_exp = claims.get("exp")
+    if old_jti and isinstance(old_exp, int):
+        await _revoke_jti(
+            db, jti=old_jti, user_id=uid, expires_at_ts=int(old_exp),
+            reason="rotation",
+        )
+
+    access = encode_access_token(subject=user_id, auth_provider=auth_provider)
+    # Rotate refresh token — defence in depth against token replay.
+    new_refresh = encode_refresh_token(subject=user_id, auth_provider=auth_provider)
+    _set_refresh_cookie(response, new_refresh)
+    # Audit the refresh so a stolen-token replay storm shows up in the
+    # Activity Logs page (action_type="login" so it falls in the Login
+    # tab) instead of being silent.
+    await ActivityLogger(db).log(
+        action="auth.refresh",
+        action_type="login",
+        user=refreshed_user,
+        request=request,
+        risk_level="low",
+    )
+    settings = get_settings()
+    return TokenResponse(
+        access_token=access,
+        expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+_SSO_STATE_COOKIE = "ct_sso_state"
+_SSO_STATE_TTL_SECONDS = 600  # 10 minutes — Azure round-trip + slow user.
+
+
+@router.get("/sso/redirect")
+async def sso_redirect(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Hand the SPA an Azure authorize URL + bind the CSRF state to an
+    httponly cookie that the matching /sso/callback POST must echo back.
+
+    The cookie is samesite=lax so it survives the OAuth round-trip
+    (Azure → redirect_uri → SPA → POST callback). It carries no PII —
+    just a 32-byte URL-safe nonce we look up on callback.
+    """
+    if not await _get_setting_bool(db, "auth.sso.enabled", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="SSO is disabled by administrator")
+    state = secrets.token_urlsafe(32)
+    settings = get_settings()
+    response.set_cookie(
+        key=_SSO_STATE_COOKIE,
+        value=state,
+        max_age=_SSO_STATE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=settings.APP_ENV == "production",
+        path="/api/v1/auth",
+    )
+    # Frontend Login expects `{ url }` — keep this shape stable; do NOT
+    # leak the raw state in the JSON body (it lives in the cookie).
+    return {"url": build_authorize_url(state=state)}
+
+
+class SsoCallbackPayload(CamelBaseModel):
+    code: str
+    state: str
+
+
+@router.post("/sso/callback", response_model=TokenResponse)
+@limiter.limit("3/minute")  # HIGH-1: SSO callback enumeration defence
+async def sso_callback(
+    payload: SsoCallbackPayload,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """Validate the OAuth state then exchange the code.
+
+    Three failure modes, all 400 — the SPA renders a generic \\"sign-in
+    failed\\" message; we don\\'t leak which guard tripped to keep the
+    error surface uniform against probing.
+    """
+    if not await _get_setting_bool(db, "auth.sso.enabled", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="SSO is disabled by administrator")
+
+    cookie_state = request.cookies.get(_SSO_STATE_COOKIE)
+    if not cookie_state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="sso_state_missing")
+    # Constant-time compare to defeat any timing-based oracle.
+    if not secrets.compare_digest(cookie_state, payload.state):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="sso_state_mismatch")
+    # Single-use — clear the cookie immediately so a replay of the same
+    # callback (e.g. user hits Back in their browser) fails.
+    response.delete_cookie(
+        key=_SSO_STATE_COOKIE,
+        path="/api/v1/auth",
+    )
+
+    token_response = await exchange_code_for_token(payload.code)
+    id_token = token_response.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Azure response missing id_token")
+    claims: dict[str, Any] = verify_id_token(id_token)
+    email = (claims.get("preferred_username") or claims.get("email") or "").lower()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="id_token has no email claim")
+
+    result = await db.execute(select(User).where(func.lower(User.email) == email))
+    user = result.scalar_one_or_none()
+    if user is None:
+        # First-touch JIT user creation for known-good Azure identities.
+        # New JIT users honor auth.auto_approve_new_users — when off, the
+        # account is created but gated; admin must approve before login.
+        auto_approve = await _get_setting_bool(db, "auth.auto_approve_new_users", False)
+        user = User(
+            email=email,
+            full_name=claims.get("name", email),
+            auth_provider="azure_ad",
+            is_active=True,
+            email_verified=True,
+            is_approved=auto_approve,
+        )
+        db.add(user)
+        await db.flush()
+
+    if user.auth_provider != "azure_ad":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Account is not an Azure AD identity")
+
+    if not user.is_approved:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="account_not_approved")
+
+    access = encode_access_token(subject=str(user.id), auth_provider=user.auth_provider)
+    refresh_tok = encode_refresh_token(subject=str(user.id), auth_provider=user.auth_provider)
+    _set_refresh_cookie(response, refresh_tok)
+
+    audit = ActivityLogger(db)
+    await audit.log(action="auth.login", action_type="login", user=user, request=request)
+
+    settings = get_settings()
+    return TokenResponse(
+        access_token=access,
+        expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+@router.post("/password-reset", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+async def password_reset_stub() -> dict[str, str]:
+    """Password reset email flow — deferred (needs SMTP wired)."""
+    return {"status": "not_implemented"}
+
+
+@router.post("/invite", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+async def invite_stub() -> dict[str, str]:
+    """External-user invite email — deferred (needs SMTP wired)."""
+    return {"status": "not_implemented"}
+''')
+
+    _write_if_missing(api_v1 / "me.py", '''\
+"""/me — profile, effective permissions, filtered menu tree."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser
+from app.db.models.menu_item import MenuItem
+from app.db.session import get_db
+from app.schemas.auth import MenuRead, MePermissionsResponse, UserRead
+
+router = APIRouter(tags=["me"])
+
+
+@router.get("", response_model=UserRead)
+async def get_me(user: CurrentUser) -> UserRead:
+    return UserRead.model_validate(user)
+
+
+@router.get("/permissions", response_model=MePermissionsResponse)
+async def get_my_permissions(user: CurrentUser) -> MePermissionsResponse:
+    perms: set[str] = getattr(user, "_effective_permissions", set())
+    return MePermissionsResponse(permission_keys=sorted(perms))
+
+
+def _build_tree(items: list[MenuItem], allowed: set[str]) -> list[MenuRead]:
+    """Filter the menu tree by the caller's effective perms.
+
+    Rules (v3.0.3):
+      - empty required_permission_key (None or "") → no perm gate; always
+        keep (used for Dashboard + Settings parent).
+      - non-empty perm → keep only if user has that perm.
+      - After per-node filtering, drop any node whose perm gate was empty
+        AND now has no visible children — keeps the sidebar from showing
+        an empty 'Settings' parent for a role with no settings access.
+    """
+    by_parent: dict = {}
+    for item in items:
+        perm = item.required_permission_key or ""
+        if perm and perm not in allowed:
+            continue
+        by_parent.setdefault(item.parent_id, []).append(item)
+
+    def walk(parent_id) -> list[MenuRead]:
+        nodes = sorted(by_parent.get(parent_id, []), key=lambda i: i.order_index)
+        out: list[MenuRead] = []
+        for n in nodes:
+            children = walk(n.id)
+            # Drop empty-perm parents whose children were all filtered out
+            # (they'd render as a dead-end chevron in the UI otherwise).
+            had_children = n.id in by_parent
+            if (not n.required_permission_key) and had_children and not children:
+                continue
+            out.append(MenuRead(
+                id=n.id, key=n.key, label_th=n.label_th, label_en=n.label_en,
+                icon=n.icon, path=n.path, parent_id=n.parent_id,
+                order_index=n.order_index,
+                required_permission_key=n.required_permission_key,
+                is_system=n.is_system, children=children,
+            ))
+        return out
+
+    return walk(None)
+
+
+@router.get("/menus", response_model=list[MenuRead])
+async def get_my_menus(
+    user: CurrentUser, db: AsyncSession = Depends(get_db)
+) -> list[MenuRead]:
+    perms: set[str] = getattr(user, "_effective_permissions", set())
+    result = await db.execute(select(MenuItem))
+    items = list(result.scalars().all())
+    return _build_tree(items, perms)
+''')
+
+    _write_if_missing(api_v1 / "users.py", '''\
+"""User CRUD — internal:admin+ for write, internal/external admins for read."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.auth.dependencies import CurrentUser, require_permission
+from app.auth.password import PasswordPolicyError, hash_password
+from app.auth.permissions import PermissionKey
+from app.db.models.permission import Permission
+from app.db.models.role import Role
+from app.db.models.user import User
+from app.db.models.user_permission_override import UserPermissionOverride
+from app.db.session import get_db
+from app.schemas.auth import (
+    BulkApproveRequest,
+    OverrideRequest,
+    UserCreate,
+    UserOverrideRead,
+    UserRead,
+    UserSummary,
+    UserUpdate,
+)
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["users"])
+
+SUPER_ADMIN_ROLE = "internal:super_admin"
+
+
+def _require_role_assign(caller: User, target_role_names: list[str]) -> None:
+    """Gate role assignments — kept separate from users.update so admins
+    can edit profile fields without being able to silently elevate anyone
+    (incl. themselves) by passing role_names through the same payload.
+
+    Two checks:
+      1. Caller must hold `roles.assign` — separate from `users.update`.
+      2. Caller cannot grant `internal:super_admin` unless they ARE one.
+         Otherwise an admin with roles.assign could bootstrap any account
+         (or their own) to super-admin.
+    """
+    caller_perms: set[str] = getattr(caller, "_effective_permissions", set())
+    if "roles.assign" not in caller_perms:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing permission: roles.assign",
+        )
+    if SUPER_ADMIN_ROLE in set(target_role_names):
+        caller_role_names = {r.name for r in caller.roles}
+        if SUPER_ADMIN_ROLE not in caller_role_names:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super_admin can grant the super_admin role",
+            )
+
+
+@router.get("", response_model=list[UserSummary], dependencies=[
+    Depends(require_permission(PermissionKey.USERS_READ))
+])
+async def list_users(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+    q: str | None = None,
+) -> list[UserSummary]:
+    stmt = (
+        select(User)
+        .options(selectinload(User.roles))
+        .order_by(User.created_at.desc())
+    )
+    # Free-text search — the SPA's Users page sends ?q=. Match on email OR
+    # full_name (case-insensitive). `|` builds an OR clause without needing
+    # an or_() import. Filter BEFORE limit/offset so pagination is correct.
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(User.email.ilike(pattern) | User.full_name.ilike(pattern))
+    stmt = stmt.limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return [UserSummary.model_validate(u) for u in result.scalars().all()]
+
+
+@router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_permission(PermissionKey.USERS_CREATE))])
+async def create_user(
+    payload: UserCreate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    if payload.auth_provider not in ("local", "azure_ad"):
+        raise HTTPException(status_code=400, detail="Invalid auth_provider")
+    normalized_email = payload.email.strip().lower()
+    existing = await db.execute(select(User).where(func.lower(User.email) == normalized_email))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="Email already exists")
+
+    # Admin-created users are approved by default — the admin\\'s act of
+    # creating them IS the approval. Pre-creating gated accounts (e.g.
+    # for bulk imports that admins need to review individually) is
+    # supported via payload.require_approval=True, which also triggers
+    # the admin notification queue (so the reviewing admin gets pinged
+    # via email per app_settings.notifications.email.enabled) AND
+    # generates a one-time approval token used by the link-driven
+    # approve/reject flow on /approve/<token>.
+    is_approved = not payload.require_approval
+    approval_token_raw: str | None = None
+    approval_token_hash: str | None = None
+    approval_token_expires_at: datetime | None = None
+    if payload.require_approval:
+        import hashlib, secrets as _secrets
+        approval_token_raw = _secrets.token_urlsafe(32)
+        approval_token_hash = hashlib.sha256(approval_token_raw.encode("utf-8")).hexdigest()
+        # 7-day TTL — see app_settings.notifications.approval_link_ttl_days
+        # (resolved server-side later; we use the env default here so the
+        # token can be created from a single sync code path).
+        approval_token_expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+    new_user = User(
+        email=normalized_email,
+        full_name=payload.full_name,
+        auth_provider=payload.auth_provider,
+        is_active=True,
+        is_approved=is_approved,
+        approval_token_hash=approval_token_hash,
+        approval_token_expires_at=approval_token_expires_at,
+        business_unit_ids=payload.business_unit_ids,
+    )
+    if payload.auth_provider == "local":
+        if not payload.password:
+            raise HTTPException(status_code=400, detail="Password required for local auth")
+        # Enforce the strength policy here so a weak password is a clean 400,
+        # not an uncaught PasswordPolicyError → 500. email local-part is a
+        # context term (trivially guessable for this account).
+        try:
+            new_user.password_hash = hash_password(
+                payload.password, context_terms=[normalized_email.split("@", 1)[0]]
+            )
+        except PasswordPolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if payload.role_names:
+        _require_role_assign(user, payload.role_names)
+        roles_result = await db.execute(
+            select(Role).where(Role.name.in_(payload.role_names))
+        )
+        new_user.roles = list(roles_result.scalars().all())
+
+    db.add(new_user)
+    await db.flush()
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.created", action_type="create", resource_type="user",
+        resource_id=str(new_user.id), user=user, request=request, risk_level="medium",
+    )
+    # Pending-approval path → ping admins so they don\\'t miss the queue.
+    # Fire-and-forget; the dispatcher swallows transport failures.
+    # Pass the RAW token (not the hash) — the email needs to put it in URLs.
+    if not is_approved:
+        from app.services.notifications import notify_admin_new_signup
+        await notify_admin_new_signup(
+            db, user_email=new_user.email, user_name=new_user.full_name,
+            approval_token=approval_token_raw,
+        )
+    return await _load_user(db, new_user.id)
+
+
+async def _load_user(db: AsyncSession, user_id: UUID) -> UserRead:
+    stmt = (
+        select(User).where(User.id == user_id)
+        .options(selectinload(User.roles))
+    )
+    result = await db.execute(stmt)
+    found = result.scalar_one_or_none()
+    if found is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    read = UserRead.model_validate(found)
+    # permission_overrides is lazy="selectin" (already loaded); flatten it to
+    # {permissionKey, granted} so the SPA can render grant/revoke state.
+    read.overrides = [
+        UserOverrideRead(permission_key=o.permission.key, granted=o.granted)
+        for o in found.permission_overrides
+    ]
+    return read
+
+
+@router.get("/{user_id}", response_model=UserRead, dependencies=[
+    Depends(require_permission(PermissionKey.USERS_READ))
+])
+async def get_user(user_id: UUID, db: AsyncSession = Depends(get_db)) -> UserRead:
+    return await _load_user(db, user_id)
+
+
+@router.patch("/{user_id}", response_model=UserRead, dependencies=[
+    Depends(require_permission(PermissionKey.USERS_UPDATE))
+])
+async def patch_user(
+    user_id: UUID,
+    payload: UserUpdate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    result = await db.execute(
+        select(User).where(User.id == user_id).options(selectinload(User.roles))
+    )
+    target = result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Self-update guard (Deep-Audit HIGH-2). Even a holder of users.update +
+    # users.approve must not be able to flip privileged fields on their own
+    # account. Self profile-edit (full_name only) still flows through /me
+    # if a project wires it; this endpoint stays admin-only.
+    is_self = target.id == user.id
+    caller_perms: set[str] = getattr(user, "_effective_permissions", set())
+
+    if payload.is_approved is not None:
+        # Approval transitions need a SEPARATE perm so users.update on its
+        # own can\\'t bypass the approval queue. Closes Deep-Audit HIGH-2.
+        if "users.approve" not in caller_perms:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Missing permission: users.approve",
+            )
+        if is_self:
+            # No self-approval, ever — even if you somehow hold users.approve.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot change approval state on your own account",
+            )
+
+    if payload.is_active is not None and is_self:
+        # No self-deactivation through the edit endpoint — defends against
+        # an admin accidentally locking themselves out AND blocks a
+        # compromised-token attacker from disabling the legit owner.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot change active state on your own account",
+        )
+
+    if payload.role_names is not None and is_self:
+        # No self role change — would let an admin elevate themselves.
+        # _require_role_assign still runs for non-self callers below.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot change roles on your own account",
+        )
+
+    if payload.full_name is not None:
+        target.full_name = payload.full_name
+    if payload.is_active is not None:
+        target.is_active = payload.is_active
+    if payload.is_approved is not None:
+        target.is_approved = payload.is_approved
+    if payload.business_unit_ids is not None:
+        target.business_unit_ids = payload.business_unit_ids
+    if payload.role_names is not None:
+        _require_role_assign(user, payload.role_names)
+        roles_result = await db.execute(
+            select(Role).where(Role.name.in_(payload.role_names))
+        )
+        target.roles = list(roles_result.scalars().all())
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.updated", action_type="update", resource_type="user",
+        resource_id=str(target.id), user=user, request=request, risk_level="low",
+    )
+    return await _load_user(db, target.id)
+
+
+@router.post("/bulk-approve", dependencies=[
+    Depends(require_permission(PermissionKey.USERS_APPROVE))
+])
+async def bulk_approve(
+    payload: BulkApproveRequest,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Flip is_approved=true on every user_id in payload — idempotent.
+    Already-approved rows are no-ops. Single audit row per call for the
+    bulk batch; per-row trail lives in updated_at.
+
+    Side effect: a notification email goes to every user that flipped
+    from pending → approved (toggleable via
+    app_settings.notifications.email.enabled). We collect the rows
+    BEFORE commit then dispatch after, so a transient mail-send hiccup
+    can\\'t roll back the approval audit row.
+    """
+    if not payload.user_ids:
+        return {"updated": 0}
+    # Self-approval guard (Deep-Audit HIGH-2): silently drop the caller\\'s
+    # own id from the batch so an admin can\\'t bootstrap themselves by
+    # POSTing {user_ids: [self.id]}. Same defence pattern as patch_user.
+    target_ids = [uid for uid in payload.user_ids if uid != user.id]
+    if not target_ids:
+        return {"updated": 0}
+    result = await db.execute(select(User).where(User.id.in_(target_ids)))
+    targets = list(result.scalars().all())
+    just_approved: list[tuple[str, str | None]] = []
+    changed = 0
+    for t in targets:
+        if not t.is_approved:
+            t.is_approved = True
+            changed += 1
+            just_approved.append((t.email, t.full_name))
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.bulk_approved", action_type="update", resource_type="user",
+        user=user, request=request, risk_level="medium",
+        metadata={"count": changed, "requested": len(payload.user_ids)},
+    )
+    # Fire-and-forget approval notifications. dispatcher swallows errors.
+    from app.services.notifications import notify_user_approval_granted
+    for email, name in just_approved:
+        await notify_user_approval_granted(db, user_email=email, user_name=name)
+    return {"updated": changed}
+
+
+@router.post("/{user_id}/deactivate", dependencies=[
+    Depends(require_permission(PermissionKey.USERS_DEACTIVATE))
+])
+async def deactivate_user(
+    user_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    # Self-deactivation guard (Deep-Audit HIGH-2): an admin must not lock
+    # themselves out through this endpoint — covers the same surface as
+    # patch_user.is_active above.
+    if user_id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot deactivate your own account",
+        )
+    result = await db.execute(select(User).where(User.id == user_id))
+    target = result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    target.is_active = False
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.deactivated", action_type="update", resource_type="user",
+        resource_id=str(target.id), user=user, request=request, risk_level="medium",
+    )
+    return {"status": "ok"}
+
+
+@router.post("/{user_id}/overrides", response_model=UserRead, dependencies=[
+    Depends(require_permission(PermissionKey.PERMISSIONS_GRANT_OVERRIDE))
+])
+async def add_override(
+    user_id: UUID,
+    payload: OverrideRequest,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    target_user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if target_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Round-4 HIGH-4: self-elevation guard. The HIGH-2 round-3 fix gated
+    # patch_user / bulk_approve / deactivate_user against self-id, but
+    # add_override (the sibling endpoint) had no such check. A holder of
+    # permissions.grant_override could otherwise grant themselves
+    # users.approve, admin_settings.update, or any other action perm —
+    # completely bypassing the HIGH-2 self-update guard.
+    if target_user.id == user.id:
+        # Audit the denied attempt BEFORE raising so the row survives the
+        # request rollback. ActivityLogger commits when is_security_event
+        # is True via the same path _audit_permission_denied uses.
+        await ActivityLogger(db).log(
+            action="user.override_self_blocked", action_type="role_change",
+            resource_type="user", resource_id=str(target_user.id),
+            user=user, request=request,
+            is_security_event=True, risk_level="high",
+            metadata={
+                "attempted_permission_key": payload.permission_key,
+                "attempted_granted": payload.granted,
+                "reason": "self_elevation_blocked",
+            },
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot grant permission overrides on your own account",
+        )
+
+    # Round-5 HIGH-2: privilege-management gate (expanded from Round-4).
+    # The original Round-4 fix blocked only permissions.* keys, but a
+    # holder of permissions.grant_override could still grant a
+    # confederate any of:
+    #   - users.approve     → bypasses HIGH-2 approval gate
+    #   - users.delete      → consolidate power by deleting other admins
+    #   - users.deactivate  → lock out other admins
+    #   - admin_settings.update → redirect approval emails to attacker
+    #   - roles.create/update/delete/assign → craft super-admin-equivalent
+    #     role and assign it (assign is partly mitigated by
+    #     _require_role_assign\\'s super_admin guard, but defence in depth)
+    #   - menus.delete      → destructive metadata change
+    # The deny-list below is the complete set of overrides that require
+    # super_admin. Anything not in this list (typical *.read keys, plus
+    # any host-app feature perms) can still be granted by a non-super-
+    # admin holder of permissions.grant_override.
+    _PRIVILEGE_MANAGEMENT_KEYS = {
+        "permissions.grant_override",
+        "permissions.revoke_override",
+        "admin_settings.update",
+        "admin_settings.read",  # reading admin settings can leak SMTP/M365 creds
+        "users.approve",
+        "users.delete",
+        "users.deactivate",
+        "users.create",
+        "roles.create", "roles.update", "roles.delete", "roles.assign",
+        "menus.delete",
+        # Database Connections module (opt-in) — stored external-DB credentials
+        # + arbitrary SQL execution. super_admin only; never per-user grantable.
+        "db_connections.read", "db_connections.manage", "db_connections.query",
+    }
+
+    if (
+        payload.permission_key in _PRIVILEGE_MANAGEMENT_KEYS
+        or payload.permission_key.startswith("permissions.")
+    ):
+        caller_role_names = {r.name for r in user.roles}
+        if SUPER_ADMIN_ROLE not in caller_role_names:
+            await ActivityLogger(db).log(
+                action="user.override_priv_escalation_blocked",
+                action_type="role_change",
+                resource_type="user", resource_id=str(target_user.id),
+                user=user, request=request,
+                is_security_event=True, risk_level="high",
+                metadata={
+                    "attempted_permission_key": payload.permission_key,
+                    "attempted_granted": payload.granted,
+                    "reason": "non_super_admin_priv_management",
+                },
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Only super_admin can grant permission overrides for "
+                    "privilege-management keys"
+                ),
+            )
+
+    perm = (
+        await db.execute(select(Permission).where(Permission.key == payload.permission_key))
+    ).scalar_one_or_none()
+    if perm is None:
+        raise HTTPException(status_code=404, detail="Permission key unknown")
+
+    # Upsert: one override row per (user, permission). Repeated grant/revoke
+    # toggles the same row instead of stacking duplicates. Any historical
+    # duplicates (from before this guard) are collapsed onto the first row.
+    existing = (
+        await db.execute(
+            select(UserPermissionOverride).where(
+                UserPermissionOverride.user_id == target_user.id,
+                UserPermissionOverride.permission_id == perm.id,
+            )
+        )
+    ).scalars().all()
+    if existing:
+        existing[0].granted = payload.granted
+        existing[0].granted_by_user_id = user.id
+        existing[0].reason = payload.reason
+        for extra in existing[1:]:
+            await db.delete(extra)
+    else:
+        db.add(UserPermissionOverride(
+            user_id=target_user.id,
+            permission_id=perm.id,
+            granted=payload.granted,
+            granted_by_user_id=user.id,
+            reason=payload.reason,
+        ))
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.override_added", action_type="role_change", resource_type="user",
+        resource_id=str(target_user.id), user=user, request=request,
+        is_security_event=True, risk_level="high",
+        metadata={"permission_key": payload.permission_key, "granted": payload.granted},
+    )
+    return await _load_user(db, target_user.id)
+''')
+
+    # user_approval — public token-gated approve/reject endpoints. The
+    # admin notification email contains the raw token in a URL; clicking
+    # opens the SPA at /approve/<token>, which calls these endpoints.
+    # No auth: the token IS the capability. We compare sha256(token)
+    # against `users.approval_token_hash` so a DB leak doesn\\'t hand the
+    # attacker live links. First admin to act consumes the token.
+    _write_if_missing(api_v1 / "user_approval.py", '''\
+"""Public token-gated approve/reject endpoints.
+
+Three routes — none require auth (the URL token is the capability):
+  GET    /                  → resolve token, return user + token status
+  POST   /{token}/approve   → approve user, send approval reply email
+  POST   /{token}/reject    → reject user, send rejection reply email
+
+Token lifecycle:
+  1. users.py.create_user(require_approval=True) generates a raw token,
+     stores sha256(token) on the user row, embeds the raw token in the
+     admin notification URLs.
+  2. First admin to POST approve/reject consumes the row — the hash is
+     cleared so subsequent visits get token_expired. Mirrors the
+     "ลิงก์ใช้ได้ครั้งเดียว" copy in the email.
+  3. Tokens auto-expire per approval_token_expires_at (default 7 days
+     from create — see app_settings.notifications.approval_link_ttl_days).
+
+Note: no `from __future__ import annotations` here — slowapi\\'s
+@limiter.limit decorator + PEP-563 string annotations + FastAPI\\'s
+forward-ref resolver combine into a PydanticUndefinedAnnotation at
+boot. See app/api/v1/auth.py module docstring for the long version.
+"""
+import hashlib
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.rate_limit import limiter
+from app.db.models.user import User
+from app.db.session import get_db
+from app.schemas.auth import CamelBaseModel
+from app.services.loggers.activity_logger import ActivityLogger
+from app.services.notifications import (
+    notify_user_approval_granted, notify_user_rejection,
+)
+
+router = APIRouter(tags=["user-approval"])
+
+
+class PendingUserPublic(CamelBaseModel):
+    """Minimal user info safe to expose to anyone holding the token."""
+    email: str
+    full_name: str
+    requested_at: datetime
+    expires_at: datetime
+
+
+class TokenStatus(CamelBaseModel):
+    """Wrapper so the SPA can render `expired` / `consumed` states without
+    parsing 4xx errors."""
+    status: str          # "valid" | "expired" | "consumed" | "not_found"
+    pending: PendingUserPublic | None = None
+
+
+class ApprovalDecision(CamelBaseModel):
+    """Admin\\'s editable reply text. Empty → use server default template."""
+    reply_message: str | None = None
+
+
+class RejectionDecision(CamelBaseModel):
+    reply_message: str | None = None
+    reason: str | None = None
+
+
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def _load_by_token(db: AsyncSession, token: str) -> tuple[User | None, str]:
+    """Return (user, status). status = 'valid' | 'expired' | 'consumed' | 'not_found'."""
+    if not token or len(token) < 16:
+        return None, "not_found"
+    token_hash = _hash_token(token)
+    result = await db.execute(
+        select(User).where(User.approval_token_hash == token_hash)
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        # Two cases collapse here: never-existed and already-consumed.
+        # We surface "consumed" since that\\'s the friendlier copy when an
+        # admin sibling beat them to it — the alternative (revealing
+        # never-existed vs consumed) is a small enumeration leak.
+        return None, "consumed"
+    if user.approval_token_expires_at is None:
+        return None, "consumed"
+    now = datetime.now(timezone.utc)
+    if user.approval_token_expires_at < now:
+        return user, "expired"
+    if user.is_approved or user.is_rejected:
+        return user, "consumed"
+    return user, "valid"
+
+
+def _consume(user: User) -> None:
+    """Clear the token so the row is single-use."""
+    user.approval_token_hash = None
+    user.approval_token_expires_at = None
+
+
+@router.get("/{token}", response_model=TokenStatus)
+@limiter.limit("30/minute")  # HIGH-1: token-scan defence
+async def resolve_token(
+    token: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TokenStatus:
+    user, st = await _load_by_token(db, token)
+    if st != "valid" or user is None:
+        return TokenStatus(status=st)
+    return TokenStatus(
+        status="valid",
+        pending=PendingUserPublic(
+            email=user.email,
+            full_name=user.full_name,
+            requested_at=user.created_at,
+            expires_at=user.approval_token_expires_at,
+        ),
+    )
+
+
+@router.post("/{token}/approve", response_model=TokenStatus)
+@limiter.limit("30/minute")  # HIGH-1: token-scan defence
+async def approve_via_token(
+    token: str,
+    payload: ApprovalDecision,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TokenStatus:
+    user, st = await _load_by_token(db, token)
+    if st != "valid" or user is None:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=st)
+
+    user.is_approved = True
+    _consume(user)
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.approved_via_link", action_type="update",
+        resource_type="user", resource_id=str(user.id),
+        request=request, risk_level="medium",
+        metadata={"channel": "approval_link"},
+    )
+
+    await notify_user_approval_granted(
+        db, user_email=user.email, user_name=user.full_name,
+        custom_message=payload.reply_message,
+    )
+    return TokenStatus(status="approved")
+
+
+@router.post("/{token}/reject", response_model=TokenStatus)
+@limiter.limit("30/minute")  # HIGH-1: token-scan defence
+async def reject_via_token(
+    token: str,
+    payload: RejectionDecision,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> TokenStatus:
+    user, st = await _load_by_token(db, token)
+    if st != "valid" or user is None:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=st)
+
+    user.is_rejected = True
+    user.is_active = False
+    user.rejection_reason = (payload.reason or "").strip()[:500] or None
+    _consume(user)
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="user.rejected_via_link", action_type="update",
+        resource_type="user", resource_id=str(user.id),
+        request=request, risk_level="medium",
+        metadata={"channel": "approval_link",
+                  "has_reason": bool(user.rejection_reason)},
+    )
+
+    await notify_user_rejection(
+        db, user_email=user.email, user_name=user.full_name,
+        reason=user.rejection_reason,
+        custom_message=payload.reply_message,
+    )
+    return TokenStatus(status="rejected")
+''')
+
+    _write_if_missing(api_v1 / "roles.py", '''\
+"""Role CRUD — super_admin only for create/delete; admin can update perms."""
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.auth.dependencies import CurrentUser, require_any_permission, require_permission
+from app.auth.permissions import PermissionKey
+from app.db.models.permission import Permission
+from app.db.models.role import Role
+from app.db.models.user_role import UserRole
+from app.db.session import get_db
+from app.schemas.auth import RoleCreate, RoleRead, RoleSummary, RoleUpdate
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["roles"])
+
+
+@router.get("", response_model=list[RoleSummary], dependencies=[
+    # Two legitimate callers: the Roles admin page (roles.read)
+    # and the Edit User role picker (users.update / roles.assign). Either is
+    # enough — admin without the Roles menu still needs the list to pick from.
+    Depends(require_any_permission(
+        PermissionKey.ROLES_READ,
+        PermissionKey.USERS_UPDATE,
+        PermissionKey.ROLES_ASSIGN,
+    ))
+])
+async def list_roles(db: AsyncSession = Depends(get_db)) -> list[RoleSummary]:
+    result = await db.execute(select(Role).order_by(Role.name))
+    return [RoleSummary.model_validate(r) for r in result.scalars().all()]
+
+
+@router.get("/{role_id}", response_model=RoleRead, dependencies=[
+    Depends(require_permission(PermissionKey.ROLES_READ))
+])
+async def get_role(role_id: UUID, db: AsyncSession = Depends(get_db)) -> RoleRead:
+    stmt = select(Role).where(Role.id == role_id).options(selectinload(Role.permissions))
+    result = await db.execute(stmt)
+    role = result.scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    return RoleRead.model_validate(role)
+
+
+def _validate_role_name_scope(name: str, provider_scope: str) -> None:
+    """Enforce the role-naming contract at the API boundary.
+
+    The SPA's zod schema applies the same rule, but that is only UX — the
+    API is the real boundary and must reject mismatches itself:
+        provider_scope == "internal" -> name MUST start "internal:"
+        provider_scope == "external" -> name MUST start "external:"
+        provider_scope == "any"      -> name must NOT carry an
+                                         internal:/external: prefix
+    """
+    if provider_scope not in ("internal", "external", "any"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider_scope '{provider_scope}' (expected internal|external|any)",
+        )
+    has_internal = name.startswith("internal:")
+    has_external = name.startswith("external:")
+    ok = (
+        (provider_scope == "internal" and has_internal)
+        or (provider_scope == "external" and has_external)
+        or (provider_scope == "any" and not has_internal and not has_external)
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Role name '{name}' must match provider_scope '{provider_scope}' "
+                "(internal:* / external:* / no scope prefix for 'any')"
+            ),
+        )
+
+
+@router.post("", response_model=RoleRead, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_permission(PermissionKey.ROLES_CREATE))])
+async def create_role(
+    payload: RoleCreate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> RoleRead:
+    _validate_role_name_scope(payload.name, payload.provider_scope)
+    existing = await db.execute(select(Role).where(Role.name == payload.name))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="Role name already exists")
+
+    perms = []
+    if payload.permission_keys:
+        perms_result = await db.execute(
+            select(Permission).where(Permission.key.in_(payload.permission_keys))
+        )
+        perms = list(perms_result.scalars().all())
+
+    role = Role(
+        name=payload.name,
+        display_name=payload.display_name,
+        provider_scope=payload.provider_scope,
+        description=payload.description,
+        is_system=False,
+    )
+    role.permissions = perms
+    db.add(role)
+    await db.flush()
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="role.created", action_type="role_change", resource_type="role",
+        resource_id=str(role.id), user=user, request=request,
+        is_security_event=True, risk_level="medium",
+    )
+
+    refreshed = (await db.execute(
+        select(Role).where(Role.id == role.id).options(selectinload(Role.permissions))
+    )).scalar_one()
+    return RoleRead.model_validate(refreshed)
+
+
+@router.patch("/{role_id}", response_model=RoleRead, dependencies=[
+    Depends(require_permission(PermissionKey.ROLES_UPDATE))
+])
+async def patch_role(
+    role_id: UUID,
+    payload: RoleUpdate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> RoleRead:
+    stmt = select(Role).where(Role.id == role_id).options(selectinload(Role.permissions))
+    role = (await db.execute(stmt)).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.is_system and payload.permission_keys is not None:
+        raise HTTPException(status_code=400, detail="Cannot change permissions on system role")
+
+    if payload.display_name is not None:
+        role.display_name = payload.display_name
+    if payload.description is not None:
+        role.description = payload.description
+    if payload.permission_keys is not None:
+        perms_result = await db.execute(
+            select(Permission).where(Permission.key.in_(payload.permission_keys))
+        )
+        role.permissions = list(perms_result.scalars().all())
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="role.updated", action_type="role_change", resource_type="role",
+        resource_id=str(role.id), user=user, request=request,
+        is_security_event=True, risk_level="medium",
+    )
+    return RoleRead.model_validate(role)
+
+
+@router.delete("/{role_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[
+    Depends(require_permission(PermissionKey.ROLES_DELETE))
+])
+async def delete_role(
+    role_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.is_system:
+        raise HTTPException(status_code=400, detail="Cannot delete system role")
+
+    in_use = (
+        await db.execute(select(func.count()).select_from(UserRole).where(UserRole.role_id == role_id))
+    ).scalar_one()
+    if in_use:
+        raise HTTPException(status_code=400, detail="Role is assigned to users")
+
+    await db.delete(role)
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="role.deleted", action_type="role_change", resource_type="role",
+        resource_id=str(role_id), user=user, request=request,
+        is_security_event=True, risk_level="high",
+    )
+''')
+
+    _write_if_missing(api_v1 / "permissions.py", '''\
+"""Permission catalog — read-only."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser  # noqa: F401 (auth required)
+from app.db.models.permission import Permission
+from app.db.session import get_db
+from app.schemas.auth import PermissionRead
+
+router = APIRouter(tags=["permissions"])
+
+
+@router.get("", response_model=list[PermissionRead])
+async def list_permissions(
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> list[PermissionRead]:
+    result = await db.execute(select(Permission).order_by(Permission.key))
+    return [PermissionRead.model_validate(p) for p in result.scalars().all()]
+''')
+
+    _write_if_missing(api_v1 / "menus.py", '''\
+"""Menu CRUD — tree editor."""
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser, require_permission
+from app.auth.permissions import PermissionKey
+from app.db.models.menu_item import MenuItem
+from app.db.session import get_db
+from app.schemas.auth import MenuCreate, MenuRead, MenuUpdate
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["menus"])
+
+
+def _to_node(item: MenuItem) -> MenuRead:
+    return MenuRead(
+        id=item.id, key=item.key, label_th=item.label_th, label_en=item.label_en,
+        icon=item.icon, path=item.path, parent_id=item.parent_id,
+        order_index=item.order_index,
+        required_permission_key=item.required_permission_key,
+        is_system=item.is_system, children=[],
+    )
+
+
+@router.get("", response_model=list[MenuRead], dependencies=[
+    Depends(require_permission(PermissionKey.MENUS_READ))
+])
+async def list_menus(db: AsyncSession = Depends(get_db)) -> list[MenuRead]:
+    result = await db.execute(select(MenuItem).order_by(MenuItem.order_index))
+    items = list(result.scalars().all())
+    by_parent: dict = {}
+    for item in items:
+        by_parent.setdefault(item.parent_id, []).append(item)
+
+    def walk(parent_id) -> list[MenuRead]:
+        nodes = sorted(by_parent.get(parent_id, []), key=lambda i: i.order_index)
+        out: list[MenuRead] = []
+        for n in nodes:
+            node = _to_node(n)
+            node.children = walk(n.id)
+            out.append(node)
+        return out
+    return walk(None)
+
+
+@router.post("", response_model=MenuRead, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_permission(PermissionKey.MENUS_CREATE))])
+async def create_menu(
+    payload: MenuCreate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> MenuRead:
+    existing = await db.execute(select(MenuItem).where(MenuItem.key == payload.key))
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=409, detail="Menu key already exists")
+    item = MenuItem(**payload.model_dump())
+    db.add(item)
+    await db.flush()
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="menu.created", action_type="create", resource_type="menu",
+        resource_id=str(item.id), user=user, request=request,
+    )
+    return _to_node(item)
+
+
+@router.patch("/{menu_id}", response_model=MenuRead, dependencies=[
+    Depends(require_permission(PermissionKey.MENUS_UPDATE))
+])
+async def patch_menu(
+    menu_id: UUID,
+    payload: MenuUpdate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> MenuRead:
+    item = (await db.execute(select(MenuItem).where(MenuItem.id == menu_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Menu not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(item, field, value)
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="menu.updated", action_type="update", resource_type="menu",
+        resource_id=str(item.id), user=user, request=request,
+    )
+    return _to_node(item)
+
+
+@router.delete("/{menu_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[
+    Depends(require_permission(PermissionKey.MENUS_DELETE))
+])
+async def delete_menu(
+    menu_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    item = (await db.execute(select(MenuItem).where(MenuItem.id == menu_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Menu not found")
+    children = (await db.execute(
+        select(func.count()).select_from(MenuItem).where(MenuItem.parent_id == menu_id)
+    )).scalar_one()
+    if children:
+        raise HTTPException(status_code=400, detail="Menu has children — delete those first")
+    await db.delete(item)
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="menu.deleted", action_type="delete", resource_type="menu",
+        resource_id=str(menu_id), user=user, request=request,
+    )
+''')
+
+    _write_if_missing(api_v1 / "admin_settings.py", '''\
+"""Admin settings — Pattern C key/value store.
+
+Used to toggle `auth.local.enabled` / `auth.sso.enabled` etc. at runtime.
+`AUTH_SCOPE` env acts as a ceiling: if the project was scaffolded with
+`internal_only`, local auth cannot be re-enabled here; if `external_only`,
+sso cannot. See docs/admin-config.md §C.7.
+"""
+from __future__ import annotations
+
+import os
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser, require_permission
+from app.auth.permissions import PermissionKey
+from app.db.models.app_setting import AppSetting
+from app.db.session import get_db
+from app.schemas.auth import AppSettingRead, AppSettingUpdate
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["admin_settings"])
+
+
+_SCOPE_LOCKED_KEYS = {
+    # internal_only = Azure AD only  -> local auth is locked OFF.
+    # external_only = local only     -> SSO is locked OFF.
+    # (Must match the seed defaults and the SPA's VITE_AUTH_SCOPE gating —
+    # see docs/admin-config.md §C.7 / docs/auth.md §12.)
+    "internal_only": {"auth.local.enabled": False},
+    "external_only": {"auth.sso.enabled": False},
+}
+
+
+def _scope_locked_value(key: str) -> tuple[bool, object | None]:
+    scope = os.getenv("AUTH_SCOPE", "both").lower()
+    locked = _SCOPE_LOCKED_KEYS.get(scope, {})
+    if key in locked:
+        return True, locked[key]
+    return False, None
+
+
+_PUBLIC_KEY_MAP = {
+    "auth.local.enabled": "authLocalEnabled",
+    "auth.sso.enabled": "authSsoEnabled",
+}
+
+
+@router.get("/public", response_model=dict[str, bool])
+async def get_public_settings(db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+    """Auth-free subset for the Login page — only auth.*.enabled flags so the
+    SPA can decide which sign-in options to render before the user is known.
+    Returns camelCase keys to match the SPA's PublicAuthSettings interface.
+    """
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key.in_(_PUBLIC_KEY_MAP.keys()))
+    )
+    out: dict[str, bool] = {camel: True for camel in _PUBLIC_KEY_MAP.values()}
+    for s in result.scalars().all():
+        out[_PUBLIC_KEY_MAP[s.key]] = bool(s.value)
+    return out
+
+
+@router.get("", response_model=list[AppSettingRead], dependencies=[
+    Depends(require_permission(PermissionKey.ADMIN_SETTINGS_READ))
+])
+async def list_settings(db: AsyncSession = Depends(get_db)) -> list[AppSettingRead]:
+    result = await db.execute(select(AppSetting).order_by(AppSetting.key))
+    return [AppSettingRead.model_validate(s) for s in result.scalars().all()]
+
+
+@router.put("/{key}", response_model=AppSettingRead, dependencies=[
+    Depends(require_permission(PermissionKey.ADMIN_SETTINGS_UPDATE))
+])
+async def update_setting(
+    key: str,
+    payload: AppSettingUpdate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> AppSettingRead:
+    locked, ceiling = _scope_locked_value(key)
+    if locked and payload.value != ceiling:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Setting `{key}` is locked by AUTH_SCOPE env (compile-time ceiling)",
+        )
+
+    setting = (await db.execute(select(AppSetting).where(AppSetting.key == key))).scalar_one_or_none()
+    if setting is None:
+        raise HTTPException(status_code=404, detail="Setting not found")
+    setting.value = payload.value
+    setting.updated_by_user_id = user.id
+
+    audit = ActivityLogger(db)
+    await audit.log(
+        action="admin_setting.updated", action_type="update",
+        resource_type="app_setting", resource_id=key,
+        user=user, request=request, risk_level="medium",
+        metadata={"key": key},
+    )
+    return AppSettingRead.model_validate(setting)
+''')
+
+    # Activity logs — read-only admin view of the audit trail. Defaults
+    # to security-event subset (login/logout/permission denied) since
+    # that's what an admin opens this for. Same shape as system_logs.
+    _write_if_missing(api_v1 / "activity_logs.py", '''\
+"""Activity logs — read-only admin view of the audit trail.
+
+Default filter is the security-event subset (login / login_failed /
+logout / permission_denied / role_change) because that's what the
+"login activity" use case asks for. Pass `securityOnly=false` to see
+the full audit stream (create/update/delete/export/read_sensitive too).
+Free-text `q` ilikes action/email/IP/resource. Sibling /export.csv
+streams matching rows as CSV (capped at EXPORT_HARD_CAP).
+
+No mutation endpoints — the table is append-only via ActivityLogger.
+"""
+from __future__ import annotations
+
+import csv
+import io
+from datetime import date, datetime, time, timedelta, timezone
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser, require_permission
+from app.auth.permissions import PermissionKey
+from app.db.models.activity_log import ActivityLog
+from app.db.models.user import User
+from app.db.session import get_db
+from app.schemas.auth import ActivityLogRead
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["activity_logs"])
+
+_LOGIN_ACTION_TYPES = ("login", "login_failed", "logout")
+EXPORT_HARD_CAP = 10000
+
+
+def _apply_filters(stmt, *, action_type, user_id, risk_level,
+                   security_only, login_only, q, date_from, date_to):
+    if login_only:
+        stmt = stmt.where(ActivityLog.action_type.in_(_LOGIN_ACTION_TYPES))
+    if security_only:
+        stmt = stmt.where(ActivityLog.is_security_event == True)  # noqa: E712
+    if action_type:
+        stmt = stmt.where(ActivityLog.action_type == action_type)
+    if user_id is not None:
+        stmt = stmt.where(ActivityLog.user_id == user_id)
+    if risk_level:
+        stmt = stmt.where(ActivityLog.risk_level == risk_level)
+    if date_from:
+        stmt = stmt.where(ActivityLog.created_at >= datetime.combine(
+            date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        stmt = stmt.where(ActivityLog.created_at < datetime.combine(
+            date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+    if q:
+        pattern = f"%{q}%"
+        # user_email_masked stores "wa***@gmail.com" so an admin typing
+        # "wannaphong" finds nothing. Outer-join users so the search
+        # actually hits the real email; the display still shows the masked
+        # form (we never expose User.email in the response).
+        stmt = stmt.outerjoin(User, ActivityLog.user_id == User.id).where(or_(
+            ActivityLog.action.ilike(pattern),
+            ActivityLog.user_email_masked.ilike(pattern),
+            ActivityLog.resource_id.ilike(pattern),
+            ActivityLog.ip_address.ilike(pattern),
+            User.email.ilike(pattern),
+        ))
+    return stmt
+
+
+@router.get("", response_model=list[ActivityLogRead], dependencies=[
+    Depends(require_permission(PermissionKey.ACTIVITY_LOGS_READ))
+])
+async def list_activity_logs(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+    action_type: str | None = None,
+    user_id: UUID | None = None,
+    risk_level: str | None = None,
+    security_only: bool = False,
+    login_only: bool = False,
+    q: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[ActivityLogRead]:
+    stmt = _apply_filters(
+        select(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(limit).offset(offset),
+        action_type=action_type, user_id=user_id, risk_level=risk_level,
+        security_only=security_only, login_only=login_only, q=q,
+        date_from=date_from, date_to=date_to,
+    )
+    result = await db.execute(stmt)
+    return [ActivityLogRead.model_validate(r) for r in result.scalars().all()]
+
+
+@router.get("/export.csv", dependencies=[
+    Depends(require_permission(PermissionKey.ACTIVITY_LOGS_READ))
+])
+async def export_activity_logs_csv(
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    action_type: str | None = None,
+    user_id: UUID | None = None,
+    risk_level: str | None = None,
+    security_only: bool = False,
+    login_only: bool = False,
+    q: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> StreamingResponse:
+    """CSV export — same filters as list_activity_logs, no offset/limit
+    (capped at EXPORT_HARD_CAP). The export itself is also audited."""
+    stmt = _apply_filters(
+        select(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(EXPORT_HARD_CAP),
+        action_type=action_type, user_id=user_id, risk_level=risk_level,
+        security_only=security_only, login_only=login_only, q=q,
+        date_from=date_from, date_to=date_to,
+    )
+    result = await db.execute(stmt)
+    rows = list(result.scalars())
+    await ActivityLogger(db).log(
+        action="export.activity_logs",
+        action_type="export",
+        user=user, request=request, risk_level="medium",
+        metadata={
+            "row_count": len(rows),
+            "filters": {
+                "action_type": action_type,
+                "user_id": str(user_id) if user_id else None,
+                "risk_level": risk_level,
+                "security_only": security_only, "login_only": login_only,
+                "q": q,
+                "date_from": str(date_from) if date_from else None,
+                "date_to": str(date_to) if date_to else None,
+            },
+        },
+    )
+    await db.commit()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "created_at", "user_email_masked", "action", "action_type",
+                     "resource_type", "resource_id", "risk_level", "is_security_event",
+                     "ip_address", "http_status"])
+    for r in rows:
+        writer.writerow([
+            str(r.id), r.created_at.isoformat(),
+            r.user_email_masked or "",
+            r.action, r.action_type,
+            r.resource_type or "", r.resource_id or "",
+            r.risk_level, r.is_security_event,
+            r.ip_address or "", r.http_status if r.http_status is not None else "",
+        ])
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f\'attachment; filename="activity-logs-{stamp}.csv"\'},
+    )
+''')
+
+    # System logs — read-only admin view (paginated list). The table itself
+    # is written to by SystemLogger from background jobs / integrations.
+    _write_if_missing(api_v1 / "system_logs.py", '''\
+"""System logs — read-only admin view of recent job/integration/system events.
+
+Paginated by `limit` + `offset`, ordered newest-first. Filters: optional
+`status`, `category`, free-text `q` (ilike on event/error/correlation_id).
+Sibling /export.csv endpoint streams matching rows as CSV (capped at
+EXPORT_HARD_CAP so admin can't OOM the server with an unbounded query).
+No mutation endpoints — the table is append-only via SystemLogger.
+"""
+from __future__ import annotations
+
+import csv
+import io
+from datetime import date, datetime, time, timedelta, timezone
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser, require_permission
+from app.auth.permissions import PermissionKey
+from app.db.models.system_log import SystemLog
+from app.db.session import get_db
+from app.schemas.auth import SystemLogRead
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["system_logs"])
+
+EXPORT_HARD_CAP = 10000
+
+
+def _apply_filters(stmt, *, status, category, q, date_from, date_to):
+    if status:
+        stmt = stmt.where(SystemLog.status == status)
+    if category:
+        stmt = stmt.where(SystemLog.category == category)
+    if date_from:
+        stmt = stmt.where(SystemLog.created_at >= datetime.combine(
+            date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        stmt = stmt.where(SystemLog.created_at < datetime.combine(
+            date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(or_(
+            SystemLog.event.ilike(pattern),
+            SystemLog.error_message.ilike(pattern),
+            SystemLog.error_type.ilike(pattern),
+            SystemLog.correlation_id.ilike(pattern),
+        ))
+    return stmt
+
+
+@router.get("", response_model=list[SystemLogRead], dependencies=[
+    Depends(require_permission(PermissionKey.SYSTEM_LOGS_READ))
+])
+async def list_system_logs(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[SystemLogRead]:
+    stmt = _apply_filters(
+        select(SystemLog).order_by(SystemLog.created_at.desc()).limit(limit).offset(offset),
+        status=status, category=category, q=q,
+        date_from=date_from, date_to=date_to,
+    )
+    result = await db.execute(stmt)
+    return [SystemLogRead.model_validate(r) for r in result.scalars().all()]
+
+
+@router.get("/export.csv", dependencies=[
+    Depends(require_permission(PermissionKey.SYSTEM_LOGS_READ))
+])
+async def export_system_logs_csv(
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    status: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> StreamingResponse:
+    """CSV export — same filters as list_system_logs, no offset/limit
+    (capped at EXPORT_HARD_CAP). Bulk-export is itself an auditable
+    action — the row in activity_logs lets future-us answer "who
+    downloaded a year of system logs?" without OS-level access tracing."""
+    stmt = _apply_filters(
+        select(SystemLog).order_by(SystemLog.created_at.desc()).limit(EXPORT_HARD_CAP),
+        status=status, category=category, q=q,
+        date_from=date_from, date_to=date_to,
+    )
+    result = await db.execute(stmt)
+    rows = list(result.scalars())
+    await ActivityLogger(db).log(
+        action="export.system_logs",
+        action_type="export",
+        user=user, request=request, risk_level="medium",
+        metadata={
+            "row_count": len(rows),
+            "filters": {"status": status, "category": category, "q": q,
+                        "date_from": str(date_from) if date_from else None,
+                        "date_to": str(date_to) if date_to else None},
+        },
+    )
+    await db.commit()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "created_at", "category", "event", "status",
+                     "duration_ms", "error_type", "error_message", "correlation_id"])
+    for r in rows:
+        writer.writerow([
+            str(r.id), r.created_at.isoformat(), r.category, r.event, r.status,
+            r.duration_ms if r.duration_ms is not None else "",
+            r.error_type or "", r.error_message or "", r.correlation_id or "",
+        ])
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f\'attachment; filename="system-logs-{stamp}.csv"\'},
+    )
+''')
+
+
+def _emit_auth_migrations(alembic_dir: Path) -> None:
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0000-0004_auth_core.py", '''\
+"""auth core — users + roles + role_permissions + user_roles + user_permission_overrides
+
+Revision ID: 0004_auth_core
+Revises: 0003_ai_call_logs
+Create Date: 2026-01-02 00:00:00.000000
+"""
+from __future__ import annotations
+
+from alembic import op
+
+revision = "0004_auth_core"
+down_revision = "0003_ai_call_logs"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("""
+        CREATE TABLE users (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            email VARCHAR(255) NOT NULL UNIQUE,
+            full_name VARCHAR(255) NOT NULL DEFAULT '',
+            auth_provider VARCHAR(20) NOT NULL,
+            password_hash VARCHAR(255),
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+            totp_secret VARCHAR(255),
+            last_login_at TIMESTAMPTZ,
+            business_unit_ids VARCHAR[] NOT NULL DEFAULT '{}'::varchar[],
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX ix_users_email ON users (email);
+
+        CREATE TABLE roles (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(100) NOT NULL UNIQUE,
+            display_name VARCHAR(150) NOT NULL,
+            provider_scope VARCHAR(20) NOT NULL DEFAULT 'any',
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            description VARCHAR(500),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX ix_roles_name ON roles (name);
+
+        CREATE TABLE user_roles (
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role_id UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            PRIMARY KEY (user_id, role_id)
+        );
+    """)
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS user_roles CASCADE")
+    op.execute("DROP TABLE IF EXISTS roles CASCADE")
+    op.execute("DROP TABLE IF EXISTS users CASCADE")
+''')
+
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0100-0005_menus_permissions.py", '''\
+"""permissions catalog + menu_items + role_permissions + user_permission_overrides
+
+Revision ID: 0005_menus_permissions
+Revises: 0004_auth_core
+Create Date: 2026-01-02 01:00:00.000000
+"""
+from __future__ import annotations
+
+from alembic import op
+
+revision = "0005_menus_permissions"
+down_revision = "0004_auth_core"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("""
+        CREATE TABLE permissions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            key VARCHAR(100) NOT NULL UNIQUE,
+            display_name VARCHAR(150) NOT NULL,
+            category VARCHAR(50) NOT NULL DEFAULT 'other',
+            is_menu BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        CREATE INDEX ix_permissions_key ON permissions (key);
+
+        CREATE TABLE role_permissions (
+            role_id UUID NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            permission_id UUID NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            PRIMARY KEY (role_id, permission_id)
+        );
+
+        CREATE TABLE user_permission_overrides (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            permission_id UUID NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            granted BOOLEAN NOT NULL DEFAULT TRUE,
+            granted_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            reason TEXT
+        );
+        CREATE INDEX ix_upo_user_id ON user_permission_overrides (user_id);
+        CREATE INDEX ix_upo_permission_id ON user_permission_overrides (permission_id);
+
+        CREATE TABLE menu_items (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            key VARCHAR(100) NOT NULL UNIQUE,
+            label_th VARCHAR(150) NOT NULL,
+            label_en VARCHAR(150) NOT NULL,
+            icon VARCHAR(50),
+            path VARCHAR(200) NOT NULL,
+            parent_id UUID REFERENCES menu_items(id) ON DELETE CASCADE,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            required_permission_key VARCHAR(100) NOT NULL,
+            is_system BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX ix_menu_items_key ON menu_items (key);
+    """)
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS menu_items CASCADE")
+    op.execute("DROP TABLE IF EXISTS user_permission_overrides CASCADE")
+    op.execute("DROP TABLE IF EXISTS role_permissions CASCADE")
+    op.execute("DROP TABLE IF EXISTS permissions CASCADE")
+''')
+
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0200-0006_app_settings.py", '''\
+"""app_settings — Pattern C admin config
+
+Revision ID: 0006_app_settings
+Revises: 0005_menus_permissions
+Create Date: 2026-01-02 02:00:00.000000
+"""
+from __future__ import annotations
+
+from alembic import op
+
+revision = "0006_app_settings"
+down_revision = "0005_menus_permissions"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("""
+        CREATE TABLE app_settings (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            key VARCHAR(150) NOT NULL UNIQUE,
+            value JSONB NOT NULL,
+            value_type VARCHAR(20) NOT NULL DEFAULT 'string',
+            category VARCHAR(50) NOT NULL DEFAULT 'general',
+            description TEXT,
+            requires_role VARCHAR(100) NOT NULL DEFAULT 'internal:super_admin',
+            updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX ix_app_settings_key ON app_settings (key);
+    """)
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS app_settings CASCADE")
+''')
+
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0300-0007_user_is_approved.py", '''\
+"""user.is_approved + auth.auto_approve_new_users setting
+
+Revision ID: 0007_user_is_approved
+Revises: 0006_app_settings
+Create Date: 2026-01-02 03:00:00.000000
+"""
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+
+revision = "0007_user_is_approved"
+down_revision = "0006_app_settings"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    # 1. Column. Existing rows backfill to True so the bootstrap super-admin
+    #    (created in earlier seed runs) stays able to sign in — only NEW
+    #    accounts default to the un-approved state.
+    op.add_column(
+        "users",
+        sa.Column("is_approved", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+    )
+    op.execute("UPDATE users SET is_approved = true")
+    # 2. Flip the column default so freshly-inserted rows are gated.
+    op.alter_column("users", "is_approved", server_default=sa.text("false"))
+
+    # 3. Seed the auth.auto_approve_new_users toggle (off by default).
+    op.execute(
+        """
+        INSERT INTO app_settings (id, key, value, value_type, category, requires_role, updated_at)
+        VALUES (gen_random_uuid(), 'auth.auto_approve_new_users', 'false'::jsonb,
+                'boolean', 'auth', 'internal:super_admin', NOW())
+        ON CONFLICT (key) DO NOTHING
+        """
+    )
+
+
+def downgrade() -> None:
+    op.execute("DELETE FROM app_settings WHERE key = 'auth.auto_approve_new_users'")
+    op.drop_column("users", "is_approved")
+''')
+
+    # 0008 — revoked_tokens (Deep-Audit HIGH-3). Backing table for the
+    # refresh-token blocklist used by /logout + /refresh rotation. Rows
+    # auto-expire via the daily cleanup job once expires_at < now().
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0400-0008_revoked_tokens.py", '''\
+"""revoked_tokens — refresh-token blocklist
+
+Revision ID: 0008_revoked_tokens
+Revises: 0007_user_is_approved
+Create Date: 2026-01-02 04:00:00.000000
+
+Closes Deep-Audit HIGH-3 — stolen refresh tokens can now be invalidated
+server-side at logout / rotation / password-change time instead of
+waiting for their natural 7-day exp.
+"""
+from __future__ import annotations
+
+from alembic import op
+
+
+revision = "0008_revoked_tokens"
+down_revision = "0007_user_is_approved"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("""
+        CREATE TABLE revoked_tokens (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            jti VARCHAR(64) NOT NULL UNIQUE,
+            user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            reason VARCHAR(40) NOT NULL DEFAULT 'logout',
+            revoked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX ix_revoked_tokens_jti ON revoked_tokens (jti);
+        CREATE INDEX ix_revoked_tokens_user_id ON revoked_tokens (user_id);
+        CREATE INDEX ix_revoked_tokens_expires_at ON revoked_tokens (expires_at);
+    """)
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS revoked_tokens CASCADE")
+''')
+
+    # 0009 — user moderation/approval columns that drifted onto the model
+    # without a migration: is_rejected, rejection_reason, approval_token_hash
+    # (+index), approval_token_expires_at. The User model + the /users
+    # approve/reject flow reference all four, but `alembic upgrade head` only
+    # built the 0004/0007 columns — so a fresh DB was missing these and
+    # `python -m app.seed` crashed (UndefinedColumnError) before the bootstrap
+    # super-admin was inserted, i.e. NO new project could log in. Caught by
+    # the 2026-06-01 dogfood re-test. This backfills the schema to the model.
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0500-0009_user_approval_fields.py", '''\
+"""user moderation fields — is_rejected / rejection_reason / approval token
+
+Revision ID: 0009_user_approval_fields
+Revises: 0008_revoked_tokens
+Create Date: 2026-01-02 05:00:00.000000
+
+The User model + /users approve/reject flow reference is_rejected,
+rejection_reason, approval_token_hash and approval_token_expires_at, but no
+migration added them. Without this, `alembic upgrade head` produces a users
+table missing these columns and `python -m app.seed` fails with
+UndefinedColumnError before the bootstrap super-admin is created.
+"""
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+
+
+revision = "0009_user_approval_fields"
+down_revision = "0008_revoked_tokens"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        "users",
+        sa.Column("is_rejected", sa.Boolean(), nullable=False,
+                  server_default=sa.text("false")),
+    )
+    op.add_column(
+        "users",
+        sa.Column("rejection_reason", sa.String(length=500), nullable=True),
+    )
+    op.add_column(
+        "users",
+        sa.Column("approval_token_hash", sa.String(length=64), nullable=True),
+    )
+    op.add_column(
+        "users",
+        sa.Column("approval_token_expires_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_index("ix_users_approval_token_hash", "users", ["approval_token_hash"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_users_approval_token_hash", table_name="users")
+    op.drop_column("users", "approval_token_expires_at")
+    op.drop_column("users", "approval_token_hash")
+    op.drop_column("users", "rejection_reason")
+    op.drop_column("users", "is_rejected")
+''')
+
+    # 0010 — canonicalize user emails. Earlier scaffold versions allowed
+    # mixed-case emails to be stored, while real users type email addresses
+    # with arbitrary casing at login. Normalize existing rows once so local
+    # auth works without per-user manual fixes. If duplicates differ only by
+    # case, stop and let an admin merge them deliberately.
+    _write_if_missing(alembic_dir / "versions" / "2026_01_02_0600-0010_normalize_user_emails.py", '''\
+"""normalize user emails to lowercase
+
+Revision ID: 0010_normalize_user_emails
+Revises: 0009_user_approval_fields
+Create Date: 2026-01-02 06:00:00.000000
+"""
+from __future__ import annotations
+
+from alembic import op
+
+
+revision = "0010_normalize_user_emails"
+down_revision = "0009_user_approval_fields"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM users
+                GROUP BY lower(email)
+                HAVING count(*) > 1
+            ) THEN
+                RAISE EXCEPTION
+                    'users.email contains case-insensitive duplicates; merge them before normalizing';
+            END IF;
+        END $$;
+    """)
+    op.execute("UPDATE users SET email = lower(trim(email)) WHERE email <> lower(trim(email))")
+
+
+def downgrade() -> None:
+    # Email canonicalization is intentionally irreversible.
+    pass
+''')
+
+
+def _emit_auth_seed(app: Path) -> None:
+    # Overwrite db/seed.py stub — auth seed becomes the project's canonical
+    # `python -m app.seed` entry. The old app/db/seed.py is kept as a shim.
+    _write_if_missing(app / "seed.py", '''\
+"""Auth bootstrap seed — `python -m app.seed`.
+
+Idempotent: every insert upserts by unique key. Run after
+`alembic upgrade head`. Reads three env vars (set by the wizard):
+
+- AUTH_BOOTSTRAP_SUPER_ADMIN_EMAIL  — first super admin's email
+- AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE — "sso" | "local"
+- AUTH_BOOTSTRAP_INITIAL_PASSWORD   — transient, used once when type=local
+
+The default `auth.local.enabled` / `auth.sso.enabled` values respect
+`AUTH_SCOPE` env (compile-time ceiling).
+
+See docs/auth.md §11 + docs/admin-config.md.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.auth.password import PasswordPolicyError, hash_password
+from app.core.config import get_settings
+from app.db.models.app_setting import AppSetting
+from app.db.models.menu_item import MenuItem
+from app.db.models.permission import Permission
+from app.db.models.role import Role
+from app.db.models.user import User
+from app.db.session import close_db, get_db_session, init_db
+
+
+# (key, display_name, category, is_menu)
+#
+# Permission model (v3.0.3):
+# We dropped the separate `menu.*.view` perms — every menu now hangs off
+# the same `*.read` permission that gates the underlying list endpoint.
+# Granting `users.read` therefore shows the menu AND lets the page load,
+# eliminating the old footgun where a role had read but no menu-view.
+DEFAULT_PERMISSIONS: list[tuple[str, str, str, bool]] = [
+    # Read (also gates menu visibility)
+    ("users.read",                  "ดูรายการผู้ใช้",           "users", True),
+    ("roles.read",                  "ดู Roles + Permissions",  "roles", True),
+    ("menus.read",                  "ดูเมนู (admin)",          "menus", True),
+    ("system_logs.read",            "ดู System Logs",          "logs", True),
+    ("activity_logs.read",          "ดู Activity Logs",        "logs", True),
+    ("admin_settings.read",         "อ่าน App Settings",       "admin", True),
+    # Action perms (write/delete)
+    ("users.create",                "สร้างผู้ใช้",              "users", False),
+    ("users.update",                "แก้ไขผู้ใช้",              "users", False),
+    ("users.delete",                "ลบผู้ใช้",                 "users", False),
+    ("users.deactivate",            "ปิดใช้งานผู้ใช้",          "users", False),
+    # users.approve — gate is_approved transitions separately from
+    # users.update so admin's profile-edit power can't silently approve
+    # accounts. Closes Deep-Audit HIGH-2.
+    ("users.approve",               "อนุมัติผู้ใช้",             "users", False),
+    ("roles.create",                "สร้าง Role",              "roles", False),
+    ("roles.update",                "แก้ไข Role",              "roles", False),
+    ("roles.delete",                "ลบ Role",                 "roles", False),
+    ("roles.assign",                "Assign Role ให้ผู้ใช้",   "roles", False),
+    ("permissions.grant_override",  "ให้สิทธิ์เพิ่มเติม",       "permissions", False),
+    ("permissions.revoke_override", "เพิกถอนสิทธิ์",            "permissions", False),
+    ("menus.create",                "สร้างเมนู",                "menus", False),
+    ("menus.update",                "แก้ไขเมนู",                "menus", False),
+    ("menus.delete",                "ลบเมนู",                   "menus", False),
+    ("menus.reorder",               "จัดลำดับเมนู",             "menus", False),
+    ("admin_settings.update",       "แก้ App Settings",        "admin", False),
+]
+
+
+# (name, display_name, provider_scope, [permission_key...])  None = all (*).
+#
+# Role design (v3.0.3): roles only carry action perms — menu visibility
+# rides on the same `*.read` perm as the list endpoint. The Dashboard +
+# Settings index pages are reachable to any authenticated user; they
+# render an empty grid if the user has no perms.
+DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
+    ("internal:super_admin", "Super Admin",  "internal", None),
+    ("internal:admin",       "Admin",        "internal", [
+        "users.read", "users.create", "users.update", "users.deactivate",
+        # Approval gate is a separate perm so a future "user-editor" role
+        # can edit profile fields without being able to approve accounts.
+        # Admin gets it by default — admin IS the approver in v3.0.
+        "users.approve",
+        # Admin can assign roles to users (gated downstream — hierarchy
+        # guard in _require_role_assign blocks granting super_admin
+        # unless the caller IS one).
+        "roles.read", "roles.assign",
+        # Per-user overrides (Pattern B): admin can grant/revoke HOST-APP
+        # feature keys per person. System keys (permissions.*,
+        # admin_settings.*, users.approve/create/delete/deactivate,
+        # roles.*, menus.delete) stay super_admin-only — enforced by the
+        # deny-list in users.py add_override, NOT by this perm.
+        "permissions.grant_override", "permissions.revoke_override",
+    ]),
+    ("internal:super_user",  "Super User",   "internal", [
+        "menus.read", "menus.update", "menus.reorder",
+    ]),
+    ("internal:user",        "User",         "internal", []),
+    ("external:admin",       "Admin (ภายนอก)", "external", [
+        "users.read", "users.create", "users.update", "users.approve",
+    ]),
+    ("external:user",        "User (ภายนอก)",  "external", []),
+]
+
+
+# (key, label_th, label_en, icon, path, parent_key, order, perm_key)
+#
+# Menu perm rules (v3.0.3):
+# - perm_key = ""  → no permission needed; visible to all authenticated.
+#                   Parents with empty perm also auto-hide if all their
+#                   children get filtered out (see app/services/menus.py).
+# - perm_key = "<action>.read" → ties menu to the same read perm that
+#                                gates the underlying list endpoint.
+DEFAULT_MENUS: list[tuple[str, str, str, str | None, str, str | None, int, str]] = [
+    ("dashboard",       "Dashboard",   "Dashboard", "LayoutDashboard",  "/",                None,        10, ""),
+    ("settings",        "การตั้งค่า",  "Settings",  "Settings",         "/settings",        None,        90, ""),
+    ("settings.users",  "ผู้ใช้งาน",   "Users",     "Users",            "/settings/users",  "settings",  10, "users.read"),
+    ("settings.roles",  "Roles",       "Roles",     "Shield",           "/settings/roles",  "settings",  20, "roles.read"),
+    ("settings.menus",  "เมนู",        "Menus",     "List",             "/settings/menus",  "settings",  30, "menus.read"),
+    ("settings.auth",   "การ Login",   "Login",     "Key",              "/settings/auth",   "settings",  40, "admin_settings.read"),
+    ("settings.system_logs", "System Logs", "System Logs", "Activity",   "/settings/system-logs", "settings", 50, "system_logs.read"),
+    ("settings.activity_logs", "ประวัติการใช้งาน", "Activity Logs", "History", "/settings/activity-logs", "settings", 55, "activity_logs.read"),
+]
+
+
+# --- Optional module: Database Connections + Query Sandbox ---------------
+# Gated by FEATURE_DB_CONNECTIONS (config.py). When the flag is off these are
+# never seeded, so the sidebar menu, settings cards, and routes all stay
+# hidden — the app is permission-driven, so no frontend change is needed.
+# super_admin still receives these via the keys=None all-perms binding in
+# DEFAULT_ROLES; they're NOT listed in any other role and are in users.py
+# _PRIVILEGE_MANAGEMENT_KEYS so a per-user override can't grant them.
+_DB_CONNECTIONS_PERMISSIONS: list[tuple[str, str, str, bool]] = [
+    ("db_connections.read",         "ดู Database Connections", "database", True),
+    ("db_connections.manage",       "จัดการ DB Connections",   "database", False),
+    ("db_connections.query",        "รัน Query Sandbox",       "database", False),
+]
+_DB_CONNECTIONS_MENUS: list[tuple[str, str, str, str | None, str, str | None, int, str]] = [
+    ("settings.db_connections", "ฐานข้อมูล", "Database Connections", "Database", "/settings/db-connections", "settings", 60, "db_connections.read"),
+    ("settings.query_sandbox", "Query Sandbox", "Query Sandbox", "Terminal", "/settings/query-sandbox", "settings", 65, "db_connections.query"),
+]
+# Query Sandbox safety limits — admin-tunable via /settings/admin (no redeploy).
+# Read by db_connection_service.run_query. Conservative defaults.
+_DB_CONNECTIONS_SETTINGS: list[tuple[str, object, str, str]] = [
+    ("db_sandbox.statement_timeout_ms", 30000, "integer", "database"),
+    ("db_sandbox.max_rows",             1000,  "integer", "database"),
+]
+
+
+def _scope() -> str:
+    return (os.getenv("AUTH_SCOPE") or "both").lower()
+
+
+async def _seed_permissions(db: AsyncSession) -> dict[str, Permission]:
+    out: dict[str, Permission] = {}
+    permissions = list(DEFAULT_PERMISSIONS)
+    if get_settings().FEATURE_DB_CONNECTIONS:
+        permissions += _DB_CONNECTIONS_PERMISSIONS
+    for key, display_name, category, is_menu in permissions:
+        existing = (await db.execute(select(Permission).where(Permission.key == key))).scalar_one_or_none()
+        if existing is None:
+            existing = Permission(key=key, display_name=display_name, category=category, is_menu=is_menu)
+            db.add(existing)
+            await db.flush()
+        out[key] = existing
+    return out
+
+
+async def _seed_roles(db: AsyncSession, perms: dict[str, Permission]) -> dict[str, Role]:
+    out: dict[str, Role] = {}
+    all_perms = list(perms.values())
+    for name, display_name, provider_scope, keys in DEFAULT_ROLES:
+        existing = (await db.execute(
+            select(Role).where(Role.name == name)
+            .options(selectinload(Role.permissions))
+        )).scalar_one_or_none()
+        if existing is None:
+            existing = Role(
+                name=name, display_name=display_name, provider_scope=provider_scope,
+                is_system=True,
+            )
+            db.add(existing)
+            await db.flush()
+            # Freshly-flushed row: relationship not loaded yet. Assigning to
+            # it would trigger an async lazy-load (MissingGreenlet).
+            await db.refresh(existing, attribute_names=["permissions"])
+        # Reset perm bindings — idempotent re-run keeps the canonical mapping.
+        if keys is None:
+            existing.permissions = all_perms
+        else:
+            existing.permissions = [perms[k] for k in keys if k in perms]
+        out[name] = existing
+    return out
+
+
+async def _seed_menus(db: AsyncSession) -> None:
+    by_key: dict[str, MenuItem] = {}
+    menus = list(DEFAULT_MENUS)
+    if get_settings().FEATURE_DB_CONNECTIONS:
+        menus += _DB_CONNECTIONS_MENUS
+    # First pass — items without parent.
+    for key, label_th, label_en, icon, path, parent_key, order, perm_key in menus:
+        existing = (await db.execute(select(MenuItem).where(MenuItem.key == key))).scalar_one_or_none()
+        if existing is None:
+            existing = MenuItem(
+                key=key, label_th=label_th, label_en=label_en, icon=icon,
+                path=path, order_index=order, required_permission_key=perm_key,
+                is_system=True,
+            )
+            db.add(existing)
+            await db.flush()
+        by_key[key] = existing
+    # Second pass — set parent_id now that keys are loaded.
+    for key, *_rest, parent_key, _order, _perm_key in menus:
+        if parent_key:
+            by_key[key].parent_id = by_key[parent_key].id
+
+
+async def _seed_app_settings(db: AsyncSession) -> None:
+    scope = _scope()
+    # Pricing seeds are starter values per the public Claude pricing page —
+    # admin must verify against current rates and adjust via /settings/admin
+    # (super-admin only) before relying on cost reports.
+    sonnet_pricing = {"input": 3.0, "output": 15.0,
+                      "cache_read": 0.30, "cache_write": 3.75}
+    haiku_pricing = {"input": 1.0, "output": 5.0,
+                     "cache_read": 0.10, "cache_write": 1.25}
+    defaults: list[tuple[str, object, str, str]] = [
+        ("auth.local.enabled",        scope != "internal_only", "boolean", "auth"),
+        ("auth.sso.enabled",          scope != "external_only", "boolean", "auth"),
+        ("auth.local.signup_enabled", False,                    "boolean", "auth"),
+        ("auth.signup_default_role",  "external:user",         "string",  "auth"),
+        # AI pricing — used by AiCallLogger._estimate_cost (docs/logging.md §3.2)
+        ("ai.pricing.claude-sonnet-4-6",         sonnet_pricing, "json", "pricing"),
+        ("ai.pricing.claude-haiku-4-5-20251001", haiku_pricing,  "json", "pricing"),
+        # Log retention overrides — read by retention.drop_old_partitions
+        ("logging.activity.retention_days", 90,  "integer", "logging"),
+        ("logging.system.retention_days",   60,  "integer", "logging"),
+        ("logging.ai.retention_days",       180, "integer", "logging"),
+        # Email notifications (M365 Graph) — disabled by default so the
+        # scaffold doesn\\'t spam noreply mail from a blank-config install.
+        # Admin enables via /settings/notifications after configuring
+        # M365_* env vars + supplying admin_recipients.
+        ("notifications.email.enabled",          False, "boolean", "notifications"),
+        ("notifications.email.admin_recipients", [],    "json",    "notifications"),
+    ]
+    if get_settings().FEATURE_DB_CONNECTIONS:
+        defaults += _DB_CONNECTIONS_SETTINGS
+    for key, value, value_type, category in defaults:
+        existing = (await db.execute(select(AppSetting).where(AppSetting.key == key))).scalar_one_or_none()
+        if existing is None:
+            db.add(AppSetting(key=key, value=value, value_type=value_type, category=category))
+
+
+async def _seed_bootstrap_user(db: AsyncSession, roles: dict[str, Role]) -> None:
+    email = os.getenv("AUTH_BOOTSTRAP_SUPER_ADMIN_EMAIL", "").strip().lower()
+    if not email:
+        return
+    existing = (await db.execute(select(User).where(func.lower(User.email) == email))).scalar_one_or_none()
+    if existing is not None:
+        return
+    auth_type = (os.getenv("AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE") or "sso").lower()
+    user = User(
+        email=email,
+        full_name=email.split("@", 1)[0],
+        auth_provider="local" if auth_type == "local" else "azure_ad",
+        is_active=True,
+        is_approved=True,  # bootstrap super-admin is self-approved by definition
+        email_verified=True,
+    )
+    if auth_type == "local":
+        password = os.getenv("AUTH_BOOTSTRAP_INITIAL_PASSWORD", "")
+        if not password:
+            raise RuntimeError(
+                "AUTH_BOOTSTRAP_INITIAL_PASSWORD env required when "
+                "AUTH_BOOTSTRAP_SUPER_ADMIN_AUTH_TYPE=local"
+            )
+        # Defense-in-depth: the wizard already enforces the strength policy,
+        # but re-check here so a manually-set weak env value fails with a
+        # clear message instead of an opaque traceback mid-seed.
+        try:
+            user.password_hash = hash_password(
+                password, context_terms=[email.split("@", 1)[0]]
+            )
+        except PasswordPolicyError as exc:
+            raise RuntimeError(
+                f"AUTH_BOOTSTRAP_INITIAL_PASSWORD is too weak: {exc}"
+            ) from exc
+    db.add(user)
+    await db.flush()
+    super_admin_role = roles.get("internal:super_admin")
+    if super_admin_role is not None:
+        await db.refresh(user, attribute_names=["roles"])
+        user.roles = [super_admin_role]
+
+
+async def seed() -> None:
+    async with get_db_session() as db:
+        perms = await _seed_permissions(db)
+        roles = await _seed_roles(db, perms)
+        await _seed_menus(db)
+        await _seed_app_settings(db)
+        await _seed_bootstrap_user(db, roles)
+        await db.commit()
+
+
+async def main() -> None:
+    # Load .env into os.environ so the AUTH_BOOTSTRAP_* vars below are
+    # visible to os.getenv. Settings loads .env separately, but only into
+    # the Settings object — not the process env.
+    from dotenv import load_dotenv
+    load_dotenv()
+    await init_db()
+    try:
+        await seed()
+    finally:
+        await close_db()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+''')
+
+
+def _emit_security_tests(tests: Path) -> None:
+    """Emit unit tests that guard the v3.0.6 Deep-Audit HIGH fixes.
+
+    These run as part of `pytest tests/security/` and are deliberately
+    DB-free so they\\'re fast enough to live on every commit. Anything
+    that needs a real database (full rate-limit storm test, refresh
+    cookie HTTP round-trip) belongs in tests/integration/ instead.
+    """
+    # conftest.py for the security suite — bootstraps the env vars that
+    # app/core/config.py + app/core/rate_limit.py read at import time.
+    # Without this, importing any router fails with pydantic
+    # ValidationError ("JWT_SECRET_KEY required") before the test body
+    # even runs. pytest loads conftest.py BEFORE collecting test files,
+    # so this is the right hook for env bootstrap.
+    _write_if_missing(tests / "security" / "conftest.py", '''\
+"""Shared env bootstrap for the security test suite.
+
+pytest auto-loads conftest.py before collecting test files, so we have
+a guaranteed before-import seam to set the env vars that pydantic-settings
+expects (Round-4 HIGH-1 made JWT_SECRET_KEY mandatory + length-validated).
+"""
+from __future__ import annotations
+
+import os
+
+os.environ.setdefault("DB_PASSWORD", "test-only")
+# 64-char hex passes the Round-4 HIGH-1 validator (>=32 chars + >=8 distinct).
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "deadbeef0123456789abcdeffedcba9876543210abcdef0123456789cafebabe",
+)
+os.environ.setdefault("API_CORS_ORIGINS", "http://localhost:5173")
+os.environ.setdefault("APP_ENV", "dev")  # dev → memory:// storage allowed
+''')
+
+    _write_if_missing(tests / "security" / "test_email_template_escape.py", '''\
+"""HIGH-4 regression — every user/admin-controlled value that gets
+interpolated into the HTML email body must be html-escaped before
+landing in the output. We assert presence-of-entity AND absence-of-
+raw-tag so a future refactor that swaps the escape order doesn\\'t pass.
+
+Attack payload: classic stored-XSS string. If escape regresses we\\'d
+see literal <img src=x onerror=alert(1)> in the rendered email body —
+Outlook/Gmail wouldn\\'t fire it, but a browser-based webmail might.
+"""
+from __future__ import annotations
+
+from app.services.notifications.templates import (
+    approval_user, rejection_user, signup_admin,
+)
+
+XSS = "<img src=x onerror=alert(1)>"
+SCRIPT = "<script>alert(1)</script>"
+
+
+def test_signup_admin_escapes_user_name() -> None:
+    _, body = signup_admin(
+        user_email="ok@example.com",
+        user_name=XSS,
+        app_name="App",
+        approve_url="https://example/a", reject_url="https://example/r",
+    )
+    assert XSS not in body
+    assert "&lt;img src=x onerror=alert(1)&gt;" in body
+
+
+def test_signup_admin_escapes_user_email() -> None:
+    _, body = signup_admin(
+        user_email='evil@x"><script>alert(1)</script>',
+        user_name="Mallory",
+        app_name="App",
+        approve_url="https://example/a", reject_url="https://example/r",
+    )
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_signup_admin_escapes_app_name() -> None:
+    _, body = signup_admin(
+        user_email="ok@example.com", user_name="Alice",
+        app_name=SCRIPT,
+        approve_url="https://example/a", reject_url="https://example/r",
+    )
+    assert SCRIPT not in body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+
+def test_approval_user_escapes_admin_message() -> None:
+    _, body = approval_user(
+        user_name="Alice",
+        login_url="https://example/login",
+        message=f"Welcome {XSS}",
+    )
+    assert XSS not in body
+    assert "&lt;img" in body
+
+
+def test_rejection_user_escapes_reason() -> None:
+    _, body = rejection_user(
+        user_name="Alice", reason=XSS, message=None,
+    )
+    assert XSS not in body
+    assert "&lt;img" in body
+
+
+def test_rejection_user_escapes_admin_message() -> None:
+    _, body = rejection_user(
+        user_name="Alice", reason="too bad", message=SCRIPT,
+    )
+    # `message` is escaped before its newlines become <br> — see _esc().
+    assert SCRIPT not in body
+    assert "&lt;script&gt;" in body
+''')
+
+    _write_if_missing(tests / "security" / "test_jwt_jti.py", '''\
+"""HIGH-3 regression — refresh tokens MUST carry a `jti` so the auth
+router can revoke them server-side. Without jti the blocklist becomes
+a no-op. Env bootstrap lives in conftest.py.
+"""
+from __future__ import annotations
+
+from app.auth.jwt_service import (
+    decode_token, encode_access_token, encode_refresh_token,
+)
+
+
+def test_refresh_token_has_jti() -> None:
+    tok = encode_refresh_token(subject="11111111-1111-1111-1111-111111111111",
+                               auth_provider="local")
+    claims = decode_token(tok)
+    assert claims["type"] == "refresh"
+    jti = claims.get("jti")
+    assert isinstance(jti, str) and len(jti) >= 16
+
+
+def test_refresh_token_jti_is_unique_per_mint() -> None:
+    a = decode_token(encode_refresh_token(
+        subject="11111111-1111-1111-1111-111111111111",
+        auth_provider="local",
+    ))
+    b = decode_token(encode_refresh_token(
+        subject="11111111-1111-1111-1111-111111111111",
+        auth_provider="local",
+    ))
+    assert a["jti"] != b["jti"]
+
+
+def test_access_token_unchanged_no_jti_required() -> None:
+    # Access tokens stay stateless — the short exp is the defence.
+    claims = decode_token(encode_access_token(
+        subject="11111111-1111-1111-1111-111111111111",
+        auth_provider="local",
+    ))
+    assert claims["type"] == "access"
+''')
+
+    _write_if_missing(tests / "security" / "test_users_approve_permission.py", '''\
+"""HIGH-2 regression — verify the seed catalog actually contains the new
+`users.approve` permission, that internal:admin gets it by default, and
+that internal:user does NOT (only super_admin + admin can approve)."""
+from __future__ import annotations
+
+from app.seed import DEFAULT_PERMISSIONS, DEFAULT_ROLES
+
+
+def test_users_approve_in_default_permissions() -> None:
+    keys = {p[0] for p in DEFAULT_PERMISSIONS}
+    assert "users.approve" in keys, \\
+        "Deep-Audit HIGH-2 — users.approve must seed into the catalog"
+
+
+def test_internal_admin_has_users_approve() -> None:
+    admin = next(r for r in DEFAULT_ROLES if r[0] == "internal:admin")
+    perms = admin[3] or []
+    assert "users.approve" in perms
+
+
+def test_internal_user_does_not_have_users_approve() -> None:
+    user = next(r for r in DEFAULT_ROLES if r[0] == "internal:user")
+    perms = user[3] or []
+    assert "users.approve" not in perms
+
+
+def test_external_admin_has_users_approve() -> None:
+    ext = next(r for r in DEFAULT_ROLES if r[0] == "external:admin")
+    perms = ext[3] or []
+    assert "users.approve" in perms
+''')
+
+    _write_if_missing(tests / "security" / "test_rate_limit_wiring.py", '''\
+"""HIGH-1 regression — verify the @limiter.limit decorators are actually
+present at the source level for the sensitive endpoints.
+
+We read the source file as text rather than importing the route
+functions, because importing `app.api.v1.auth` pulls in Pydantic schema
+generation that needs the full settings stack — too heavy for a fast
+unit test. The check is shape-based but is enough to fail loudly if
+someone removes the decorator during a future cleanup pass.
+
+Per-endpoint integration tests that exercise an actual 429 belong in
+tests/integration/ where the test harness owns the FastAPI app.
+"""
+from __future__ import annotations
+
+import inspect
+
+from app.api.v1 import auth as auth_module
+from app.api.v1 import user_approval as approval_module
+
+AUTH_SRC = inspect.getsource(auth_module)
+APPROVAL_SRC = inspect.getsource(approval_module)
+
+
+def test_login_rate_limited_5_per_minute() -> None:
+    # Ordering: decorator MUST appear in the @router.post + @limiter.limit
+    # stack above `async def login(`.
+    assert \'@limiter.limit("5/minute")\' in AUTH_SRC, \\
+        "Deep-Audit HIGH-1 — /login must rate-limit at 5/minute"
+    assert "async def login(" in AUTH_SRC
+
+
+def test_sso_callback_rate_limited_3_per_minute() -> None:
+    assert \'@limiter.limit("3/minute")\' in AUTH_SRC, \\
+        "Deep-Audit HIGH-1 — /sso/callback must rate-limit at 3/minute"
+    assert "async def sso_callback(" in AUTH_SRC
+
+
+def test_refresh_rate_limited() -> None:
+    # Defence-in-depth on token rotation — value isn\\'t mandated by the
+    # finding, just presence of the decorator.
+    assert "limiter.limit" in AUTH_SRC and "async def refresh(" in AUTH_SRC
+
+
+def test_approval_endpoints_rate_limited_30_per_minute() -> None:
+    assert APPROVAL_SRC.count(\'@limiter.limit("30/minute")\') >= 3, \\
+        "Deep-Audit HIGH-1 — resolve/approve/reject token endpoints must all rate-limit"
+    for fn in ("resolve_token", "approve_via_token", "reject_via_token"):
+        assert f"async def {fn}(" in APPROVAL_SRC
+
+
+def test_rate_limit_singleton_is_imported() -> None:
+    assert "from app.core.rate_limit import limiter" in AUTH_SRC
+    assert "from app.core.rate_limit import limiter" in APPROVAL_SRC
+''')
+
+    _write_if_missing(tests / "security" / "test_patch_user_self_guard.py", '''\
+"""HIGH-2 regression — patch_user must reject self-elevation attempts.
+
+These are static-shape assertions on the source — full request-shaped
+tests live in tests/integration/ where the DB fixture exists. The goal
+here is to catch a regression where someone accidentally removes the
+`is_self` checks during a future cleanup pass.
+"""
+from __future__ import annotations
+
+import inspect
+
+from app.api.v1 import users as users_module
+
+
+def test_patch_user_contains_self_guard() -> None:
+    src = inspect.getsource(users_module.patch_user)
+    assert "is_self" in src, \\
+        "Deep-Audit HIGH-2 — patch_user must compute is_self for the self-guard"
+    assert "users.approve" in src, \\
+        "Deep-Audit HIGH-2 — patch_user must gate is_approved on users.approve"
+    assert "Cannot change approval state on your own account" in src
+
+
+def test_deactivate_user_contains_self_guard() -> None:
+    src = inspect.getsource(users_module.deactivate_user)
+    assert "Cannot deactivate your own account" in src
+
+
+def test_bulk_approve_filters_caller_id() -> None:
+    src = inspect.getsource(users_module.bulk_approve)
+    assert "uid != user.id" in src, \\
+        "Deep-Audit HIGH-2 — bulk_approve must drop the caller\\'s own id"
+''')
+
+    # ── Round-4 HIGH regression tests ──────────────────────────────────
+
+    _write_if_missing(tests / "security" / "test_jwt_secret_validation.py", '''\
+"""Round-4 HIGH-1 regression — JWT_SECRET_KEY must be mandatory,
+length-validated, and reject placeholder/low-entropy values."""
+from __future__ import annotations
+
+import os
+
+import pytest
+from pydantic import ValidationError
+
+from app.core.config import Settings
+
+
+def _env(**overrides: str) -> dict[str, str]:
+    base = {
+        "DB_PASSWORD": "test-only",
+        "API_CORS_ORIGINS": "http://localhost:5173",
+        "APP_ENV": "dev",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_jwt_secret_missing_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    # conftest set JWT_SECRET_KEY on the test env; clear it for this test.
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    for k, v in _env().items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_jwt_secret_short_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    for k, v in _env(JWT_SECRET_KEY="abc123" * 4).items():  # 24 chars
+        monkeypatch.setenv(k, v)
+    with pytest.raises(ValidationError, match="at least 32"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("placeholder", [
+    "changeme" + "x" * 24,
+    "secret" + "x" * 26,
+    "your-secret-here" + "0" * 16,
+])
+def test_jwt_secret_placeholder_rejected(
+    monkeypatch: pytest.MonkeyPatch, placeholder: str,
+) -> None:
+    # Length-valid (>=32) but the prefix-only check is too soft for
+    # placeholder detection; the validator rejects EXACT placeholder
+    # equality (case-insensitive). So we test the entropy guard catches
+    # variants that contain a placeholder but pad it out.
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    for k, v in _env(JWT_SECRET_KEY=placeholder).items():
+        monkeypatch.setenv(k, v)
+    # Either placeholder OR low-entropy will trip the guard — both are
+    # acceptable rejections.
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_jwt_secret_low_entropy_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    # 64 chars but only 1 distinct character
+    for k, v in _env(JWT_SECRET_KEY="x" * 64).items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(ValidationError, match="entropy"):
+        Settings(_env_file=None)
+
+
+def test_jwt_secret_valid_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    valid = "deadbeef0123456789abcdeffedcba9876543210abcdef0123456789cafebabe"
+    for k, v in _env(JWT_SECRET_KEY=valid).items():
+        monkeypatch.setenv(k, v)
+    s = Settings(_env_file=None)
+    assert s.JWT_SECRET_KEY == valid
+''')
+
+    _write_if_missing(tests / "security" / "test_rate_limit_production_storage.py", '''\
+"""Round-4 HIGH-2 regression — production must reject in-memory rate-
+limit storage. Also verifies the proxy-aware client IP helper rejects
+spoofed X-Forwarded-For when there is no trusted proxy configured."""
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+from pydantic import ValidationError
+
+from app.core.config import Settings
+from app.core.rate_limit import _client_ip
+
+
+def _env(**overrides: str) -> dict[str, str]:
+    base = {
+        "DB_PASSWORD": "test-only",
+        "JWT_SECRET_KEY": "deadbeef0123456789abcdeffedcba9876543210abcdef0123456789cafebabe",
+        "API_CORS_ORIGINS": "https://app.example.com",
+        "APP_ENV": "production",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_production_memory_storage_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _env(RATE_LIMIT_STORAGE_URI="memory://").items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(ValidationError, match="memory"):
+        Settings(_env_file=None)
+
+
+def test_production_redis_storage_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _env(RATE_LIMIT_STORAGE_URI="redis://localhost:6379/0").items():
+        monkeypatch.setenv(k, v)
+    s = Settings(_env_file=None)
+    assert s.RATE_LIMIT_STORAGE_URI.startswith("redis://")
+
+
+def test_dev_memory_storage_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = _env(APP_ENV="dev", RATE_LIMIT_STORAGE_URI="memory://")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    Settings(_env_file=None)  # no raise
+
+
+def _fake_request(client_host: str, *, xff: str | None = None) -> object:
+    req = MagicMock()
+    req.client.host = client_host
+    req.headers.get = lambda key, default="": (
+        xff if xff is not None and key.lower() == "x-forwarded-for" else default
+    )
+    # slowapi's get_remote_address also looks at scope; mimic enough.
+    req.scope = {"client": (client_host, 0)}
+    return req
+
+
+def test_client_ip_ignores_xff_when_no_trusted_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # _TRUSTED_PROXY_NETS is resolved at module import; tests/security
+    # conftest leaves TRUSTED_PROXY_IPS empty by default so it should
+    # already be empty.
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = []  # ensure empty for this test
+    req = _fake_request("203.0.113.5", xff="198.51.100.99")
+    assert _client_ip(req) == "203.0.113.5"
+
+
+def test_client_ip_honours_xff_from_trusted_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    req = _fake_request("10.0.0.5", xff="198.51.100.99, 10.0.0.5")
+    assert _client_ip(req) == "198.51.100.99"
+
+
+def test_client_ip_rejects_xff_from_untrusted_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    # Peer is NOT in 10/8 — XFF must be ignored.
+    req = _fake_request("203.0.113.5", xff="198.51.100.99")
+    assert _client_ip(req) == "203.0.113.5"
+
+
+def test_client_ip_rejects_malformed_xff(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    req = _fake_request("10.0.0.5", xff="not-an-ip, something")
+    assert _client_ip(req) == "10.0.0.5"
+
+
+# ── Round-5 HIGH-1 — rightmost-walk regression tests ────────────────
+
+def test_client_ip_rejects_leftmost_when_attacker_prepends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The original Round-4 implementation read XFF leftmost. nginx
+    appends, so an attacker at 198.51.100.99 sending
+    `X-Forwarded-For: 1.2.3.4` makes nginx forward
+    `X-Forwarded-For: 1.2.3.4, 198.51.100.99`. The Round-5 fix walks
+    rightward and skips trusted proxies — the real client is
+    198.51.100.99 (the leftmost non-trusted hop), NOT the spoofed 1.2.3.4.
+    """
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    req = _fake_request("10.0.0.5", xff="1.2.3.4, 198.51.100.99")
+    assert _client_ip(req) == "198.51.100.99", \\
+        "Round-5 HIGH-1 — leftmost XFF entry is attacker-spoofable; must walk rightward"
+
+
+def test_client_ip_walks_past_multiple_trusted_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chained-proxy case: client → proxy1 (10.x) → proxy2 (10.x) →
+    backend. XFF reads `<client>, 10.0.0.1, 10.0.0.2`. The rightmost
+    non-trusted hop is the client."""
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    req = _fake_request("10.0.0.2", xff="203.0.113.7, 10.0.0.1, 10.0.0.2")
+    assert _client_ip(req) == "203.0.113.7"
+
+
+def test_client_ip_falls_back_when_every_hop_is_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All hops inside our infra — nothing claims to be a client. Use
+    the leftmost (deepest visibility) rather than reporting nothing."""
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    req = _fake_request("10.0.0.2", xff="10.0.0.1, 10.0.0.2")
+    assert _client_ip(req) == "10.0.0.1"
+
+
+def test_client_ip_malformed_hop_collapses_to_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A single malformed hop anywhere in the chain → don\\'t trust the
+    chain at all. Safer than guessing which entry was real."""
+    import ipaddress
+    import app.core.rate_limit as rl
+    rl._TRUSTED_PROXY_NETS = [ipaddress.ip_network("10.0.0.0/8")]
+    req = _fake_request("10.0.0.2", xff="not-an-ip, 198.51.100.99, 10.0.0.2")
+    assert _client_ip(req) == "10.0.0.2"
+''')
+
+    _write_if_missing(tests / "security" / "test_safe_redirect.py", '''\
+"""Round-4 HIGH-3 regression — the safe-redirect.ts logic is mirrored
+here as a source-level grep. Browser-side unit tests live next to the
+.ts file (when vitest is wired); this test makes sure the helper is
+imported by the two consumers (Login + RequireAuth)."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+
+def _scaffold_root() -> Path:
+    # tests/security/test_safe_redirect.py → repo backend root → parent
+    here = Path(__file__).resolve()
+    for ancestor in here.parents:
+        if (ancestor / "app" / "main.py").exists():
+            return ancestor.parent  # backend's parent = project root
+    raise RuntimeError("Could not locate project root from test file")
+
+
+def _read(*parts: str) -> str:
+    p = _scaffold_root().joinpath("frontend", "src", *parts)
+    if not p.exists():
+        pytest.skip(f"frontend file not present: {p}")
+    return p.read_text(encoding="utf-8")
+
+
+def test_safe_redirect_helper_exists_and_blocks_known_bypasses() -> None:
+    src = _read("lib", "safe-redirect.ts")
+    # Rejection rules the helper MUST encode — each is a real bypass surface.
+    for needle in [
+        "startsWith(\\'//\\')",  # protocol-relative
+        "javascript:",            # javascript: URL
+        "data:",                  # data: URL
+        "vbscript:",              # legacy MSIE
+        "includes(\\'\\\\\\\\\\')",  # backslash confusion
+        "SAFE_RETURN_MAX_LEN",    # length cap
+    ]:
+        assert needle in src, f"safe-redirect.ts missing guard: {needle}"
+
+
+def test_login_uses_safe_return() -> None:
+    src = _read("pages", "Login.tsx")
+    assert "from \\'../lib/safe-redirect\\'" in src
+    assert "safeReturn(params.get(\\'return\\')" in src
+
+
+def test_require_auth_uses_safe_return() -> None:
+    src = _read("components", "RequireAuth.tsx")
+    assert "from \\'../lib/safe-redirect\\'" in src
+    assert "safeReturn(" in src
+''')
+
+    _write_if_missing(tests / "security" / "test_safe_url.py", '''\
+"""SSRF guard regression — app/core/safe_url.assert_safe_url must block
+internal / metadata / non-http targets and accept public ones. Uses literal
+IPs so the test never depends on DNS or the network."""
+from __future__ import annotations
+
+import pytest
+
+from app.core.safe_url import UnsafeURLError, assert_safe_url, is_safe_url
+
+BLOCKED = [
+    "http://169.254.169.254/latest/meta-data/",  # cloud metadata (the big one)
+    "http://127.0.0.1:8000/admin",               # loopback
+    "http://10.0.0.5/internal",                  # RFC1918 private
+    "http://192.168.1.1/",                       # RFC1918 private
+    "http://[::1]/",                             # IPv6 loopback
+    "ftp://example.com/file",                    # disallowed scheme
+    "file:///etc/passwd",                        # disallowed scheme
+    "javascript:alert(1)",                       # disallowed scheme
+    "",                                          # empty
+    "http://",                                   # no host
+]
+
+
+@pytest.mark.parametrize("url", BLOCKED)
+def test_blocks_unsafe(url: str) -> None:
+    assert is_safe_url(url) is False
+    with pytest.raises(UnsafeURLError):
+        assert_safe_url(url)
+
+
+def test_allows_public_literal_ip() -> None:
+    # 8.8.8.8 / 1.1.1.1 are globally routable; literal-IP path avoids DNS.
+    assert assert_safe_url("http://8.8.8.8/path") == "http://8.8.8.8/path"
+    assert is_safe_url("https://1.1.1.1/") is True
+
+
+def test_allowlist_rejects_unlisted_public_host() -> None:
+    with pytest.raises(UnsafeURLError):
+        assert_safe_url("http://8.8.8.8/", allowed_hosts={"1.1.1.1"})
+    # A listed host passes even with the allowlist active.
+    assert assert_safe_url("http://8.8.8.8/", allowed_hosts={"8.8.8.8"})
+
+
+def test_ipv4_mapped_ipv6_metadata_is_blocked() -> None:
+    # ::ffff:169.254.169.254 must unwrap to the link-local v4 and be blocked.
+    assert is_safe_url("http://[::ffff:169.254.169.254]/") is False
+''')
+
+    _write_if_missing(tests / "security" / "test_add_override_self_guard.py", '''\
+"""Round-4 HIGH-4 regression — add_override must reject self-id AND
+reject permissions.* overrides from non-super_admin callers, with audit
+log rows for both denial paths."""
+from __future__ import annotations
+
+import inspect
+
+from app.api.v1 import users as users_module
+
+
+def test_add_override_blocks_self_id() -> None:
+    src = inspect.getsource(users_module.add_override)
+    # The self-guard MUST run before the permission lookup (so a
+    # denied attempt audits the attempt, not a 404).
+    assert "target_user.id == user.id" in src, \\
+        "Round-4 HIGH-4 — add_override must reject self-id"
+    assert "Cannot grant permission overrides on your own account" in src
+    assert "user.override_self_blocked" in src, \\
+        "Round-4 HIGH-4 — self-denial must write a security audit row"
+
+
+def test_add_override_blocks_non_super_admin_priv_management() -> None:
+    src = inspect.getsource(users_module.add_override)
+    assert "permissions." in src
+    assert "SUPER_ADMIN_ROLE not in caller_role_names" in src
+    assert "user.override_priv_escalation_blocked" in src
+    assert "Only super_admin can grant permission overrides" in src
+
+
+def test_add_override_audit_includes_attempted_key() -> None:
+    """Denials must record WHICH permission key was attempted — without
+    this metadata the SOC has no signal on what the attacker was after.
+    """
+    src = inspect.getsource(users_module.add_override)
+    assert "attempted_permission_key" in src
+    assert "attempted_granted" in src
+
+
+def test_add_override_commits_audit_before_raising() -> None:
+    """The audit row must survive the request rollback. The denied
+    paths call db.commit() before HTTPException — verify the pattern is
+    intact so a future refactor that drops the commit is caught here.
+    """
+    src = inspect.getsource(users_module.add_override)
+    assert src.count("await db.commit()") >= 2, \\
+        "Round-4 HIGH-4 — both denial paths must commit the audit row"
+
+
+# ── Round-5 HIGH-2 — expanded deny-list ─────────────────────────────
+
+def test_add_override_deny_list_covers_all_privilege_management_keys() -> None:
+    """Round-5 HIGH-2 — the deny-list must explicitly include every
+    perm whose override is a privilege-escalation primitive. Round-4
+    only blocked permissions.*; that left users.approve, users.delete,
+    admin_settings.update, roles.* etc. as bypass paths."""
+    src = inspect.getsource(users_module.add_override)
+    required_keys = {
+        # Approval-flow bypass — confederate could approve themselves.
+        "users.approve",
+        # Account-management escalation surfaces.
+        "users.delete", "users.deactivate", "users.create",
+        # Settings tampering — redirect notification recipients,
+        # change CORS, flip SSO.
+        "admin_settings.update", "admin_settings.read",
+        # Role-management surfaces — craft super-admin-equivalent roles
+        # or assign roles directly.
+        "roles.create", "roles.update", "roles.delete", "roles.assign",
+        # Destructive metadata changes.
+        "menus.delete",
+        # Direct privilege-management (original Round-4 coverage).
+        "permissions.grant_override", "permissions.revoke_override",
+    }
+    for key in required_keys:
+        assert key in src, \\
+            f"Round-5 HIGH-2 — add_override deny-list missing {key!r}"
+
+
+def test_add_override_uses_explicit_deny_set() -> None:
+    """The deny-list must be a literal set/frozenset in the function
+    body (not constructed by string startswith() — which would miss
+    keys like 'users.approve' that don\\'t share a common prefix)."""
+    src = inspect.getsource(users_module.add_override)
+    assert "_PRIVILEGE_MANAGEMENT_KEYS" in src, \\
+        "Round-5 HIGH-2 — deny-list must be named _PRIVILEGE_MANAGEMENT_KEYS for explicit visibility"
+    assert "in _PRIVILEGE_MANAGEMENT_KEYS" in src
+''')
+
+    _write_if_missing(tests / "security" / "README.md", '''\
+# Security regression tests
+
+These tests guard the HIGH findings closed in the v3.0.6 audit rounds.
+They run as part of `pytest tests/security/` and are deliberately
+DB-free unit tests — fast enough to live on every commit so a refactor
+that accidentally regresses one of the fixes blows up at CI time, not
+in production. `conftest.py` sets the env vars Settings expects, so
+test files can import app modules without per-file boilerplate.
+
+| File | Audit ref | What it locks down |
+|------|-----------|--------------------|
+| `test_rate_limit_wiring.py`             | Round 3 HIGH-1 | `/login`, `/sso/callback`, `/refresh`, approval-token endpoints carry `@limiter.limit` |
+| `test_users_approve_permission.py`      | Round 3 HIGH-2 | `users.approve` seeds + only admin roles hold it by default |
+| `test_patch_user_self_guard.py`         | Round 3 HIGH-2 | `patch_user`/`bulk_approve`/`deactivate_user` cannot be turned on the caller |
+| `test_jwt_jti.py`                       | Round 3 HIGH-3 | Refresh tokens carry a unique `jti` claim |
+| `test_email_template_escape.py`         | Round 3 HIGH-4 | `signup_admin`/`approval_user`/`rejection_user` HTML-escape user input |
+| `test_jwt_secret_validation.py`         | Round 4 HIGH-1 | JWT_SECRET_KEY mandatory + len>=32 + placeholder/entropy rejection |
+| `test_rate_limit_production_storage.py` | Round 4 HIGH-2 + Round 5 HIGH-1 | Production blocks `memory://`; XFF walked **right-to-left** skipping trusted proxies (attacker prepend bypass blocked) |
+| `test_safe_redirect.py`                 | Round 4 HIGH-3 | `lib/safe-redirect.ts` blocks `//`, `javascript:`, `\\\\`, etc.; Login + RequireAuth use it |
+| `test_add_override_self_guard.py`       | Round 4 HIGH-4 + Round 5 HIGH-2 | `add_override` blocks self + full deny-list (`users.approve`, `admin_settings.*`, `users.delete`, `roles.*`, `permissions.*`) for non-super_admin |
+
+Integration-style tests (full HTTP round-trip with TestClient + a real
+sqlite DB) belong under `tests/integration/auth/` — add them as the
+project grows.
+''')
+
+
+def _scaffold_frontend(cfg: ProjectConfig, root: Path) -> None:
+    f = root / "frontend"
+    slug = cfg.project_slug
+    app_name = _branded_app_name(cfg.project_display_name)
+    # Opt-in Database Connections + Query Sandbox module — see _scaffold_backend.
+    feature_db_connections = getattr(cfg, "feature_db_connections", False)
+
+    _write_if_missing(f / "package.json", f"""\
+{{
+  "name": "{slug}-frontend",
+  "version": "0.1.0",
+  "description": "{cfg.project_display_name}",
+  "scripts": {{
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "format:check": "prettier --check src"
+  }},
+  "dependencies": {{
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@fontsource/prompt": "^5.0.0",
+    "@fontsource/ibm-plex-sans-thai": "^5.0.0",
+    "react-router-dom": "^6.26.2",
+    "@tanstack/react-query": "^5.56.2",
+    "axios": "^1.7.7",
+    "i18next": "^23.15.1",
+    "react-i18next": "^15.0.2",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.2",
+    "lucide-react": "^0.446.0",
+    "zustand": "^4.5.5",
+    "react-hook-form": "^7.53.0",
+    "zod": "^3.23.8",
+    "@hookform/resolvers": "^3.9.0",
+    "@azure/msal-browser": "^3.20.0"
+  }},
+  "devDependencies": {{
+    "@types/react": "^18.3.9",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6",
+    "tailwindcss": "^3.4.12",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "eslint": "^9.11.1",
+    "@eslint/js": "^9.11.1",
+    "typescript-eslint": "^8.7.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^5.1.0-rc.0",
+    "globals": "^15.9.0",
+    "vitest": "^2.1.1",
+    "jsdom": "^25.0.1",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/dom": "^10.4.0",
+    "prettier": "^3.3.3"
+  }}
+}}
+""")
+
+    _write_if_missing(f / ".env", f"""\
+# frontend/.env — generated by setup.py
+VITE_APP_NAME={app_name}
+VITE_API_BASE_URL=http://localhost:8000
+VITE_DEFAULT_LANGUAGE={cfg.default_language}
+# AUTH_SCOPE mirror — compile-time ceiling for /settings/auth toggles.
+# Values: both | internal_only | external_only (must match backend AUTH_SCOPE).
+VITE_AUTH_SCOPE={cfg.auth_scope}
+VITE_AZURE_AD_TENANT_ID=
+VITE_AZURE_AD_CLIENT_ID=
+VITE_AZURE_AD_REDIRECT_URI=http://localhost:5173/auth/callback
+""")
+
+    _write_if_missing(f / ".env.example", """\
+VITE_APP_NAME=Chia Tai – <project-display-name>
+VITE_API_BASE_URL=http://localhost:8000
+VITE_DEFAULT_LANGUAGE=th
+# Values: both | internal_only | external_only (mirrors backend AUTH_SCOPE)
+VITE_AUTH_SCOPE=both
+VITE_AZURE_AD_TENANT_ID=
+VITE_AZURE_AD_CLIENT_ID=
+VITE_AZURE_AD_REDIRECT_URI=http://localhost:5173/auth/callback
+""")
+
+    _write_if_missing(f / "Dockerfile", """\
+# syntax=docker/dockerfile:1.7
+FROM node:20-bookworm-slim AS builder
+WORKDIR /build
+COPY package*.json ./
+RUN npm ci
+COPY . .
+ARG VITE_APP_NAME VITE_API_BASE_URL VITE_AZURE_AD_TENANT_ID VITE_AZURE_AD_CLIENT_ID VITE_AZURE_AD_REDIRECT_URI VITE_DEFAULT_LANGUAGE=th
+ENV VITE_APP_NAME=$VITE_APP_NAME VITE_API_BASE_URL=$VITE_API_BASE_URL VITE_AZURE_AD_TENANT_ID=$VITE_AZURE_AD_TENANT_ID VITE_AZURE_AD_CLIENT_ID=$VITE_AZURE_AD_CLIENT_ID VITE_AZURE_AD_REDIRECT_URI=$VITE_AZURE_AD_REDIRECT_URI VITE_DEFAULT_LANGUAGE=$VITE_DEFAULT_LANGUAGE
+RUN npm run build
+
+# nginxinc/nginx-unprivileged ships a non-root nginx that listens on 8080
+# by default — no USER directive needed, no root master process (audit #6).
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /build/dist /usr/share/nginx/html
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -q --spider http://localhost:8080/health || exit 1
+CMD ["nginx", "-g", "daemon off;"]
+""")
+
+    _write_if_missing(f / "nginx.conf", """\
+server {
+    listen 8080;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Security headers (audit finding #8).
+    # CSP: SPA-friendly defaults — 'unsafe-inline' on style-src lets MUI /
+    #   styled-components / Tailwind JIT inject styles; tighten per-app
+    #   when you can. connect-src 'self' assumes API is same-origin via
+    #   reverse proxy; add explicit https://api.example.com if it isn't.
+    # HSTS: 1 year + includeSubDomains; safe behind TLS-terminating proxy.
+    #   If the proxy already sets HSTS, remove this line to avoid double-set.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    location / { try_files $uri $uri/ /index.html; }
+    location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; }
+    location /health { return 200 "ok\\n"; add_header Content-Type text/plain; }
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript;
+}
+""")
+
+    _write_if_missing(f / "tsconfig.json", """\
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext", "moduleResolution": "bundler",
+    "jsx": "react-jsx", "strict": true,
+    "noEmit": true,
+    "noUnusedLocals": true, "noUnusedParameters": true,
+    "skipLibCheck": true, "isolatedModules": true,
+    "esModuleInterop": true, "resolveJsonModule": true,
+    "baseUrl": ".", "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src"]
+}
+""")
+
+    _write_if_missing(f / "vite.config.ts", """\
+import path from 'node:path';
+import { defineConfig, loadEnv } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), 'VITE_');
+  return {
+    plugins: [react()],
+    resolve: { alias: { '@': path.resolve(__dirname, './src') } },
+    server: {
+      port: 5173,
+      // strictPort: the whole stack pins the dev origin to :5173 (backend
+      // API_CORS_ORIGINS, Azure redirect URI, AUTH_FRONTEND_BASE_URL). If
+      // 5173 is busy, fail loudly here instead of silently drifting to 5174
+      // and dying on a confusing CORS preflight 400.
+      strictPort: true,
+      proxy: { '/api': { target: env.VITE_API_BASE_URL || 'http://localhost:8000', changeOrigin: true } },
+    },
+  };
+});
+""")
+
+    # Vitest config is kept separate from vite.config.ts on purpose: tests
+    # need jsdom + the test setup, but must NOT inherit the dev server /
+    # proxy / strictPort config. tsconfig `include: ["src"]` doesn't cover
+    # this file, so it stays out of the app typecheck.
+    _write_if_missing(f / "vitest.config.ts", """\
+/// <reference types="vitest/config" />
+import path from 'node:path';
+import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: { alias: { '@': path.resolve(__dirname, './src') } },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+  },
+});
+""")
+
+    # Test setup — jsdom lacks matchMedia, which any responsive component
+    # (e.g. the Sidebar's desktop/mobile switch) calls. Default to desktop;
+    # a test that needs the mobile branch overrides window.matchMedia itself.
+    _write_if_missing(f / "src" / "test" / "setup.ts", """\
+import { afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
+
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
+afterEach(() => cleanup());
+""")
+
+    src = f / "src"
+    for folder in [
+        "api", "components", "components/Layout", "features", "hooks",
+        "i18n/locales", "pages", "stores", "lib", "test", "types",
+    ]:
+        (src / folder).mkdir(parents=True, exist_ok=True)
+
+    # Vite client types — without this, `import.meta.env.VITE_*` is a TS error
+    # under `npm run typecheck`. Build still works because Vite inlines the
+    # value at bundle time, but tsc / IDE intellisense both complain.
+    _write_if_missing(src / "vite-env.d.ts", """\
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_API_BASE_URL?: string;
+  readonly VITE_DEFAULT_LANGUAGE?: string;
+  readonly VITE_AUTH_SCOPE?: 'both' | 'internal_only' | 'external_only';
+  readonly VITE_APP_NAME?: string;
+  readonly VITE_AZURE_AD_TENANT_ID?: string;
+  readonly VITE_AZURE_AD_CLIENT_ID?: string;
+  readonly VITE_AZURE_AD_REDIRECT_URI?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+""")
+
+    _write_if_missing(src / "lib" / "queryClient.ts", """\
+/**
+ * Single shared QueryClient instance.
+ *
+ * Lives in its own module (not inline in main.tsx) so non-React code —
+ * notably the auth store's login/logout actions — can import it and clear
+ * the cache on a session change. Without that, React Query would hand the
+ * next user the previous user's cached menus / list data until a hard
+ * refresh.
+ */
+import { QueryClient } from '@tanstack/react-query';
+
+export const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 60_000, retry: 1 } },
+});
+""")
+
+    _write_if_missing(src / "main.tsx", """\
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import { QueryClientProvider } from '@tanstack/react-query';
+import App from './App';
+import { queryClient } from './lib/queryClient';
+import './i18n';
+// Self-hosted brand fonts (bundled by Vite — no runtime CDN, works offline,
+// satisfies the nginx CSP font-src 'self'). Prompt = display/headings (CT
+// brand); IBM Plex Sans Thai = body/UI. Each weight CSS carries the Thai +
+// Latin subsets via unicode-range, so Thai renders identically on every OS.
+import '@fontsource/prompt/500.css';
+import '@fontsource/prompt/600.css';
+import '@fontsource/prompt/700.css';
+import '@fontsource/ibm-plex-sans-thai/400.css';
+import '@fontsource/ibm-plex-sans-thai/500.css';
+import '@fontsource/ibm-plex-sans-thai/600.css';
+import '@fontsource/ibm-plex-sans-thai/700.css';
+import './index.css';
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter><App /></BrowserRouter>
+    </QueryClientProvider>
+  </StrictMode>,
+);
+""")
+
+    _write_if_missing(src / "index.css", """\
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * CT Brand theme tokens (v3.0.4 — palette aligned with executive guide).
+ *
+ *   Primary       : Chia Tai green       #114B33
+ *   Accent        : Chia Tai gold        #B29530
+ *   Surface light : #e2e5e5  (alternating rows, secondary fills)
+ *   Subtext line  : #b4b8c0  (border reference; text uses higher contrast)
+ *   Info / chart  : #88bfe8  (info bg, primary chart series)
+ *   Warm accent   : #f9e6bc  (callout highlights — paired with gold)
+ *   Warning       : #e28f38  (amber alerts)
+ *   Success       : #439f46  (positive indicators)
+ *   Chart deep    : #003878  (secondary chart series — paired with #88bfe8)
+ *
+ * HSL triplets (not hex) so Tailwind opacity modifiers work
+ *   e.g. bg-primary/50, text-success/80.
+ *
+ * Dark mode = class strategy. Add class="dark" to <html> (or toggle via
+ * a ThemeProvider) to activate. See docs/frontend.md.
+ */
+@layer base {
+  :root {
+    /* Brand */
+    --primary: 154 63% 18%;             /* CT green #114B33 */
+    --primary-foreground: 0 0% 100%;
+    --accent: 47 58% 44%;               /* CT gold #B29530 */
+    --accent-foreground: 221 39% 11%;   /* dark text on gold fill — white is 2.9:1 (fails AA) */
+    --accent-readable: 47 61% 31%;       /* dark gold for text on light surfaces */
+    --accent-warm: 41 86% 86%;          /* warm cream #f9e6bc — callout bg */
+    --accent-warm-foreground: 154 63% 18%;
+    --ring: 154 63% 18%;
+
+    /* Surfaces — slightly tinted page bg so cards (still pure white) stand out
+       instead of dissolving into a sea of white. */
+    --background: 150 18% 96%;          /* very subtle green-cream */
+    --foreground: 221 39% 11%;          /* slate-900-ish */
+    --card: 0 0% 100%;
+    --card-foreground: 221 39% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 221 39% 11%;
+
+    /* Secondary / muted neutrals — cool grey per brand palette */
+    --secondary: 180 4% 90%;            /* #e2e5e5 alternating rows */
+    --secondary-foreground: 221 39% 11%;
+    --muted: 180 5% 93%;                /* slightly lighter than secondary */
+    --muted-foreground: 220 10% 38%;    /* readable secondary text on light surfaces */
+
+    /* Lines */
+    --border: 220 11% 85%;              /* #cfd1d6 — softer than #b4b8c0 raw */
+    --input: 220 11% 85%;
+
+    /* Semantic */
+    --destructive: 0 72% 51%;           /* red-600 */
+    --destructive-foreground: 0 0% 100%;
+    --success: 122 39% 45%;             /* #439f46 */
+    --success-foreground: 221 39% 11%;  /* dark text on success fill — white is 3.3:1 (fails AA) */
+    --success-readable: 122 45% 30%;
+    --warning: 28 75% 55%;              /* #e28f38 */
+    --warning-foreground: 221 39% 11%;  /* dark text on warning fill — white is 2.7:1 (fails AA) */
+    --warning-readable: 28 80% 32%;
+    --info: 207 70% 72%;                /* #88bfe8 */
+    --info-foreground: 221 39% 11%;
+
+    /* Chart series.
+       Two-tone pair for dual-series trends: --chart-blue + --chart-blue-deep.
+       Categorical palette --chart-1..8 for 3+ series: assign in order 1→8,
+       never skip. Hues alternate warm/cool for colorblind separability and
+       every value passes WCAG 1.4.11 (>=3:1 vs card/background) in its mode.
+       Status-meaning charts (good/bad) use --success/--warning/--destructive
+       instead; series must also carry a label/legend (WCAG 1.4.1 — never
+       color alone). */
+    --chart-blue: 207 70% 72%;          /* #88bfe8 */
+    --chart-blue-deep: 213 100% 24%;    /* #003878 */
+    --chart-1: 153 45% 30%;             /* green   #2a6f50 */
+    --chart-2: 213 100% 24%;            /* blue    #003878 (= chart-blue-deep) */
+    --chart-3: 40 70% 35%;              /* amber   #986e1b */
+    --chart-4: 0 65% 42%;               /* rose    #b12525 */
+    --chart-5: 270 40% 45%;             /* purple  #7345a1 */
+    --chart-6: 192 70% 30%;             /* teal    #176d82 */
+    --chart-7: 330 55% 42%;             /* magenta #a6306b */
+    --chart-8: 220 10% 40%;             /* slate   #5c6370 */
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    /* Brand — Material-3 dark pattern: light fill + dark on-color text.
+       --primary serves two roles (button fill AND text on dark bg); a mid
+       green can't pass AA for both, so the fill goes light (text on dark
+       bg 8.9:1) and on-primary goes deep green (6.6:1 on the fill). */
+    --primary: 153 50% 55%;             /* CT green lifted for dark mode */
+    --primary-foreground: 154 63% 12%;  /* deep CT green on light-green fill */
+    --accent: 46 56% 52%;               /* CT gold hover */
+    --accent-foreground: 221 39% 11%;
+    --accent-readable: 46 62% 72%;       /* light gold for text on dark surfaces */
+    --accent-warm: 41 35% 28%;          /* warm cream — desaturated for dark mode */
+    --accent-warm-foreground: 41 86% 86%;
+    --ring: 153 50% 55%;
+
+    --background: 216 28% 7%;           /* gh-dark #0D1117 */
+    --foreground: 208 35% 93%;          /* #E6EDF3 */
+    --card: 215 21% 11%;
+    --card-foreground: 208 35% 93%;
+    --popover: 215 21% 11%;
+    --popover-foreground: 208 35% 93%;
+
+    --secondary: 215 14% 14%;
+    --secondary-foreground: 208 35% 93%;
+    --muted: 215 21% 11%;
+    --muted-foreground: 215 14% 68%;
+
+    --border: 215 14% 20%;
+    --input: 215 14% 20%;
+
+    --destructive: 0 84% 65%;           /* lifted so dark text passes AA on the fill */
+    --destructive-foreground: 221 39% 11%;
+    --success: 122 50% 55%;             /* #439f46 lifted for contrast */
+    --success-foreground: 221 39% 11%;  /* dark text — white on this fill is 2.2:1 */
+    --success-readable: 122 50% 65%;
+    --warning: 28 80% 62%;               /* #e28f38 lifted */
+    --warning-foreground: 221 39% 11%;
+    --warning-readable: 35 90% 70%;
+    --info: 207 70% 72%;
+    --info-foreground: 221 39% 11%;
+
+    --chart-blue: 207 70% 72%;
+    --chart-blue-deep: 213 60% 55%;     /* deep blue lightened for dark mode */
+    /* Categorical palette lifted for dark surfaces — same hue order as light */
+    --chart-1: 153 50% 60%;             /* green   #66cc9e */
+    --chart-2: 207 70% 72%;             /* blue    #86bdea (= chart-blue) */
+    --chart-3: 42 70% 60%;              /* amber   #e0b652 */
+    --chart-4: 0 75% 70%;               /* rose    #ec7979 */
+    --chart-5: 270 50% 72%;             /* purple  #b894db */
+    --chart-6: 192 60% 60%;             /* teal    #5cbed6 */
+    --chart-7: 330 60% 72%;             /* magenta #e28db8 */
+    --chart-8: 220 12% 65%;             /* slate   #9ba2b0 */
+  }
+}
+
+/* Mobile-first base styles */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+    color-scheme: light dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased font-sans;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    font-size: 1rem;
+    line-height: 1.65;
+  }
+
+  /* Keep editable controls comfortable to read and prevent iOS Safari from
+     zooming the viewport when a field receives focus. */
+  input, select, textarea {
+    font-size: 1rem !important;
+    line-height: 1.6;
+    min-height: 2.75rem;
+  }
+
+  /* Headings carry the display face (Prompt); body inherits font-sans
+     (IBM Plex Sans Thai). Keeps a clear type voice without per-element
+     classes. Override with `font-sans` on a heading when needed. */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  /* Prevent horizontal scroll on mobile */
+  body, #root {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+}
+""")
+
+    # index.html with proper viewport meta tag
+    _write_if_missing(f / "index.html", f"""\
+<!doctype html>
+<html lang="{cfg.default_language}">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{cfg.project_display_name}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+""")
+
+    _write_if_missing(f / "tailwind.config.ts", """\
+import type { Config } from 'tailwindcss';
+
+/*
+ * Tokens live in src/index.css as HSL triplets — Tailwind references
+ * them via the hsl() + CSS-variable pattern so opacity modifiers
+ * (e.g. bg-primary/50) work. To rebrand: edit index.css only.
+ * Do not hardcode hex here.
+ */
+export default {
+  darkMode: ['class'],
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    // Mobile-first breakpoints (Tailwind default)
+    // sm: 640px, md: 768px, lg: 1024px, xl: 1280px, 2xl: 1536px
+    extend: {
+      colors: {
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        primary: {
+          DEFAULT: 'hsl(var(--primary))',
+          foreground: 'hsl(var(--primary-foreground))',
+        },
+        secondary: {
+          DEFAULT: 'hsl(var(--secondary))',
+          foreground: 'hsl(var(--secondary-foreground))',
+        },
+        accent: {
+          DEFAULT: 'hsl(var(--accent))',
+          foreground: 'hsl(var(--accent-foreground))',
+          readable: 'hsl(var(--accent-readable))',
+          warm: 'hsl(var(--accent-warm))',
+          'warm-foreground': 'hsl(var(--accent-warm-foreground))',
+        },
+        muted: {
+          DEFAULT: 'hsl(var(--muted))',
+          foreground: 'hsl(var(--muted-foreground))',
+        },
+        card: {
+          DEFAULT: 'hsl(var(--card))',
+          foreground: 'hsl(var(--card-foreground))',
+        },
+        popover: {
+          DEFAULT: 'hsl(var(--popover))',
+          foreground: 'hsl(var(--popover-foreground))',
+        },
+        destructive: {
+          DEFAULT: 'hsl(var(--destructive))',
+          foreground: 'hsl(var(--destructive-foreground))',
+        },
+        success: {
+          DEFAULT: 'hsl(var(--success))',
+          foreground: 'hsl(var(--success-foreground))',
+          readable: 'hsl(var(--success-readable))',
+        },
+        warning: {
+          DEFAULT: 'hsl(var(--warning))',
+          foreground: 'hsl(var(--warning-foreground))',
+          readable: 'hsl(var(--warning-readable))',
+        },
+        info: {
+          DEFAULT: 'hsl(var(--info))',
+          foreground: 'hsl(var(--info-foreground))',
+        },
+        chart: {
+          blue: 'hsl(var(--chart-blue))',
+          'blue-deep': 'hsl(var(--chart-blue-deep))',
+          '1': 'hsl(var(--chart-1))',
+          '2': 'hsl(var(--chart-2))',
+          '3': 'hsl(var(--chart-3))',
+          '4': 'hsl(var(--chart-4))',
+          '5': 'hsl(var(--chart-5))',
+          '6': 'hsl(var(--chart-6))',
+          '7': 'hsl(var(--chart-7))',
+          '8': 'hsl(var(--chart-8))',
+        },
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+      // Brand type — self-hosted via @fontsource (imported in main.tsx).
+      // `font-sans` (default body/UI) = IBM Plex Sans Thai: crisp at small
+      // sizes for tables/forms. `font-display` (headings) = Prompt: the
+      // distinctive CT-brand voice. Thai-capable fallbacks first, then
+      // system, so text never falls back to a tofu box.
+      fontFamily: {
+        sans: ['"IBM Plex Sans Thai"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        display: ['Prompt', '"IBM Plex Sans Thai"', 'ui-sans-serif', 'sans-serif'],
+      },
+      fontSize: {
+        xs: ['0.8125rem', { lineHeight: '1.6' }],
+        sm: ['0.9375rem', { lineHeight: '1.6' }],
+        base: ['1rem', { lineHeight: '1.65' }],
+        lg: ['1.125rem', { lineHeight: '1.55' }],
+        xl: ['1.3125rem', { lineHeight: '1.45' }],
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config;
+""")
+
+    _write_if_missing(f / "postcss.config.js", """\
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+""")
+
+    # ESLint v9 flat config (eslint.config.js — replaces .eslintrc.* of v8)
+    _write_if_missing(f / "eslint.config.js", """\
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import react from 'eslint-plugin-react';
+import reactHooks from 'eslint-plugin-react-hooks';
+import globals from 'globals';
+
+export default [
+  // Ignore build outputs and generated files
+  {
+    ignores: ['dist/', 'build/', 'node_modules/', 'coverage/'],
+  },
+
+  // Base JS recommendations
+  js.configs.recommended,
+
+  // TypeScript recommendations
+  ...tseslint.configs.recommended,
+
+  // React + React Hooks
+  {
+    files: ['**/*.{ts,tsx,js,jsx}'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        ...globals.browser,
+        ...globals.es2024,
+      },
+      parserOptions: {
+        ecmaFeatures: { jsx: true },
+      },
+    },
+    plugins: {
+      react,
+      'react-hooks': reactHooks,
+    },
+    settings: {
+      react: { version: 'detect' },
+    },
+    rules: {
+      // React 18+ doesn't need React in scope
+      'react/react-in-jsx-scope': 'off',
+      'react/prop-types': 'off',  // TypeScript handles this
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+
+      // TypeScript handles unused-vars better
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+    },
+  },
+];
+""")
+
+    # Project routes container — App.tsx renders {MODULE_ROUTES} INSIDE the
+    # protected route tree (under <RequireAuth/> + <AppLayout/>).
+    # Add your project's <Route> elements to MODULE_ROUTES as the app grows;
+    # they will inherit the auth guard + standard layout for free.
+    _write_if_missing(src / "routes.tsx", """\
+/**
+ * Additional protected project routes.
+ *
+ * App.tsx mounts these inside the <RequireAuth/> + <AppLayout/> tree, so
+ * any <Route> pushed here is auth-gated and receives the standard
+ * top-bar + sidebar shell. Public routes (login, signup, etc.) should
+ * be added directly in App.tsx, NOT here.
+ */
+import type { ReactElement } from 'react';
+
+export const MODULE_ROUTES: ReactElement[] = [];
+""")
+
+    # App.tsx — top-level route tree.
+    #
+    # Layout contract:
+    #   /login          : public, no shell
+    #   everything else : <RequireAuth/> -> <AppLayout/> (TopBar + Sidebar)
+    #                                   -> <Outlet/>
+    #
+    # MODULE_ROUTES (from routes.tsx) is spread inside the protected tree
+    # so new feature routes inherit the guard + layout for free.
+    _write_if_missing(src / "App.tsx", """\
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { AuthBootstrap } from './components/AuthBootstrap';
+import { RequireAuth } from './components/RequireAuth';
+import { RequirePermission } from './components/RequirePermission';
+import { AppLayout } from './components/Layout/AppLayout';
+import { Login } from './pages/Login';
+import { AuthCallback } from './pages/AuthCallback';
+import { Approval } from './pages/Approval';
+import { Dashboard } from './pages/Dashboard';
+import { SettingsIndex } from './pages/SettingsIndex';
+import { Users as SettingsUsers } from './pages/settings/Users';
+import { Roles as SettingsRoles } from './pages/settings/Roles';
+import { Permissions as SettingsPermissions } from './pages/settings/Permissions';
+import { Menus as SettingsMenus } from './pages/settings/Menus';
+import { AuthSettings as SettingsAuth } from './pages/settings/AuthSettings';
+import { SystemLogs as SettingsSystemLogs } from './pages/settings/SystemLogs';
+import { ActivityLogs as SettingsActivityLogs } from './pages/settings/ActivityLogs';
+import { MODULE_ROUTES } from './routes';
+
+export default function App() {
+  return (
+    <AuthBootstrap>
+      <div className="min-h-screen bg-background text-foreground">
+        <Routes>
+          {/* Public */}
+          <Route path="/login" element={<Login />} />
+          {/* OAuth landing — Azure AD redirects here with code + state */}
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          {/* Approval token landing — public, the URL token is the capability */}
+          <Route path="/approve/:token" element={<Approval />} />
+
+          {/* Protected */}
+          <Route
+            element={
+              <RequireAuth>
+                <AppLayout />
+              </RequireAuth>
+            }
+          >
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/settings" element={<SettingsIndex />} />
+            <Route
+              path="/settings/users"
+              element={
+                <RequirePermission perm="users.read">
+                  <SettingsUsers />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/roles"
+              element={
+                <RequirePermission perm="roles.read">
+                  <SettingsRoles />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/permissions"
+              element={
+                <RequirePermission perm="roles.read">
+                  <SettingsPermissions />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/menus"
+              element={
+                <RequirePermission perm="menus.read">
+                  <SettingsMenus />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/auth"
+              element={
+                <RequirePermission perm="admin_settings.read">
+                  <SettingsAuth />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/system-logs"
+              element={
+                <RequirePermission perm="system_logs.read">
+                  <SettingsSystemLogs />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/activity-logs"
+              element={
+                <RequirePermission perm="activity_logs.read">
+                  <SettingsActivityLogs />
+                </RequirePermission>
+              }
+            />
+            {MODULE_ROUTES}
+            <Route path="*" element={<NotFound />} />
+          </Route>
+        </Routes>
+      </div>
+    </AuthBootstrap>
+  );
+}
+
+function NotFound() {
+  return (
+    <main className="flex min-h-[50vh] items-center justify-center px-4">
+      <p className="text-muted-foreground">404 — Page not found</p>
+    </main>
+  );
+}
+""")
+
+    _write_if_missing(src / "i18n" / "index.ts", f"""\
+import i18n from 'i18next';
+import {{ initReactI18next }} from 'react-i18next';
+import th from './locales/th.json';
+import en from './locales/en.json';
+
+i18n.use(initReactI18next).init({{
+  resources: {{ th: {{ translation: th }}, en: {{ translation: en }} }},
+  fallbackLng: '{cfg.default_language}',
+  interpolation: {{ escapeValue: false }},
+}});
+
+export default i18n;
+""")
+
+    # i18n bundles — keep Thai-first; English mirrors keys exactly so
+    # missing-key warnings never fire when a user flips the language.
+    # The keys below are referenced by Login / AppLayout / Settings pages;
+    # adding new copy ALWAYS goes here, never inline in JSX.
+    _write_if_missing(src / "i18n" / "locales" / "th.json", """\
+{
+  "common": {
+    "save": "บันทึก",
+    "cancel": "ยกเลิก",
+    "loading": "กำลังโหลด...",
+    "edit": "แก้ไข",
+    "delete": "ลบ",
+    "actions": "การจัดการ",
+    "search": "ค้นหา",
+    "noResults": "ไม่พบข้อมูล",
+    "yes": "ใช่",
+    "no": "ไม่",
+    "required": "กรุณากรอกข้อมูล",
+    "previous": "ก่อนหน้า",
+    "next": "ถัดไป",
+    "forbidden": "ไม่มีสิทธิ์เข้าถึง",
+    "missingPermission": "คุณไม่มีสิทธิ์ `{{perm}}` สำหรับหน้านี้",
+    "language": "ภาษา",
+    "refresh": "รีเฟรช",
+    "lightMode": "โหมดสว่าง",
+    "darkMode": "โหมดมืด",
+    "collapseSidebar": "ย่อแถบเมนู",
+    "expandSidebar": "ขยายแถบเมนู",
+    "openMenu": "เปิดเมนู",
+    "closeMenu": "ปิดเมนู",
+    "exportCsv": "Export CSV",
+    "dateFrom": "ตั้งแต่",
+    "dateTo": "ถึง"
+  },
+  "auth": {
+    "login": {
+      "title": "เข้าสู่ระบบ",
+      "email": "อีเมล",
+      "password": "รหัสผ่าน",
+      "showPassword": "แสดงรหัสผ่าน",
+      "hidePassword": "ซ่อนรหัสผ่าน",
+      "submit": "เข้าสู่ระบบ",
+      "sso": "เข้าสู่ระบบด้วย Azure AD",
+      "or": "หรือ",
+      "notApproved": "บัญชีของคุณรอการอนุมัติจากผู้ดูแลระบบ",
+      "bothDisabled": "ระบบเข้าสู่ระบบถูกปิดอยู่ — โปรดติดต่อผู้ดูแลระบบ",
+      "invalidCredentials": "อีเมลหรือรหัสผ่านไม่ถูกต้อง",
+      "emailRequired": "กรุณากรอกอีเมล",
+      "emailInvalid": "รูปแบบอีเมลไม่ถูกต้อง",
+      "passwordRequired": "กรุณากรอกรหัสผ่าน"
+    },
+    "approval": {
+      "title": "ขออนุมัติการเข้าใช้งาน",
+      "requestedAt": "ร้องขอเมื่อ",
+      "expiresAt": "หมดอายุ",
+      "approve": "อนุมัติ",
+      "reject": "ปฏิเสธ",
+      "linkSingleUse": "ลิงก์ใช้ได้ครั้งเดียว — ถ้ามีผู้ดูแลท่านอื่นดำเนินการไปก่อน ลิงก์จะหมดอายุอัตโนมัติ",
+      "linkExpired": "ลิงก์นี้หมดอายุแล้ว — กรุณาให้ผู้ใช้สมัครใหม่ หรือเข้าระบบจัดการผู้ใช้แทน",
+      "linkConsumed": "ผู้ดูแลท่านอื่นดำเนินการไปก่อนแล้ว ลิงก์นี้ไม่สามารถใช้งานได้",
+      "linkUnavailable": "ลิงก์ใช้งานไม่ได้",
+      "doneApproved": "อนุมัติสำเร็จ",
+      "doneRejected": "ปฏิเสธสำเร็จ",
+      "doneApprovedHint": "สามารถเข้าใช้งานได้แล้ว",
+      "doneRejectedHint": "ผู้ใช้ได้รับ email แจ้งผลแล้วเรียบร้อย",
+      "backHome": "กลับสู่หน้าหลัก",
+      "submitError": "ส่งคำขอไม่สำเร็จ — โปรดลองใหม่",
+      "anonymousName": "ผู้ใช้"
+    },
+    "logout": "ออกจากระบบ"
+  },
+  "layout": {
+    "settings": "การตั้งค่า",
+    "dashboard": "แดชบอร์ด",
+    "profile": "โปรไฟล์"
+  },
+  "settings": {
+    "title": "การตั้งค่า",
+    "comingSoon": "กำลังพัฒนา (Phase C)",
+    "users": {
+      "title": "ผู้ใช้งาน",
+      "description": "จัดการบัญชีผู้ใช้และสิทธิ์การเข้าถึง",
+      "new": "เพิ่มผู้ใช้",
+      "edit": "แก้ไขผู้ใช้",
+      "deactivate": "ปิดใช้งาน",
+      "searchPlaceholder": "ค้นหาจากอีเมล",
+      "confirmDeactivate": "ยืนยันปิดใช้งาน {{email}}?",
+      "tabs": {
+        "profile": "โปรไฟล์",
+        "overrides": "สิทธิ์เพิ่มเติม"
+      },
+      "fields": {
+        "email": "อีเมล",
+        "fullName": "ชื่อ-สกุล",
+        "authProvider": "ช่องทาง",
+        "active": "ใช้งาน",
+        "approved": "อนุมัติ",
+        "lastLogin": "เข้าสู่ระบบล่าสุด",
+        "roles": "บทบาท",
+        "password": "รหัสผ่าน"
+      },
+      "overrides": {
+        "help": "เพิ่ม/ลบสิทธิ์เฉพาะรายคน (เพิ่มเติมจาก role) — คีย์ระดับระบบ (จัดการผู้ใช้/role/สิทธิ์/ตั้งค่า) ให้ได้เฉพาะ super_admin; ผู้ถูกแก้สิทธิ์จะเห็นผลเมื่อสลับกลับมาที่แอปหรือรีเฟรชหน้า",
+        "grant": "ให้สิทธิ์",
+        "revoke": "ถอนสิทธิ์",
+        "noPermission": "คุณไม่มีสิทธิ์แก้สิทธิ์เพิ่มเติม (ต้องมี permissions.grant_override)",
+        "error": "บันทึกไม่สำเร็จ"
+      },
+      "approve": "อนุมัติ",
+      "unapprove": "ยกเลิกอนุมัติ",
+      "approveAllVisible": "อนุมัติทั้งหมดในหน้านี้",
+      "confirmApproveAll": "อนุมัติผู้ใช้ที่แสดง {{count}} คน?"
+    },
+    "roles": {
+      "title": "บทบาท (Roles)",
+      "description": "กำหนดสิทธิ์เริ่มต้นของแต่ละบทบาท",
+      "new": "เพิ่ม Role",
+      "edit": "แก้ไข Role",
+      "confirmDelete": "ลบ role {{name}}?",
+      "namePrefixMismatch": "ชื่อ role ต้องขึ้นต้นตรงกับ provider scope (เช่น internal:* / external:*)",
+      "fields": {
+        "name": "ชื่อ (key)",
+        "displayName": "ชื่อแสดง",
+        "providerScope": "Provider",
+        "system": "System?",
+        "description": "คำอธิบาย",
+        "permissions": "สิทธิ์"
+      }
+    },
+    "permissions": {
+      "title": "สิทธิ์ (Permissions)",
+      "description": "Catalog ของสิทธิ์ที่ระบบรู้จัก (read-only)",
+      "menu": "เมนู"
+    },
+    "menus": {
+      "title": "เมนู",
+      "description": "ปรับแต่งเมนูที่แสดงในแถบด้านข้าง",
+      "new": "เพิ่มเมนู",
+      "edit": "แก้ไขเมนู",
+      "noParent": "— ไม่มี parent (root) —",
+      "moveUp": "เลื่อนขึ้น",
+      "moveDown": "เลื่อนลง",
+      "iconHelp": "ใส่ชื่อ Lucide icon (เช่น LayoutDashboard)",
+      "keyFormat": "ใช้ตัวพิมพ์เล็ก a-z 0-9 _ เริ่มด้วยตัวอักษร",
+      "confirmDelete": "ลบเมนู {{key}}?",
+      "fields": {
+        "key": "Key",
+        "labelTh": "ชื่อ (ไทย)",
+        "labelEn": "ชื่อ (อังกฤษ)",
+        "icon": "ไอคอน",
+        "path": "Path",
+        "parent": "Parent",
+        "permission": "สิทธิ์ที่ต้องมี",
+        "order": "ลำดับ"
+      }
+    },
+    "auth": {
+      "title": "การเข้าสู่ระบบ",
+      "description": "เปิด/ปิด local login และ SSO",
+      "lockedByScope": "ถูกล็อกโดย AUTH_SCOPE (compile-time)",
+      "signIn": {
+        "title": "ช่องทางเข้าสู่ระบบ",
+        "local": "Local (email/password)",
+        "sso": "SSO (Azure AD)"
+      },
+      "signup": {
+        "title": "การสมัครใช้งานเอง",
+        "enabled": "เปิดให้สมัครเอง",
+        "defaultRole": "Role เริ่มต้นเมื่อสมัคร",
+        "requiresLocal": "ต้องเปิด local login ก่อน"
+      },
+      "approval": {
+        "title": "การอนุมัติผู้ใช้ใหม่",
+        "autoApprove": "อนุมัติอัตโนมัติเมื่อสมัคร/login ครั้งแรก",
+        "help": "ปิดไว้ = ผู้ใช้ใหม่ต้องรอ admin อนุมัติก่อน login ได้"
+      }
+    },
+    "notifications": {
+      "title": "การแจ้งเตือนทาง Email",
+      "emailEnabled": "ส่ง email เมื่อมี user สมัครใหม่ / ได้รับการอนุมัติ",
+      "help": "เมื่อเปิด: ผู้ดูแลรับ email เมื่อมี user สมัคร และผู้ใช้รับ email เมื่อ admin อนุมัติ (ส่งผ่าน Microsoft 365 — ต้องตั้ง M365_* ใน backend/.env ก่อน)",
+      "adminRecipients": "Email ของผู้ดูแลที่จะรับการแจ้งเตือน",
+      "recipientsHelp": "คั่นด้วย comma หรือ ขึ้นบรรทัดใหม่ ตัวอย่าง: admin1@chiataigroup.com, admin2@chiataigroup.com"
+    },
+    "systemLogs": {
+      "title": "System Logs",
+      "description": "บันทึก job / integration / scheduler / system event ล่าสุด (read-only)",
+      "allStatuses": "ทุกสถานะ",
+      "categoryPlaceholder": "เช่น job, integration, scheduler",
+      "searchPlaceholder": "ค้นจาก event / error / correlation id",
+      "fields": {
+        "createdAt": "เวลา",
+        "category": "หมวด",
+        "event": "Event",
+        "status": "สถานะ",
+        "durationMs": "ใช้เวลา (ms)",
+        "error": "Error"
+      }
+    },
+    "activityLogs": {
+      "title": "ประวัติการใช้งาน",
+      "description": "Audit trail ของผู้ใช้: login / logout / สร้าง / แก้ไข / ลบ / role change (read-only)",
+      "views": {
+        "login": "Login",
+        "security": "Security",
+        "all": "ทั้งหมด"
+      },
+      "loginOnly": "เฉพาะ login / logout / login_failed",
+      "allRiskLevels": "ทุกระดับความเสี่ยง",
+      "searchPlaceholder": "ค้นจาก action / email / IP / resource",
+      "fields": {
+        "createdAt": "เวลา",
+        "user": "ผู้ใช้",
+        "action": "Action",
+        "actionType": "ประเภท",
+        "riskLevel": "ความเสี่ยง",
+        "ipAddress": "IP",
+        "httpStatus": "HTTP"
+      }
+    }
+  }
+}
+""")
+    _write_if_missing(src / "i18n" / "locales" / "en.json", """\
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "loading": "Loading...",
+    "edit": "Edit",
+    "delete": "Delete",
+    "actions": "Actions",
+    "search": "Search",
+    "noResults": "No results",
+    "yes": "Yes",
+    "no": "No",
+    "required": "Required",
+    "previous": "Previous",
+    "next": "Next",
+    "forbidden": "Access denied",
+    "missingPermission": "You don't have permission `{{perm}}` for this page",
+    "language": "Language",
+    "refresh": "Refresh",
+    "lightMode": "Light mode",
+    "darkMode": "Dark mode",
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "exportCsv": "Export CSV",
+    "dateFrom": "From",
+    "dateTo": "To"
+  },
+  "auth": {
+    "login": {
+      "title": "Sign in",
+      "email": "Email",
+      "password": "Password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
+      "submit": "Sign in",
+      "sso": "Sign in with Azure AD",
+      "or": "or",
+      "bothDisabled": "Login is disabled — please contact your administrator",
+      "invalidCredentials": "Incorrect email or password",
+      "notApproved": "Your account is awaiting administrator approval",
+      "emailRequired": "Email is required",
+      "emailInvalid": "Invalid email format",
+      "passwordRequired": "Password is required"
+    },
+    "approval": {
+      "title": "Access Request Approval",
+      "requestedAt": "Requested at",
+      "expiresAt": "Expires",
+      "approve": "Approve",
+      "reject": "Reject",
+      "linkSingleUse": "Single-use link — expires automatically if another admin acts first.",
+      "linkExpired": "This link has expired — ask the user to sign up again or use the User Management page.",
+      "linkConsumed": "Another administrator has already acted on this request. This link is no longer usable.",
+      "linkUnavailable": "Link unavailable",
+      "doneApproved": "Approved",
+      "doneRejected": "Rejected",
+      "doneApprovedHint": "The user may now sign in.",
+      "doneRejectedHint": "The user has been notified by email.",
+      "backHome": "Back to home",
+      "submitError": "Submit failed — please retry",
+      "anonymousName": "user"
+    },
+    "logout": "Sign out"
+  },
+  "layout": {
+    "settings": "Settings",
+    "dashboard": "Dashboard",
+    "profile": "Profile"
+  },
+  "settings": {
+    "title": "Settings",
+    "comingSoon": "Coming in Phase C",
+    "users": {
+      "title": "Users",
+      "description": "Manage user accounts and access",
+      "new": "New user",
+      "edit": "Edit user",
+      "deactivate": "Deactivate",
+      "searchPlaceholder": "Search by email",
+      "confirmDeactivate": "Deactivate {{email}}?",
+      "tabs": {
+        "profile": "Profile",
+        "overrides": "Overrides"
+      },
+      "fields": {
+        "email": "Email",
+        "fullName": "Full name",
+        "authProvider": "Provider",
+        "active": "Active",
+        "approved": "Approved",
+        "lastLogin": "Last login",
+        "roles": "Roles",
+        "password": "Password"
+      },
+      "overrides": {
+        "help": "Per-user permission grants/revokes (added on top of role permissions) — system keys (user/role/permission/settings management) are super_admin-only; the affected user sees changes when they refocus or refresh the app",
+        "grant": "Grant",
+        "revoke": "Revoke",
+        "noPermission": "You lack permission to edit overrides (requires permissions.grant_override)",
+        "error": "Could not save"
+      },
+      "approve": "Approve",
+      "unapprove": "Un-approve",
+      "approveAllVisible": "Approve all visible",
+      "confirmApproveAll": "Approve {{count}} visible user(s)?"
+    },
+    "roles": {
+      "title": "Roles",
+      "description": "Define default permissions per role",
+      "new": "New role",
+      "edit": "Edit role",
+      "confirmDelete": "Delete role {{name}}?",
+      "namePrefixMismatch": "Role name prefix must match the provider scope (e.g. internal:* / external:*)",
+      "fields": {
+        "name": "Name (key)",
+        "displayName": "Display name",
+        "providerScope": "Provider scope",
+        "system": "System?",
+        "description": "Description",
+        "permissions": "Permissions"
+      }
+    },
+    "permissions": {
+      "title": "Permissions",
+      "description": "Read-only catalog of permission keys known to the system",
+      "menu": "Menu"
+    },
+    "menus": {
+      "title": "Menus",
+      "description": "Customize the sidebar navigation tree",
+      "new": "New menu",
+      "edit": "Edit menu",
+      "noParent": "— No parent (root) —",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "iconHelp": "Lucide icon name (e.g. LayoutDashboard)",
+      "keyFormat": "Use lowercase a-z 0-9 _, starting with a letter",
+      "confirmDelete": "Delete menu {{key}}?",
+      "fields": {
+        "key": "Key",
+        "labelTh": "Label (Thai)",
+        "labelEn": "Label (English)",
+        "icon": "Icon",
+        "path": "Path",
+        "parent": "Parent",
+        "permission": "Required permission",
+        "order": "Order"
+      }
+    },
+    "auth": {
+      "title": "Authentication",
+      "description": "Toggle local login and SSO providers",
+      "lockedByScope": "Locked by AUTH_SCOPE (compile-time)",
+      "signIn": {
+        "title": "Sign-in methods",
+        "local": "Local (email/password)",
+        "sso": "SSO (Azure AD)"
+      },
+      "signup": {
+        "title": "Self-signup",
+        "enabled": "Allow users to sign up",
+        "defaultRole": "Default role on signup",
+        "requiresLocal": "Local login must be enabled first"
+      },
+      "approval": {
+        "title": "New user approval",
+        "autoApprove": "Auto-approve on sign-up / first login",
+        "help": "When off, new users must wait for an admin to approve them before they can sign in"
+      }
+    },
+    "notifications": {
+      "title": "Email notifications",
+      "emailEnabled": "Send email on new signup / approval",
+      "help": "When on, admins receive email when a user signs up and users receive email when admin approves them (delivered via Microsoft 365 — requires M365_* env vars in backend/.env)",
+      "adminRecipients": "Admin emails to notify",
+      "recipientsHelp": "Comma or newline separated. Example: admin1@chiataigroup.com, admin2@chiataigroup.com"
+    },
+    "systemLogs": {
+      "title": "System Logs",
+      "description": "Recent job / integration / scheduler / system events (read-only)",
+      "allStatuses": "All statuses",
+      "categoryPlaceholder": "e.g. job, integration, scheduler",
+      "searchPlaceholder": "Search event / error / correlation id",
+      "fields": {
+        "createdAt": "Time",
+        "category": "Category",
+        "event": "Event",
+        "status": "Status",
+        "durationMs": "Duration (ms)",
+        "error": "Error"
+      }
+    },
+    "activityLogs": {
+      "title": "Activity Logs",
+      "description": "User audit trail: login / logout / create / update / delete / role change (read-only)",
+      "views": {
+        "login": "Login",
+        "security": "Security",
+        "all": "All"
+      },
+      "loginOnly": "Login / logout / login_failed only",
+      "allRiskLevels": "All risk levels",
+      "searchPlaceholder": "Search action / email / IP / resource",
+      "fields": {
+        "createdAt": "Time",
+        "user": "User",
+        "action": "Action",
+        "actionType": "Type",
+        "riskLevel": "Risk",
+        "ipAddress": "IP",
+        "httpStatus": "HTTP"
+      }
+    }
+  }
+}
+""")
+
+    # Canonical access-token store — SINGLE source of truth.
+    # Auth-aware pages import via `../lib/auth-token`. Module-scoped
+    # variable for the live session + sessionStorage fallback so a tab
+    # refresh survives without leaking to localStorage.
+    _write_if_missing(src / "lib" / "auth-token.ts", """\
+/**
+ * Canonical access-token store for the host SPA.
+ *
+ * Single source of truth — the scaffold-emitted axios client
+ * (api/client.ts) and any auth-aware pages import from here.
+ *
+ * Storage strategy:
+ *   - Module-scoped variable: hot-path read for every request interceptor.
+ *   - sessionStorage mirror: survives tab reload (cleared when tab closes).
+ *     We deliberately avoid localStorage — a long-lived bearer token in
+ *     localStorage is the classic XSS exfiltration target.
+ *
+ * The refresh token lives in an httpOnly cookie owned by the backend —
+ * never touched from JS. See api/client.ts for the silent-refresh flow.
+ */
+const STORAGE_KEY = 'auth.accessToken';
+
+let _accessToken: string | null = null;
+
+function _readFromSession(): string | null {
+  try {
+    return typeof sessionStorage !== 'undefined'
+      ? sessionStorage.getItem(STORAGE_KEY)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function _writeToSession(token: string | null): void {
+  try {
+    if (typeof sessionStorage === 'undefined') return;
+    if (token === null) {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(STORAGE_KEY, token);
+    }
+  } catch {
+    /* swallow — quota / privacy mode / SSR */
+  }
+}
+
+// Hydrate from sessionStorage on first load (post tab-reload).
+_accessToken = _readFromSession();
+
+export function getAccessToken(): string | null {
+  if (_accessToken !== null) return _accessToken;
+  // Defensive re-read — in case the in-memory copy was cleared in another
+  // context (e.g. test reset) but sessionStorage still has it.
+  _accessToken = _readFromSession();
+  return _accessToken;
+}
+
+export function setAccessToken(token: string | null): void {
+  _accessToken = token;
+  _writeToSession(token);
+}
+
+export function clearAccessToken(): void {
+  setAccessToken(null);
+}
+
+export function authHeaders(): { Authorization: string } | Record<string, never> {
+  const t = getAccessToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+""")
+
+    # Round-4 HIGH-3: safe-redirect — validate `?return=<path>` values before
+    # feeding them to react-router's navigate(). Open redirect via the
+    # login return param is a classic phishing vector — an attacker
+    # crafts /login?return=//evil.example/login, the user signs in, then
+    # gets bounced to the attacker's site that mimics the real one.
+    _write_if_missing(src / "lib" / "safe-redirect.ts", """\
+/**
+ * safeReturn — validate untrusted `?return=<path>` query values before
+ * feeding them into react-router's navigate().
+ *
+ * Closes Round-4 HIGH-3. The login page and the RequireAuth guard both
+ * accept a return path from the URL; without this gate, a phishing
+ * link like `/login?return=//evil.example/login` would bounce the
+ * signed-in user to an attacker-controlled origin.
+ *
+ * Accepted: a single internal path starting with exactly one '/' and
+ * containing only path/query characters (e.g. /settings/users?tab=pending).
+ *
+ * Rejected (falls back to `defaultPath`):
+ *   - empty / null / longer than MAX_LEN
+ *   - protocol-relative (//evil.example)
+ *   - absolute URL (https://..., http://..., ftp://...)
+ *   - javascript:, data:, vbscript:
+ *   - backslash confusion (/\\evil — IE/Edge legacy parse it as protocol)
+ *   - any non-printable / control character
+ *   - whitespace anywhere (browsers strip but proxies don't always)
+ *
+ * Callers should use the returned string verbatim — no further escape.
+ */
+export const SAFE_RETURN_MAX_LEN = 1024;
+export const SAFE_RETURN_DEFAULT = '/';
+
+export function safeReturn(raw: unknown, defaultPath: string = SAFE_RETURN_DEFAULT): string {
+  if (typeof raw !== 'string') return defaultPath;
+  const v = raw;
+  if (v.length === 0 || v.length > SAFE_RETURN_MAX_LEN) return defaultPath;
+
+  // Reject any whitespace or control char — browsers tolerate them
+  // inconsistently and the difference becomes a bypass surface.
+  // eslint-disable-next-line no-control-regex
+  if (/[\\s\\x00-\\x1f\\x7f]/.test(v)) return defaultPath;
+
+  // Reject backslash anywhere — legacy parsers (and some proxies) treat
+  // /\\foo as a protocol-relative reference.
+  if (v.includes('\\\\')) return defaultPath;
+
+  // Must start with EXACTLY one '/'. Protocol-relative '//host' is the
+  // classic open-redirect bypass and is rejected here.
+  if (!v.startsWith('/')) return defaultPath;
+  if (v.startsWith('//')) return defaultPath;
+
+  // Reject the dangerous URL schemes even if encoded into a relative path.
+  // (We've already required the value to start with '/', so a literal
+  // 'javascript:' prefix can't reach this point — but defence in depth:
+  // re-check the whole string after lowercasing in case future relaxations
+  // open a window.)
+  const lower = v.toLowerCase();
+  if (
+    lower.includes('javascript:') ||
+    lower.includes('data:') ||
+    lower.includes('vbscript:')
+  ) {
+    return defaultPath;
+  }
+  return v;
+}
+
+export default safeReturn;
+""")
+
+    # Axios client with silent-refresh interceptor (Bug 20).
+    # Request: pulls token from lib/auth-token.ts (NOT localStorage).
+    # Response: a single 401 triggers POST /api/v1/auth/refresh (cookie-based);
+    # on success, updates the token store and retries the original request once.
+    # `_retry` flag on the original config guards against infinite loops.
+    _write_if_missing(src / "api" / "client.ts", """\
+import axios, { type AxiosError, type AxiosRequestConfig } from 'axios';
+import { clearAccessToken, getAccessToken, setAccessToken } from '../lib/auth-token';
+
+export const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  timeout: 15_000,
+  // Send the refresh-token cookie on cross-origin calls in dev.
+  withCredentials: true,
+});
+
+apiClient.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) config.headers.set('Authorization', `Bearer ${token}`);
+  return config;
+});
+
+// Silent-refresh response interceptor.
+// On a single 401, POST /api/v1/auth/refresh (httpOnly refresh-cookie
+// auth) and replay the original request once. The `_retry` flag on the
+// original config prevents an infinite refresh→401→refresh loop.
+interface RetryableConfig extends AxiosRequestConfig {
+  _retry?: boolean;
+}
+
+const REFRESH_URL = '/api/v1/auth/refresh';
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const original = error.config as RetryableConfig | undefined;
+    const status = error.response?.status;
+    // Only handle 401 once, and don't recurse if the failing request WAS
+    // the refresh call itself.
+    if (
+      status !== 401 ||
+      !original ||
+      original._retry ||
+      original.url?.includes(REFRESH_URL)
+    ) {
+      return Promise.reject(error);
+    }
+    original._retry = true;
+
+    try {
+      const refreshRes = await axios.post(
+        REFRESH_URL,
+        {},
+        {
+          baseURL: apiClient.defaults.baseURL,
+          withCredentials: true,
+          timeout: 10_000,
+        },
+      );
+      const newToken: string | undefined =
+        refreshRes.data?.accessToken ?? refreshRes.data?.access_token;
+      if (newToken) {
+        setAccessToken(newToken);
+        // Replay with fresh Authorization header.
+        return apiClient.request(original);
+      }
+      // Refresh succeeded HTTP-wise but no token came back — bail.
+      clearAccessToken();
+      return Promise.reject(error);
+    } catch (refreshErr) {
+      clearAccessToken();
+      return Promise.reject(error);
+    }
+  },
+);
+""")
+
+    # -------------------------------------------------------------------
+    # Phase B (auth-absorption) — types, API clients, Zustand store,
+    # hooks, layout components, and pages. All wired through the existing
+    # axios client + auth-token store from Phase A.
+    # -------------------------------------------------------------------
+
+    # Shared TypeScript types — backend returns camelCase (CamelBaseModel),
+    # so these interfaces mirror the API payloads 1:1.
+    _write_if_missing(src / "types" / "auth.ts", """\
+/**
+ * Shared auth/profile types — mirror backend CamelBaseModel payloads.
+ *
+ * Backend (FastAPI + pydantic CamelBaseModel) returns camelCase JSON;
+ * these interfaces match the wire format exactly. Do NOT add snake_case
+ * aliases here — keep one source of truth.
+ */
+export type AuthProvider = 'local' | 'azure_ad';
+
+export interface User {
+  id: string;
+  email: string;
+  fullName: string;
+  authProvider: AuthProvider;
+  isActive: boolean;
+  emailVerified: boolean;
+  roles: Role[];
+}
+
+export interface Role {
+  id: string;
+  name: string;          // e.g. "internal:super_admin"
+  displayName: string;   // e.g. "Super Admin"
+  providerScope: 'internal' | 'external' | 'any';
+  isSystem: boolean;
+}
+
+export interface MenuItem {
+  id: string;
+  key: string;
+  labelTh: string;
+  labelEn: string;
+  icon: string | null;       // lucide icon name (e.g. "Users")
+  path: string | null;       // leaf route; null for parent
+  parentId: string | null;
+  order: number;
+  permissionKey: string | null;
+  children?: MenuItem[];
+}
+
+export interface LoginResponse {
+  accessToken: string;
+  tokenType: string;     // "bearer"
+  expiresIn: number;     // seconds
+}
+
+export interface PublicAuthSettings {
+  /** App-settings subset that is publicly readable (no token required). */
+  authLocalEnabled: boolean;
+  authSsoEnabled: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — admin page types. Backend payload mirrors below.
+// ---------------------------------------------------------------------------
+
+export interface Permission {
+  id: string;
+  key: string;          // e.g. "users.read"
+  displayName: string;
+  category: string;     // grouping label, e.g. "menu" / "users" / "roles"
+  isMenu: boolean;      // surfaced in the sidebar permission picker
+}
+
+export interface RoleSummary {
+  id: string;
+  name: string;            // "internal:super_admin"
+  displayName: string;
+  providerScope: 'internal' | 'external' | 'any';
+  isSystem: boolean;
+  // Optional — only included on the list endpoint for the admin Roles page.
+  // Backend may or may not populate; treat as 0 when missing.
+  usersCount?: number;
+}
+
+export interface RoleDetail extends RoleSummary {
+  description: string | null;
+  permissions: Permission[];
+}
+
+export interface UserSummary {
+  id: string;
+  email: string;
+  fullName: string;
+  authProvider: AuthProvider;
+  isActive: boolean;
+  isApproved: boolean;
+  lastLoginAt: string | null;
+  roles: RoleSummary[];
+}
+
+export interface UserDetail extends UserSummary {
+  emailVerified: boolean;
+  businessUnitIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserOverride {
+  permissionKey: string;
+  granted: boolean;
+  reason: string | null;
+}
+
+export interface MenuItemTree {
+  id: string;
+  key: string;
+  labelTh: string;
+  labelEn: string;
+  icon: string | null;
+  path: string;
+  parentId: string | null;
+  orderIndex: number;
+  requiredPermissionKey: string;
+  isSystem: boolean;
+  children: MenuItemTree[];
+}
+
+export interface AppSettingValue {
+  id: string;
+  key: string;
+  value: unknown;
+  valueType: string;
+  category: string;
+  description: string | null;
+  requiresRole: string;
+  updatedAt: string;
+}
+
+export interface AuthSettingsState {
+  /** Effective values keyed by app-setting key. */
+  authLocalEnabled: boolean;
+  authSsoEnabled: boolean;
+  authLocalSignupEnabled: boolean;
+  authSignupDefaultRole: string;
+}
+
+export interface SystemLog {
+  id: string;
+  createdAt: string;
+  category: string;
+  event: string;
+  status: string;          // "started" | "success" | "failure" | "warning" | "info"
+  durationMs: number | null;
+  errorType: string | null;
+  errorMessage: string | null;
+  correlationId: string | null;
+  extraMetadata: Record<string, unknown>;
+}
+
+export interface ActivityLog {
+  id: string;
+  createdAt: string;
+  userId: string | null;
+  userEmailMasked: string | null;
+  action: string;            // dotted event name, e.g. "auth.login_failed"
+  actionType: string;        // "login" | "login_failed" | "logout" | "create" | ...
+  resourceType: string | null;
+  resourceId: string | null;
+  riskLevel: string;         // "low" | "medium" | "high"
+  isSecurityEvent: boolean;
+  ipAddress: string | null;
+  httpStatus: number | null;
+  extraMetadata: Record<string, unknown>;
+}
+""")
+
+    # API client modules — thin wrappers over the existing axios instance.
+    # Each function returns the response body (camelCase). 401-refresh
+    # is handled inside apiClient itself, so callers see a transparent
+    # token-refresh on the happy path.
+    _write_if_missing(src / "api" / "auth.ts", """\
+/**
+ * Auth endpoints — login, logout, refresh, SSO redirect/callback.
+ *
+ * Cookie-based refresh: every call goes through apiClient
+ * (withCredentials: true), so the httpOnly refresh cookie tags along
+ * automatically. Access token is stored in lib/auth-token.ts.
+ */
+import { apiClient } from './client';
+import type { LoginResponse } from '../types/auth';
+
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  const res = await apiClient.post<LoginResponse>('/api/v1/auth/login', {
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  return res.data;
+}
+
+export async function logout(): Promise<void> {
+  await apiClient.post('/api/v1/auth/logout', {});
+}
+
+export async function refresh(): Promise<LoginResponse> {
+  const res = await apiClient.post<LoginResponse>('/api/v1/auth/refresh', {});
+  return res.data;
+}
+
+export async function ssoRedirect(): Promise<{ url: string }> {
+  const res = await apiClient.get<{ url: string }>('/api/v1/auth/sso/redirect');
+  return res.data;
+}
+
+/**
+ * SSO callback — exchange the code + state for an access token.
+ * State is mandatory: backend rejects calls without it (CSRF guard via
+ * httponly cookie issued at /sso/redirect).
+ */
+export async function ssoCallback(code: string, state: string): Promise<LoginResponse> {
+  const res = await apiClient.post<LoginResponse>(
+    '/api/v1/auth/sso/callback', { code, state },
+  );
+  return res.data;
+}
+""")
+
+    _write_if_missing(src / "api" / "me.ts", """\
+/**
+ * /me endpoints — current user profile, effective permissions, menu tree.
+ * Requires a valid access token (apiClient adds the Authorization header).
+ */
+import { apiClient } from './client';
+import type { MenuItem, User } from '../types/auth';
+
+export async function getMe(): Promise<User> {
+  const res = await apiClient.get<User>('/api/v1/me');
+  return res.data;
+}
+
+export async function getMyPermissions(): Promise<string[]> {
+  const res = await apiClient.get<{ permissionKeys: string[] }>('/api/v1/me/permissions');
+  return res.data.permissionKeys;
+}
+
+export async function getMyMenus(): Promise<MenuItem[]> {
+  const res = await apiClient.get<MenuItem[]>('/api/v1/me/menus');
+  return res.data;
+}
+""")
+
+    # Approval API — PUBLIC endpoints (no Authorization header). The URL
+    # token IS the capability; backend returns 410 when expired/consumed.
+    _write_if_missing(src / "api" / "approval.ts", """\
+/**
+ * Public approval API — token-gated approve / reject.
+ *
+ * NOTE: these endpoints intentionally do NOT use apiClient because
+ * apiClient pins an Authorization header from the auth store, which
+ * would 401 a logged-out admin clicking the link from email. We use a
+ * thin fetch here that talks unauth\\u2011enticated to the backend.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+
+export interface PendingUserPublic {
+  email: string;
+  fullName: string;
+  requestedAt: string;
+  expiresAt: string;
+}
+
+export interface TokenStatus {
+  status: 'valid' | 'expired' | 'consumed' | 'not_found' | 'approved' | 'rejected';
+  pending: PendingUserPublic | null;
+}
+
+async function _request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  if (!res.ok && res.status !== 410) {
+    throw new Error(`${res.status}`);
+  }
+  return res.json();
+}
+
+export async function resolveToken(token: string): Promise<TokenStatus> {
+  return _request<TokenStatus>(`/api/v1/users/approval/${encodeURIComponent(token)}`);
+}
+
+export async function approveViaToken(
+  token: string, replyMessage: string,
+): Promise<TokenStatus> {
+  return _request<TokenStatus>(
+    `/api/v1/users/approval/${encodeURIComponent(token)}/approve`,
+    { method: 'POST', body: JSON.stringify({ replyMessage }) },
+  );
+}
+
+export async function rejectViaToken(
+  token: string, reason: string, replyMessage: string,
+): Promise<TokenStatus> {
+  return _request<TokenStatus>(
+    `/api/v1/users/approval/${encodeURIComponent(token)}/reject`,
+    { method: 'POST', body: JSON.stringify({ reason, replyMessage }) },
+  );
+}
+""")
+
+    _write_if_missing(src / "api" / "adminSettings.ts", """\
+/**
+ * Admin app-settings (Pattern C).
+ *
+ * `getPublicAuthSettings` returns a tightly-scoped subset (auth.local.enabled,
+ * auth.sso.enabled) that is readable WITHOUT a token — the Login page
+ * uses it to decide which sign-in methods to show.
+ *
+ * `listAllSettings` + `updateSetting` are admin-only and back the
+ * /settings/auth admin page (Phase C). Each PUT returns the updated row
+ * so callers can invalidate their TanStack Query cache straight from the
+ * response.
+ */
+import { apiClient } from './client';
+import type { AppSettingValue, PublicAuthSettings } from '../types/auth';
+
+export async function getPublicAuthSettings(): Promise<PublicAuthSettings> {
+  const res = await apiClient.get<PublicAuthSettings>('/api/v1/admin/settings/public');
+  return res.data;
+}
+
+export async function listAllSettings(): Promise<AppSettingValue[]> {
+  const res = await apiClient.get<AppSettingValue[]>('/api/v1/admin/settings');
+  return res.data;
+}
+
+export async function updateSetting(
+  key: string,
+  value: unknown,
+): Promise<AppSettingValue> {
+  const res = await apiClient.put<AppSettingValue>(
+    `/api/v1/admin/settings/${encodeURIComponent(key)}`,
+    { value },
+  );
+  return res.data;
+}
+""")
+
+    # ---- Phase C API clients ---------------------------------------------
+    # Users CRUD + per-user permission overrides.
+    _write_if_missing(src / "api" / "users.ts", """\
+/**
+ * Users API — list / get / create / update / deactivate + per-user
+ * permission overrides (Pattern B).
+ *
+ * The list endpoint is paginated via `limit` + `offset`. Backend returns
+ * UserSummary rows; the detail endpoint hydrates roles + override list.
+ */
+import { apiClient } from './client';
+import type { UserDetail, UserOverride, UserSummary } from '../types/auth';
+
+export interface UserListParams {
+  limit?: number;
+  offset?: number;
+  q?: string;
+}
+
+export async function listUsers(params: UserListParams = {}): Promise<UserSummary[]> {
+  const res = await apiClient.get<UserSummary[]>('/api/v1/users', { params });
+  return res.data;
+}
+
+export async function getUser(id: string): Promise<UserDetail> {
+  const res = await apiClient.get<UserDetail>(`/api/v1/users/${id}`);
+  return res.data;
+}
+
+export interface UserCreatePayload {
+  email: string;
+  fullName: string;
+  authProvider: 'local' | 'azure_ad';
+  password?: string;
+  roleNames?: string[];
+  businessUnitIds?: string[];
+}
+
+export async function createUser(payload: UserCreatePayload): Promise<UserDetail> {
+  const res = await apiClient.post<UserDetail>('/api/v1/users', payload);
+  return res.data;
+}
+
+export interface UserUpdatePayload {
+  fullName?: string;
+  isActive?: boolean;
+  isApproved?: boolean;
+  roleNames?: string[];
+  businessUnitIds?: string[];
+}
+
+export async function updateUser(id: string, payload: UserUpdatePayload): Promise<UserDetail> {
+  const res = await apiClient.patch<UserDetail>(`/api/v1/users/${id}`, payload);
+  return res.data;
+}
+
+export async function deactivateUser(id: string): Promise<void> {
+  await apiClient.post(`/api/v1/users/${id}/deactivate`, {});
+}
+
+export async function bulkApproveUsers(userIds: string[]): Promise<{ updated: number }> {
+  const res = await apiClient.post<{ updated: number }>('/api/v1/users/bulk-approve', { userIds });
+  return res.data;
+}
+
+export async function getUserOverrides(id: string): Promise<UserOverride[]> {
+  // Backend currently embeds overrides into UserDetail; this helper is the
+  // forward-compat shim for when /users/{id}/overrides ships as a sub-route.
+  const detail = await getUser(id);
+  // UserDetail does not yet ship a typed `overrides` field; cast to any to
+  // read it. Pattern B endpoint may evolve — this helper insulates callers.
+  const raw = (detail as unknown as { overrides?: UserOverride[] }).overrides ?? [];
+  return raw;
+}
+
+export async function setUserOverride(
+  id: string,
+  permissionKey: string,
+  granted: boolean,
+  reason?: string,
+): Promise<UserDetail> {
+  const res = await apiClient.post<UserDetail>(`/api/v1/users/${id}/overrides`, {
+    permissionKey,
+    granted,
+    reason: reason ?? null,
+  });
+  return res.data;
+}
+""")
+
+    # Roles CRUD.
+    _write_if_missing(src / "api" / "roles.ts", """\
+/**
+ * Roles API — list / get / create / update / delete.
+ *
+ * Backend enforces:
+ *   - `internal:` / `external:` prefix matches provider_scope on create.
+ *   - System roles (is_system=true) are read-only.
+ *   - Delete forbidden if usersCount > 0 (backend returns 400/409).
+ */
+import { apiClient } from './client';
+import type { RoleDetail, RoleSummary } from '../types/auth';
+
+export async function listRoles(): Promise<RoleSummary[]> {
+  const res = await apiClient.get<RoleSummary[]>('/api/v1/roles');
+  return res.data;
+}
+
+export async function getRole(id: string): Promise<RoleDetail> {
+  const res = await apiClient.get<RoleDetail>(`/api/v1/roles/${id}`);
+  return res.data;
+}
+
+export interface RoleCreatePayload {
+  name: string;                         // "internal:xyz" or "external:xyz"
+  displayName: string;
+  providerScope: 'internal' | 'external' | 'any';
+  description?: string;
+  permissionKeys?: string[];
+}
+
+export async function createRole(payload: RoleCreatePayload): Promise<RoleDetail> {
+  const res = await apiClient.post<RoleDetail>('/api/v1/roles', payload);
+  return res.data;
+}
+
+export interface RoleUpdatePayload {
+  displayName?: string;
+  description?: string | null;
+  permissionKeys?: string[];
+}
+
+export async function updateRole(id: string, payload: RoleUpdatePayload): Promise<RoleDetail> {
+  const res = await apiClient.patch<RoleDetail>(`/api/v1/roles/${id}`, payload);
+  return res.data;
+}
+
+export async function deleteRole(id: string): Promise<void> {
+  await apiClient.delete(`/api/v1/roles/${id}`);
+}
+""")
+
+    # Permissions catalog (read-only).
+    _write_if_missing(src / "api" / "permissions.ts", """\
+/**
+ * Permissions catalog — read-only. The catalog is small and rarely
+ * changes; pages cache the full list and group locally.
+ */
+import { apiClient } from './client';
+import type { Permission } from '../types/auth';
+
+export async function listPermissions(): Promise<Permission[]> {
+  const res = await apiClient.get<Permission[]>('/api/v1/permissions');
+  return res.data;
+}
+
+/** Group a flat permission list by category — used by Roles + Permissions
+ *  pages to render section headers without recomputing for each row. */
+export function groupByCategory(perms: Permission[]): Record<string, Permission[]> {
+  const out: Record<string, Permission[]> = {};
+  for (const p of perms) {
+    (out[p.category] ??= []).push(p);
+  }
+  for (const k of Object.keys(out)) {
+    out[k]!.sort((a, b) => a.key.localeCompare(b.key));
+  }
+  return out;
+}
+""")
+
+    # Menus CRUD + reorder (up/down via order_index swap).
+    _write_if_missing(src / "api" / "menus.ts", """\
+/**
+ * Menus API — tree CRUD. Reorder = PATCH the two affected nodes with new
+ * order_index values (the backend has no /reorder endpoint by design;
+ * keeping order in the row itself keeps replication / audit log trivial).
+ */
+import { apiClient } from './client';
+import type { MenuItemTree } from '../types/auth';
+
+export async function listMenus(): Promise<MenuItemTree[]> {
+  const res = await apiClient.get<MenuItemTree[]>('/api/v1/menus');
+  return res.data;
+}
+
+export interface MenuCreatePayload {
+  key: string;
+  labelTh: string;
+  labelEn: string;
+  icon?: string | null;
+  path: string;
+  parentId?: string | null;
+  orderIndex?: number;
+  requiredPermissionKey: string;
+}
+
+export async function createMenu(payload: MenuCreatePayload): Promise<MenuItemTree> {
+  const res = await apiClient.post<MenuItemTree>('/api/v1/menus', payload);
+  return res.data;
+}
+
+export interface MenuUpdatePayload {
+  labelTh?: string;
+  labelEn?: string;
+  icon?: string | null;
+  path?: string;
+  parentId?: string | null;
+  orderIndex?: number;
+  requiredPermissionKey?: string;
+}
+
+export async function updateMenu(id: string, payload: MenuUpdatePayload): Promise<MenuItemTree> {
+  const res = await apiClient.patch<MenuItemTree>(`/api/v1/menus/${id}`, payload);
+  return res.data;
+}
+
+export async function deleteMenu(id: string): Promise<void> {
+  await apiClient.delete(`/api/v1/menus/${id}`);
+}
+
+/** Swap two siblings' order_index values. Two sequential PATCH calls —
+ *  no transaction guarantee across them, which is intentional: a partial
+ *  failure leaves both rows in a valid ordering (just less ideal). */
+export async function swapMenuOrder(
+  a: { id: string; orderIndex: number },
+  b: { id: string; orderIndex: number },
+): Promise<void> {
+  await updateMenu(a.id, { orderIndex: b.orderIndex });
+  await updateMenu(b.id, { orderIndex: a.orderIndex });
+}
+""")
+
+    # Activity logs API — read-only audit-trail list with login-only default.
+    _write_if_missing(src / "api" / "activityLogs.ts", """\
+/**
+ * ActivityLogs API — read-only audit trail list.
+ *
+ * Default view is the security-event subset (loginOnly=true) because
+ * that's what the admin landing page is for; toggle off to see the
+ * full audit stream (create/update/delete/export/...).
+ */
+import { apiClient } from './client';
+import type { ActivityLog } from '../types/auth';
+
+export interface ActivityLogListParams {
+  limit?: number;
+  offset?: number;
+  actionType?: string;
+  userId?: string;
+  riskLevel?: string;
+  securityOnly?: boolean;
+  loginOnly?: boolean;
+  q?: string;
+  /** ISO date string YYYY-MM-DD (UTC start-of-day) */
+  dateFrom?: string;
+  /** ISO date string YYYY-MM-DD (inclusive end-of-day) */
+  dateTo?: string;
+}
+
+/** camelCase → snake_case for FastAPI query params. */
+function toSnake(params: ActivityLogListParams): Record<string, unknown> {
+  return {
+    limit: params.limit,
+    offset: params.offset,
+    action_type: params.actionType,
+    user_id: params.userId,
+    risk_level: params.riskLevel,
+    security_only: params.securityOnly,
+    login_only: params.loginOnly,
+    q: params.q,
+    date_from: params.dateFrom,
+    date_to: params.dateTo,
+  };
+}
+
+export async function listActivityLogs(
+  params: ActivityLogListParams = {},
+): Promise<ActivityLog[]> {
+  const res = await apiClient.get<ActivityLog[]>('/api/v1/admin/activity-logs', {
+    params: toSnake(params),
+  });
+  return res.data;
+}
+
+/** Trigger CSV download — auth header survives because we fetch+blob. */
+export async function downloadActivityLogsCsv(
+  params: Omit<ActivityLogListParams, 'limit' | 'offset'> = {},
+): Promise<void> {
+  const res = await apiClient.get<Blob>('/api/v1/admin/activity-logs/export.csv', {
+    params: toSnake(params),
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(res.data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `activity-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+""")
+
+    # System logs API — read-only list with optional status/category filters.
+    _write_if_missing(src / "api" / "systemLogs.ts", """\
+/**
+ * SystemLogs API — read-only list endpoint.
+ *
+ * Server-side pagination via limit+offset. Optional filters: status
+ * (success / failure / warning / info / started) and category (free-text
+ * exact match — backend uses `category = :v`).
+ */
+import { apiClient } from './client';
+import type { SystemLog } from '../types/auth';
+
+export interface SystemLogListParams {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  category?: string;
+  q?: string;
+  /** ISO date string YYYY-MM-DD (UTC start-of-day) */
+  dateFrom?: string;
+  /** ISO date string YYYY-MM-DD (inclusive end-of-day) */
+  dateTo?: string;
+}
+
+function toSnake(params: SystemLogListParams): Record<string, unknown> {
+  return {
+    limit: params.limit,
+    offset: params.offset,
+    status: params.status,
+    category: params.category,
+    q: params.q,
+    date_from: params.dateFrom,
+    date_to: params.dateTo,
+  };
+}
+
+export async function listSystemLogs(params: SystemLogListParams = {}): Promise<SystemLog[]> {
+  const res = await apiClient.get<SystemLog[]>('/api/v1/admin/system-logs', {
+    params: toSnake(params),
+  });
+  return res.data;
+}
+
+/** Trigger CSV download (server-side filter applied via same params).
+ *  Uses fetch+blob so the auth header travels — direct anchor href would
+ *  drop the bearer token and 401. */
+export async function downloadSystemLogsCsv(
+  params: Omit<SystemLogListParams, 'limit' | 'offset'> = {},
+): Promise<void> {
+  const res = await apiClient.get<Blob>('/api/v1/admin/system-logs/export.csv', {
+    params: toSnake(params),
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(res.data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `system-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+""")
+
+    # Zustand auth store — single source of truth for the React tree.
+    # Access token still lives in lib/auth-token.ts (apiClient reads it
+    # there for every request); the store mirrors `user`, `permissions`,
+    # and `menus` for UI consumers + exposes login/logout/hydrate actions.
+    _write_if_missing(src / "stores" / "auth.ts", """\
+/**
+ * Zustand auth store — user profile + permission keys + menu tree.
+ *
+ * Storage policy:
+ *   - Access token: lib/auth-token.ts (sessionStorage mirror).
+ *   - user/permissions/menus: in-memory ONLY (no localStorage). Privacy
+ *     hygiene — a closed tab forgets who you were, refresh re-hydrates
+ *     via the httpOnly refresh cookie.
+ *
+ * Actions:
+ *   hydrateFromServer() — fetch /me + /me/permissions + /me/menus
+ *                          (assumes accessToken is already set).
+ *   login(email,pw)     — POST /auth/login, store token, hydrate.
+ *   logout()            — POST /auth/logout, clear token + state.
+ *   setLoading(b)       — used by <AuthBootstrap/> to gate the initial
+ *                          refresh round-trip so <RequireAuth/> doesn't
+ *                          flash a redirect.
+ */
+import { create } from 'zustand';
+import { setAccessToken, clearAccessToken } from '../lib/auth-token';
+import { queryClient } from '../lib/queryClient';
+import * as authApi from '../api/auth';
+import * as meApi from '../api/me';
+import type { MenuItem, User } from '../types/auth';
+
+export interface AuthState {
+  user: User | null;
+  permissionKeys: Set<string>;
+  menus: MenuItem[];
+  isLoading: boolean;
+  isAuthenticated: boolean;
+
+  setLoading: (v: boolean) => void;
+  hydrateFromServer: () => Promise<void>;
+  refreshPermissions: () => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  clear: () => void;
+}
+
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  permissionKeys: new Set<string>(),
+  menus: [],
+  isLoading: true,        // true until AuthBootstrap finishes its first round
+  isAuthenticated: false,
+
+  setLoading: (v) => set({ isLoading: v }),
+
+  hydrateFromServer: async () => {
+    // Pull profile, permissions, and menu tree in parallel — they are
+    // independent reads. If ANY fail, treat the session as anonymous so
+    // we never render a broken half-state.
+    try {
+      const [user, permissionKeys, menus] = await Promise.all([
+        meApi.getMe(),
+        meApi.getMyPermissions(),
+        meApi.getMyMenus(),
+      ]);
+      set({
+        user,
+        permissionKeys: new Set(permissionKeys),
+        menus,
+        isAuthenticated: true,
+      });
+    } catch {
+      clearAccessToken();
+      set({
+        user: null,
+        permissionKeys: new Set<string>(),
+        menus: [],
+        isAuthenticated: false,
+      });
+    }
+  },
+
+  refreshPermissions: async () => {
+    // Background re-sync of perms + menus (e.g. on window focus) so a
+    // per-user override granted while this session is open shows up
+    // without re-login. Unlike hydrateFromServer, a failure here keeps
+    // the current session — a transient network blip on tab-switch must
+    // not log the user out.
+    if (!useAuthStore.getState().isAuthenticated) return;
+    try {
+      const [permissionKeys, menus] = await Promise.all([
+        meApi.getMyPermissions(),
+        meApi.getMyMenus(),
+      ]);
+      set({ permissionKeys: new Set(permissionKeys), menus });
+    } catch {
+      // Keep last-known state; the next focus/refresh will retry.
+    }
+  },
+
+  login: async (email, password) => {
+    const res = await authApi.login(email, password);
+    setAccessToken(res.accessToken);
+    // New session: drop any React Query cache left by a previous user so
+    // the sidebar menus / list pages can't surface the prior user's data
+    // (this path also covers re-login after a silent session expiry).
+    queryClient.clear();
+    // Re-use the same hydration path so login + bootstrap share one
+    // code path — easier to reason about race conditions.
+    await useAuthStore.getState().hydrateFromServer();
+  },
+
+  logout: async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // Even if the server call fails, locally tear down the session —
+      // the user clicked "ออกจากระบบ", they expect to be logged out.
+    }
+    clearAccessToken();
+    set({
+      user: null,
+      permissionKeys: new Set<string>(),
+      menus: [],
+      isAuthenticated: false,
+    });
+    queryClient.clear();
+  },
+
+  clear: () => {
+    clearAccessToken();
+    set({
+      user: null,
+      permissionKeys: new Set<string>(),
+      menus: [],
+      isAuthenticated: false,
+    });
+    queryClient.clear();
+  },
+}));
+""")
+
+    # Hooks — thin selectors over the Zustand store. Components import
+    # these instead of poking the store directly, so render-on-change
+    # behavior stays predictable.
+    _write_if_missing(src / "hooks" / "useAuth.ts", """\
+/**
+ * useAuth — primary auth hook for UI components.
+ *
+ * Returns a stable slice of the Zustand store. Re-renders only when
+ * one of the selected fields actually changes (Zustand's default
+ * shallow comparison handles primitives + the Set reference).
+ */
+import { useAuthStore } from '../stores/auth';
+
+export function useAuth() {
+  const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isLoading = useAuthStore((s) => s.isLoading);
+  const login = useAuthStore((s) => s.login);
+  const logout = useAuthStore((s) => s.logout);
+  const hydrate = useAuthStore((s) => s.hydrateFromServer);
+
+  return { user, isAuthenticated, isLoading, login, logout, refresh: hydrate };
+}
+""")
+
+    _write_if_missing(src / "hooks" / "useHasPermission.ts", """\
+/**
+ * useHasPermission — boolean check against the user's effective perms.
+ *
+ * Effective = (role-granted perms) ∪ (per-user overrides). Backend
+ * resolves this on every /me/permissions call; we just consult the Set
+ * cached in the Zustand store.
+ *
+ * Wildcard "*" short-circuits every check. NOTE: the current backend
+ * never emits "*" — super_admin is seeded with every catalog key
+ * explicitly (see app/seed.py DEFAULT_ROLES, keys=None → all perms).
+ * The check is kept as forward-compat for host apps that add a
+ * wildcard later; do not rely on it being present.
+ */
+import { useAuthStore } from '../stores/auth';
+
+export function useHasPermission(key: string): boolean {
+  const keys = useAuthStore((s) => s.permissionKeys);
+  if (keys.has('*')) return true;
+  return keys.has(key);
+}
+""")
+
+    # RequireAuth — route guard. Used by App.tsx around the protected
+    # route tree. Shows a spinner while the initial /auth/refresh is in
+    # flight so we don't redirect-then-undo when the refresh succeeds.
+    _write_if_missing(src / "components" / "RequireAuth.tsx", """\
+/**
+ * RequireAuth — protects the App's authenticated route tree.
+ *
+ * States:
+ *   loading        → spinner (AuthBootstrap is doing /refresh + /me).
+ *   not authed     → <Navigate to="/login?return=<path>" />.
+ *   authed         → render children.
+ *
+ * The `return` query string preserves the deep-link the user wanted
+ * before being bounced to /login; <Login/> reads it post-success.
+ *
+ * Round-4 HIGH-3: location.pathname comes from the router so under
+ * normal flow it is always internal — but a future regression that
+ * accepts an external pathname (or a malformed redirect) must not
+ * propagate through this guard. We feed it through safeReturn before
+ * round-tripping it into the URL.
+ */
+import type { ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
+import { safeReturn } from '../lib/safe-redirect';
+
+export interface RequireAuthProps {
+  children: ReactNode;
+}
+
+export function RequireAuth({ children }: RequireAuthProps) {
+  const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    // Sanitize before encoding — pathname+search SHOULD be internal but
+    // we never want this guard to be the surface that emits an
+    // attacker-shaped ?return=.
+    const target = safeReturn(location.pathname + location.search, '/');
+    const ret = encodeURIComponent(target);
+    return <Navigate to={`/login?return=${ret}`} replace />;
+  }
+
+  return <>{children}</>;
+}
+
+export default RequireAuth;
+""")
+
+    # RequirePermission — fine-grained guard layered INSIDE RequireAuth.
+    # Use case: an admin page that requires a specific menu.* perm even
+    # though the route is already auth-gated. Anonymous users never get
+    # here (the surrounding RequireAuth bounces them); a logged-in user
+    # missing the perm sees an inline 403 panel.
+    _write_if_missing(src / "components" / "RequirePermission.tsx", """\
+/**
+ * RequirePermission — permission-gate a route subtree.
+ *
+ * Renders `children` if the current user has the requested perm key (or
+ * the wildcard `*`). Otherwise shows an inline 403 panel so the user
+ * understands why they landed here. Does NOT redirect — that would mask
+ * the fact that an admin tried to deep-link to something they can't see.
+ *
+ * Always nest INSIDE <RequireAuth/>. Anonymous users should never reach
+ * a RequirePermission boundary; the auth guard bounces them first.
+ */
+import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ShieldAlert } from 'lucide-react';
+import { useHasPermission } from '../hooks/useHasPermission';
+
+export interface RequirePermissionProps {
+  perm: string;
+  children: ReactNode;
+}
+
+export function RequirePermission({ perm, children }: RequirePermissionProps) {
+  const { t } = useTranslation();
+  const allowed = useHasPermission(perm);
+  if (allowed) return <>{children}</>;
+  return (
+    <main className="container mx-auto flex min-h-[40vh] items-center justify-center px-4 py-8">
+      <div className="flex max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-card p-6 text-center shadow-sm">
+        <ShieldAlert className="h-8 w-8 text-destructive" />
+        <h2 className="text-lg font-semibold text-foreground">{t('common.forbidden')}</h2>
+        <p className="text-sm text-muted-foreground">{t('common.missingPermission', { perm })}</p>
+      </div>
+    </main>
+  );
+}
+
+export default RequirePermission;
+""")
+
+    # AppLayout — top + side + outlet shell. All protected routes render
+    # inside <Outlet/>. Sidebar collapses on small screens; TopBar always
+    # visible.
+    _write_if_missing(src / "components" / "Layout" / "AppLayout.tsx", """\
+/**
+ * AppLayout — standard protected-page shell.
+ *
+ *   [ TopBar                                              ]
+ *   [ Sidebar ] [ <Outlet/> (page content)                ]
+ *
+ * Page content is responsible for its own padding / max-width — keep
+ * the shell layout-only so pages stay portable across deployments.
+ */
+import { Outlet } from 'react-router-dom';
+import { TopBar } from './TopBar';
+import { Sidebar } from './Sidebar';
+
+export function AppLayout() {
+  // Fixed-height app shell: the viewport itself never scrolls. TopBar is a
+  // fixed-height row; below it a flex row holds Sidebar + main, each scrolling
+  // independently. `min-h-0` on that row is load-bearing — without it flex
+  // children refuse to shrink and overflow gets clipped instead of scrolling.
+  return (
+    <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+      <TopBar />
+      <div className="flex min-h-0 flex-1">
+        <Sidebar />
+        <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default AppLayout;
+""")
+
+    _write_if_missing(src / "components" / "Layout" / "TopBar.tsx", """\
+/**
+ * TopBar — sidebar-toggle (left) + app name + language/theme controls + UserMenu (right).
+ *
+ * App name source of truth (in order):
+ *   1. import.meta.env.VITE_APP_NAME (project-specific override)
+ *   2. fallback string "Chia Tai"
+ * Avoid hardcoding the literal anywhere else in the app.
+ */
+import { useTranslation } from 'react-i18next';
+import { Moon, Sun, Languages, Menu, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
+import { useUI } from '../../stores/ui';
+import { UserMenu } from './UserMenu';
+
+const APP_NAME = import.meta.env.VITE_APP_NAME ?? 'Chia Tai';
+
+export function TopBar() {
+  const { t } = useTranslation();
+  const { theme, locale, sidebarCollapsed, toggleSidebar, toggleMobileNav, toggleTheme, setLocale } = useUI();
+  const nextLocale = locale === 'th' ? 'en' : 'th';
+  const isDark = theme === 'dark';
+  const sidebarLabel = sidebarCollapsed
+    ? t('common.expandSidebar')
+    : t('common.collapseSidebar');
+
+  return (
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b-2 border-accent bg-card px-4 shadow-sm sm:px-6">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={toggleMobileNav}
+          className="inline-flex rounded-md p-2 text-foreground hover:bg-secondary sm:hidden"
+          aria-label={t('common.openMenu')}
+          title={t('common.openMenu')}
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          className="hidden rounded-md p-2 text-foreground hover:bg-secondary sm:inline-flex"
+          aria-label={sidebarLabel}
+          title={sidebarLabel}
+        >
+          {sidebarCollapsed
+            ? <PanelLeftOpen className="h-5 w-5" />
+            : <PanelLeftClose className="h-5 w-5" />}
+        </button>
+        <span className="text-lg font-semibold text-primary">{APP_NAME}</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="inline-flex items-center rounded-md p-2 text-foreground hover:bg-secondary"
+          aria-label={t('common.refresh')}
+          title={t('common.refresh')}
+        >
+          <RefreshCw className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setLocale(nextLocale)}
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-foreground hover:bg-secondary"
+          aria-label={t('common.language')}
+          title={t('common.language')}
+        >
+          <Languages className="h-4 w-4" />
+          <span className="uppercase">{locale}</span>
+        </button>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="inline-flex items-center rounded-md p-2 text-foreground hover:bg-secondary"
+          aria-label={isDark ? t('common.lightMode') : t('common.darkMode')}
+          title={isDark ? t('common.lightMode') : t('common.darkMode')}
+        >
+          {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </button>
+        <UserMenu />
+      </div>
+    </header>
+  );
+}
+
+export default TopBar;
+""")
+
+    # UI preferences store — sidebar collapsed / theme / locale, with
+    # initial values pulled from localStorage at module-load so the first
+    # paint already has the right theme (avoids dark-mode flash).
+    _write_if_missing(src / "stores" / "ui.ts", """\
+/**
+ * UI preferences store — sidebar collapsed state, color theme, locale.
+ *
+ * Persisted to localStorage so the user's last choice survives reloads.
+ * Initial read is synchronous (top-of-module) so the first paint already
+ * has the right theme/locale — avoids the dark-mode flash on refresh.
+ */
+import { create } from 'zustand';
+import i18n from '../i18n';
+
+const STORAGE_KEY = 'ui.prefs.v1';
+
+export type Theme = 'light' | 'dark';
+export type Locale = 'th' | 'en';
+
+interface UIState {
+  sidebarCollapsed: boolean;
+  /** Off-canvas nav drawer on small screens. Not persisted — always
+   *  starts closed on load so a reload never traps the user behind it. */
+  mobileNavOpen: boolean;
+  theme: Theme;
+  locale: Locale;
+  toggleSidebar: () => void;
+  openMobileNav: () => void;
+  closeMobileNav: () => void;
+  toggleMobileNav: () => void;
+  setTheme: (t: Theme) => void;
+  toggleTheme: () => void;
+  setLocale: (l: Locale) => void;
+}
+
+interface PersistedPrefs {
+  sidebarCollapsed?: boolean;
+  theme?: Theme;
+  locale?: Locale;
+}
+
+function readInitial(): PersistedPrefs {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as PersistedPrefs) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persist(state: Pick<UIState, 'sidebarCollapsed' | 'theme' | 'locale'>) {
+  try {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        sidebarCollapsed: state.sidebarCollapsed,
+        theme: state.theme,
+        locale: state.locale,
+      }),
+    );
+  } catch {
+    /* localStorage may be unavailable (private mode) — drop silently */
+  }
+}
+
+function applyTheme(theme: Theme) {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  if (theme === 'dark') root.classList.add('dark');
+  else root.classList.remove('dark');
+}
+
+function applyLocale(locale: Locale) {
+  if (i18n.language !== locale) {
+    void i18n.changeLanguage(locale);
+  }
+}
+
+const initial = readInitial();
+const initialTheme: Theme = initial.theme ?? 'light';
+const initialLocale: Locale = initial.locale ?? 'th';
+
+// Apply at module load so the FIRST paint is right (no flash).
+applyTheme(initialTheme);
+applyLocale(initialLocale);
+
+export const useUI = create<UIState>((set, get) => ({
+  sidebarCollapsed: initial.sidebarCollapsed ?? false,
+  mobileNavOpen: false,
+  theme: initialTheme,
+  locale: initialLocale,
+
+  toggleSidebar: () => {
+    set({ sidebarCollapsed: !get().sidebarCollapsed });
+    persist(get());
+  },
+
+  // Drawer state is ephemeral (not persisted) — see UIState comment.
+  openMobileNav: () => set({ mobileNavOpen: true }),
+  closeMobileNav: () => set({ mobileNavOpen: false }),
+  toggleMobileNav: () => set({ mobileNavOpen: !get().mobileNavOpen }),
+
+  setTheme: (t) => {
+    set({ theme: t });
+    applyTheme(t);
+    persist(get());
+  },
+
+  toggleTheme: () => {
+    const next: Theme = get().theme === 'dark' ? 'light' : 'dark';
+    set({ theme: next });
+    applyTheme(next);
+    persist(get());
+  },
+
+  setLocale: (l) => {
+    set({ locale: l });
+    applyLocale(l);
+    persist(get());
+  },
+}));
+""")
+
+    # Sidebar — renders the menu tree from /me/menus, cached via Tanstack
+    # Query. Each leaf links via react-router; each parent toggles its
+    # children locally. Icons come from `menu_item.icon` (string lucide
+    # name) — unknown names fall back to a chevron.
+    _write_if_missing(src / "components" / "Layout" / "Sidebar.tsx", """\
+/**
+ * Sidebar — permission-filtered nav tree from /me/menus.
+ *
+ * The backend already filters the tree to only the items the current
+ * user can see; the frontend just renders it. Parent-node collapse
+ * state is local (per-mount) — not persisted, by design, because
+ * sidebars are short and the tree rarely deep enough to justify it.
+ *
+ * Whole-sidebar collapse (rail mode) reads from the UI store so the
+ * choice persists across reloads and stays in sync with the TopBar
+ * toggle button.
+ *
+ * Icon strategy: each MenuItem.icon is a Lucide icon name (string). We
+ * look it up dynamically; unknown names render an empty span so a
+ * typo in the seed doesn't blow up the whole sidebar.
+ */
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight, type LucideIcon } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { useAuth } from '../../hooks/useAuth';
+import { getMyMenus } from '../../api/me';
+import { useUI } from '../../stores/ui';
+import type { MenuItem } from '../../types/auth';
+
+function resolveIcon(name: string | null | undefined): LucideIcon | null {
+  if (!name) return null;
+  const lib = LucideIcons as unknown as Record<string, LucideIcon>;
+  // Accept both the documented PascalCase ("LayoutDashboard") and the
+  // kebab-case form shown on lucide.dev ("layout-dashboard") — normalise
+  // to PascalCase so either spelling in the seed / admin form resolves.
+  const pascal = name
+    .split(/[-_]/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+  return lib[name] ?? lib[pascal] ?? null;
+}
+
+// Tracks the Tailwind `sm` breakpoint (640px). Rail-collapse is a
+// desktop-only affordance; the mobile drawer always shows full labels,
+// so node rendering needs to know which side of the breakpoint we're on.
+function useIsDesktop(): boolean {
+  const query = '(min-width: 640px)';
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(query).matches : true,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setIsDesktop(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isDesktop;
+}
+
+export function Sidebar() {
+  const { isAuthenticated } = useAuth();
+  const { i18n } = useTranslation();
+  const location = useLocation();
+  const collapsed = useUI((s) => s.sidebarCollapsed);
+  const mobileNavOpen = useUI((s) => s.mobileNavOpen);
+  const closeMobileNav = useUI((s) => s.closeMobileNav);
+  const isDesktop = useIsDesktop();
+  // Only collapse to a rail on desktop — never icon-only inside the
+  // mobile drawer, where the user expects readable labels.
+  const railCollapsed = isDesktop && collapsed;
+
+  const { data: menus = [] } = useQuery({
+    queryKey: ['me', 'menus'],
+    queryFn: getMyMenus,
+    enabled: isAuthenticated,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // Navigating to a new route dismisses the drawer so a tap on a link
+  // doesn't leave it covering the page. No-op on desktop (always closed).
+  useEffect(() => {
+    closeMobileNav();
+  }, [location.pathname, closeMobileNav]);
+
+  return (
+    <>
+      {/* Mobile backdrop — tap to dismiss. Sits below the sticky TopBar
+          (top-14) so the hamburger stays tappable to toggle the drawer. */}
+      {mobileNavOpen ? (
+        <div
+          className="fixed inset-x-0 bottom-0 top-14 z-30 bg-black/40 sm:hidden"
+          aria-hidden="true"
+          onClick={closeMobileNav}
+        />
+      ) : null}
+      <aside
+        className={`fixed bottom-0 left-0 top-14 z-40 flex w-64 shrink-0 transform flex-col border-r border-border bg-card transition-transform duration-200 sm:static sm:z-auto sm:h-full sm:translate-x-0 sm:transition-[width] ${
+          mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+        } ${railCollapsed ? 'sm:w-14' : 'sm:w-56'}`}
+      >
+        <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
+          {menus.map((item) => (
+            <SidebarNode
+              key={item.id}
+              item={item}
+              lang={i18n.language}
+              currentPath={location.pathname}
+              collapsed={railCollapsed}
+            />
+          ))}
+        </nav>
+      </aside>
+    </>
+  );
+}
+
+function SidebarNode({
+  item,
+  lang,
+  currentPath,
+  collapsed,
+}: {
+  item: MenuItem;
+  lang: string;
+  currentPath: string;
+  collapsed: boolean;
+}) {
+  const label = lang === 'en' ? item.labelEn : item.labelTh;
+  const Icon = useMemo(() => resolveIcon(item.icon), [item.icon]);
+  const hasChildren = !!item.children && item.children.length > 0;
+  const [open, setOpen] = useState(true);
+
+  if (hasChildren) {
+    // In rail mode we collapse the whole subtree to an icon-only entry;
+    // hovering surfaces the label via the title attribute. Avoids the
+    // visual mess of a half-expanded tree fighting a 56px-wide rail.
+    if (collapsed) {
+      return (
+        <div className="flex items-center justify-center rounded-md px-2 py-2 text-foreground/80" title={label}>
+          {Icon ? <Icon className="h-4 w-4" /> : null}
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-col">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center justify-between rounded-md px-2 py-2 text-sm font-medium text-foreground/80 hover:bg-secondary"
+        >
+          <span className="flex items-center gap-2">
+            {Icon ? <Icon className="h-4 w-4" /> : null}
+            {label}
+          </span>
+          {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+        {open ? (
+          <div className="ml-3 mt-1 flex flex-col gap-1 border-l border-border pl-2">
+            {item.children!.map((child) => (
+              <SidebarNode
+                key={child.id}
+                item={child}
+                lang={lang}
+                currentPath={currentPath}
+                collapsed={collapsed}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  const path = item.path ?? '#';
+  const isActive = currentPath === path;
+  return (
+    <Link
+      to={path}
+      title={collapsed ? label : undefined}
+      className={`flex items-center gap-2 rounded-md border-l-4 px-2 py-2 text-sm transition-colors ${
+        collapsed ? 'justify-center' : ''
+      } ${
+        isActive
+          ? 'border-accent bg-primary/10 text-primary'
+          : 'border-transparent text-foreground/80 hover:bg-secondary hover:text-foreground'
+      }`}
+    >
+      {Icon ? <Icon className="h-4 w-4" /> : null}
+      {collapsed ? null : label}
+    </Link>
+  );
+}
+
+export default Sidebar;
+""")
+
+    # Regression test for the mobile nav drawer. The sidebar was once
+    # `hidden sm:block` with a `hidden sm:inline-flex` toggle, so below the
+    # 640px breakpoint the whole menu vanished with no way to reopen it.
+    # This test pins the off-canvas drawer behaviour so that can't silently
+    # come back. Runs in jsdom (see vitest.config.ts) with matchMedia faked
+    # to a phone viewport.
+    _write_if_missing(src / "components" / "Layout" / "MobileNav.test.tsx", """\
+/**
+ * Mobile nav drawer — regression guard.
+ *
+ * Asserts that on a sub-640px viewport the sidebar is an openable
+ * off-canvas drawer (not removed from the DOM, not icon-only) and that the
+ * TopBar hamburger toggles it. See the git history of Sidebar/TopBar for
+ * the original "menu disappears on mobile" bug this locks down.
+ */
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { render, screen, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+// jsdom has no matchMedia — emulate a phone (below the 640px breakpoint).
+beforeAll(() => {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches: false, // (min-width: 640px) === false -> mobile
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+});
+
+vi.mock('../../hooks/useAuth', () => ({
+  useAuth: () => ({ isAuthenticated: true, user: { fullName: 'Test User' } }),
+}));
+
+vi.mock('../../api/me', () => ({
+  getMyMenus: () =>
+    Promise.resolve([
+      { id: 1, labelTh: 'แดชบอร์ด', labelEn: 'Dashboard', path: '/', icon: 'LayoutDashboard', children: [] },
+      { id: 2, labelTh: 'ผู้ใช้', labelEn: 'Users', path: '/users', icon: 'Users', children: [] },
+    ]),
+}));
+
+import { TopBar } from './TopBar';
+import { Sidebar } from './Sidebar';
+
+function renderShell() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <TopBar />
+        <Sidebar />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('mobile nav drawer', () => {
+  it('has a hamburger toggle that opens/closes the off-canvas drawer', () => {
+    const { container } = renderShell();
+
+    const hamburger = screen.getByRole('button', { name: /เปิดเมนู|open menu/i });
+    expect(hamburger.className).toContain('sm:hidden');
+
+    const aside = container.querySelector('aside')!;
+    expect(aside).toBeTruthy();
+    expect(aside.className).toContain('-translate-x-full');
+    // The original bug removed the sidebar entirely via `hidden sm:block`.
+    expect(aside.className).not.toContain('hidden');
+    expect(container.querySelector('.bg-black\\\\/40')).toBeNull();
+
+    fireEvent.click(hamburger);
+    expect(aside.className).toContain('translate-x-0');
+    expect(aside.className).not.toContain('-translate-x-full');
+    const backdrop = container.querySelector('.bg-black\\\\/40');
+    expect(backdrop).toBeTruthy();
+
+    fireEvent.click(backdrop as Element);
+    expect(aside.className).toContain('-translate-x-full');
+  });
+
+  it('shows full menu labels in the drawer (not the icon-only rail) on mobile', async () => {
+    const { container } = renderShell();
+    const aside = container.querySelector('aside')!;
+    expect(await within(aside).findByText('แดชบอร์ด')).toBeTruthy();
+    expect(await within(aside).findByText('ผู้ใช้')).toBeTruthy();
+  });
+});
+""")
+
+    _write_if_missing(src / "components" / "Layout" / "UserMenu.tsx", """\
+/**
+ * UserMenu — avatar + dropdown (profile placeholder, logout).
+ *
+ * Logout: calls store.logout() (which POSTs /auth/logout + clears the
+ * client-side state) then navigates to /login. The server is expected
+ * to clear the httpOnly refresh cookie as part of the logout response.
+ */
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { ChevronDown, LogOut, UserCircle } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
+
+function initials(name: string | undefined | null): string {
+  if (!name) return '?';
+  return name
+    .split(/\\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
+
+export function UserMenu() {
+  const { user, logout } = useAuth();
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click — small UX nicety; avoids needing a portal/modal.
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  async function handleLogout() {
+    await logout();
+    navigate('/login', { replace: true });
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+      >
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <span className="text-xs font-semibold">{initials(user?.fullName)}</span>
+        </span>
+        <span className="hidden text-sm font-medium sm:inline">
+          {user?.fullName ?? user?.email ?? ''}
+        </span>
+        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 mt-2 w-48 rounded-md border border-border bg-popover text-popover-foreground shadow-lg">
+          <button
+            type="button"
+            disabled
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-muted-foreground"
+          >
+            <UserCircle className="h-4 w-4" />
+            {t('layout.profile')}
+          </button>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-sm text-foreground hover:bg-secondary"
+          >
+            <LogOut className="h-4 w-4" />
+            {t('auth.logout')}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export default UserMenu;
+""")
+
+    # Login page — reads /admin/settings/public to decide which providers
+    # to show. Both off → friendly "contact admin" message. SSO button
+    # fetches the redirect URL from the backend (no MSAL client init
+    # needed for redirect flow). Local form uses react-hook-form + zod.
+    _write_if_missing(src / "pages" / "Login.tsx", """\
+/**
+ * Login page — local form + SSO button, gated by app settings.
+ *
+ * Decision matrix (after /admin/settings/public resolves):
+ *   sso=on,  local=on  → both shown (form + SSO button on the side).
+ *   sso=on,  local=off → SSO button only.
+ *   sso=off, local=on  → form only.
+ *   sso=off, local=off → "Login is disabled" message.
+ *
+ * `?return=<path>` query param: if present, navigate there post-login.
+ */
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useTranslation } from 'react-i18next';
+import { Eye, EyeOff, Languages, Loader2, Moon, Sun } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
+import { ssoRedirect } from '../api/auth';
+import { getPublicAuthSettings } from '../api/adminSettings';
+import { safeReturn } from '../lib/safe-redirect';
+import { useUI } from '../stores/ui';
+import type { PublicAuthSettings } from '../types/auth';
+
+const loginSchema = z.object({
+  email: z.string().min(1, 'auth.login.emailRequired').email('auth.login.emailInvalid'),
+  password: z.string().min(1, 'auth.login.passwordRequired'),
+});
+type LoginValues = z.infer<typeof loginSchema>;
+
+export function Login() {
+  const { t } = useTranslation();
+  const { login, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  // Round-4 HIGH-3: validate the untrusted ?return= before feeding it
+  // to navigate(). safeReturn() rejects protocol-relative URLs, external
+  // origins, javascript:/data:, backslash confusion, etc. — defaults to '/'.
+  const returnTo = safeReturn(params.get('return'), '/');
+  // Same UI store the TopBar uses — so a choice made on Login carries
+  // straight into the app shell after sign-in (and vice-versa).
+  const { theme, locale, toggleTheme, setLocale } = useUI();
+  const isDark = theme === 'dark';
+
+  const [settings, setSettings] = useState<PublicAuthSettings | null>(null);
+  const [settingsError, setSettingsError] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginValues>({ resolver: zodResolver(loginSchema) });
+
+  // If the user is already logged in (e.g. navigated back here), bounce
+  // them to the intended return path immediately.
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate(returnTo, { replace: true });
+    }
+  }, [isAuthenticated, navigate, returnTo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await getPublicAuthSettings();
+        if (!cancelled) setSettings(s);
+      } catch {
+        if (!cancelled) setSettingsError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onSubmit(values: LoginValues) {
+    setSubmitError(null);
+    try {
+      await login(values.email.trim().toLowerCase(), values.password);
+      navigate(returnTo, { replace: true });
+    } catch (err) {
+      // Distinguish "not approved" (403 + detail token) from bad creds —
+      // approval is a friendly state, not a security event the user should
+      // feel they fumbled.
+      const detail = (err as { response?: { data?: { detail?: string }; status?: number } })
+        ?.response;
+      if (detail?.status === 403 && detail?.data?.detail === 'account_not_approved') {
+        setSubmitError(t('auth.login.notApproved'));
+      } else {
+        setSubmitError(t('auth.login.invalidCredentials'));
+      }
+    }
+  }
+
+  async function onSsoClick() {
+    setSsoLoading(true);
+    try {
+      const { url } = await ssoRedirect();
+      window.location.href = url;
+    } catch {
+      setSsoLoading(false);
+      setSubmitError(t('auth.login.invalidCredentials'));
+    }
+  }
+
+  // Settings haven't loaded yet — show a spinner; we don't know which
+  // form to render.
+  if (settings === null && !settingsError) {
+    return (
+      <main className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </main>
+    );
+  }
+
+  // Settings endpoint failed — assume both providers are available so the
+  // user has SOME way to sign in. The backend will reject correctly if
+  // they're actually disabled.
+  const localEnabled = settingsError ? true : settings!.authLocalEnabled;
+  const ssoEnabled = settingsError ? true : settings!.authSsoEnabled;
+  const bothDisabled = !localEnabled && !ssoEnabled;
+
+  return (
+    <main className="relative flex min-h-screen items-center justify-center bg-background px-4">
+      {/* Lang + theme controls — pinned outside the card so they're available
+          BEFORE login (the TopBar with the same controls only shows after).
+          Uses the same UI store so the choice carries into the app shell. */}
+      <div className="absolute right-4 top-4 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setLocale(locale === 'th' ? 'en' : 'th')}
+          className="inline-flex items-center gap-1 rounded-md bg-card/80 px-2 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-secondary"
+          aria-label={t('common.language')}
+          title={t('common.language')}
+        >
+          <Languages className="h-4 w-4" />
+          <span className="uppercase">{locale}</span>
+        </button>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="inline-flex items-center rounded-md bg-card/80 p-2 text-foreground shadow-sm hover:bg-secondary"
+          aria-label={isDark ? t('common.lightMode') : t('common.darkMode')}
+          title={isDark ? t('common.lightMode') : t('common.darkMode')}
+        >
+          {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </button>
+      </div>
+
+      <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 shadow-sm">
+        {/* Brand header — CT mark in primary green + centred title, so the
+            login page reads as Chia Tai-branded from the first glance. */}
+        <div className="mb-7 flex flex-col items-center text-center">
+          <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl bg-primary text-lg font-bold tracking-wide text-primary-foreground shadow-md">
+            CT
+          </div>
+          <h1 className="text-xl font-bold text-foreground">{t('auth.login.title')}</h1>
+        </div>
+
+        {bothDisabled ? (
+          <p className="mt-6 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-foreground">
+            {t('auth.login.bothDisabled')}
+          </p>
+        ) : null}
+
+        {/* SSO is the primary path for internal users → solid CT green
+            (--primary), shown FIRST with the Microsoft mark. */}
+        {ssoEnabled ? (
+          <button
+            type="button"
+            onClick={onSsoClick}
+            disabled={ssoLoading}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+          >
+            {ssoLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <svg className="h-4 w-4" viewBox="0 0 23 23" aria-hidden="true">
+                <rect x="1" y="1" width="10" height="10" fill="#f25022" />
+                <rect x="12" y="1" width="10" height="10" fill="#7fba00" />
+                <rect x="1" y="12" width="10" height="10" fill="#00a4ef" />
+                <rect x="12" y="12" width="10" height="10" fill="#ffb900" />
+              </svg>
+            )}
+            {t('auth.login.sso')}
+          </button>
+        ) : null}
+
+        {localEnabled && ssoEnabled ? (
+          <div className="my-5 flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            <span>{t('auth.login.or')}</span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
+        ) : null}
+
+        {localEnabled ? (
+          <form onSubmit={handleSubmit(onSubmit)} className={ssoEnabled ? 'flex flex-col gap-4' : 'mt-6 flex flex-col gap-4'}>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-foreground">{t('auth.login.email')}</span>
+              <input
+                type="email"
+                autoComplete="username"
+                {...register('email')}
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {errors.email ? (
+                <span className="text-xs text-destructive">{t(errors.email.message ?? '')}</span>
+              ) : null}
+            </label>
+
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-foreground">{t('auth.login.password')}</span>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  {...register('password')}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute inset-y-0 right-0 inline-flex w-10 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  aria-label={showPassword ? t('auth.login.hidePassword') : t('auth.login.showPassword')}
+                  title={showPassword ? t('auth.login.hidePassword') : t('auth.login.showPassword')}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              {errors.password ? (
+                <span className="text-xs text-destructive">{t(errors.password.message ?? '')}</span>
+              ) : null}
+            </label>
+
+            {submitError ? (
+              <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {submitError}
+              </p>
+            ) : null}
+
+            {/* When SSO is also shown, local sign-in is the secondary action:
+                a gold (--accent) outline. When local is the ONLY method it
+                becomes the solid-green primary CTA. */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className={ssoEnabled
+                ? "inline-flex items-center justify-center gap-2 rounded-md border-2 border-accent bg-transparent px-4 py-2 text-sm font-semibold text-accent-readable transition-colors hover:bg-accent-warm hover:text-accent-warm-foreground disabled:opacity-60"
+                : "inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"}
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t('auth.login.submit')}
+            </button>
+          </form>
+        ) : null}
+      </div>
+    </main>
+  );
+}
+
+export default Login;
+""")
+
+    # AuthCallback — PUBLIC OAuth landing page. Azure AD redirects here
+    # after sign-in with code + state in the query string. We just hand
+    # both to the backend and route into the app on success.
+    _write_if_missing(src / "pages" / "AuthCallback.tsx", """\
+/**
+ * AuthCallback — receives the OAuth response and finishes sign-in.
+ *
+ * Mounted at /auth/callback (matches VITE_AZURE_AD_REDIRECT_URI). Azure
+ * redirects here with ?code=...&state=...; we POST both to the backend
+ * /sso/callback which validates the state against an httponly cookie
+ * set during /sso/redirect (CSRF guard).
+ */
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { Loader2 } from 'lucide-react';
+import { ssoCallback } from '../api/auth';
+import { useAuth } from '../hooks/useAuth';
+import { setAccessToken } from '../lib/auth-token';
+
+export function AuthCallback() {
+  const { t } = useTranslation();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const { refresh } = useAuth();
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const code = params.get('code');
+    const state = params.get('state');
+    const oauthError = params.get('error');
+
+    // Azure returned an OAuth error (user cancelled, app config bad, …).
+    if (oauthError) {
+      setError(oauthError);
+      return;
+    }
+    if (!code || !state) {
+      setError('sso_missing_params');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const tokens = await ssoCallback(code, state);
+        if (cancelled) return;
+        // Mirror the password-login finisher in stores/auth.ts: stash
+        // the access token then re-hydrate the user via /me.
+        setAccessToken(tokens.accessToken);
+        await refresh();
+        if (!cancelled) navigate('/', { replace: true });
+      } catch {
+        if (!cancelled) setError('sso_failed');
+      }
+    })();
+    return () => { cancelled = true; };
+    // params is stable per mount; we intentionally only run once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (error) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-sm text-center">
+          <h1 className="text-xl font-semibold text-destructive">
+            {t('auth.login.invalidCredentials')}
+          </h1>
+          <p className="mt-3 text-xs text-muted-foreground">{error}</p>
+          <button
+            type="button"
+            onClick={() => navigate('/login', { replace: true })}
+            className="mt-4 inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            {t('auth.login.title')}
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </main>
+  );
+}
+
+export default AuthCallback;
+""")
+
+    # Approval — PUBLIC page reached from the admin email\\'s approve/reject
+    # links. No auth: the URL token is the capability. One click on the
+    # button submits the decision with the default template message; admin
+    # doesn\\'t edit anything here. (The customisable per-instance editing
+    # we shipped earlier was over-engineered for the actual workflow.)
+    # i18n: all strings via useTranslation; locale toggle button top-right.
+    _write_if_missing(src / "pages" / "Approval.tsx", """\
+/**
+ * Approval page — public token-gated approve/reject UI.
+ *
+ * Flow:
+ *   loading → ready → submitting → done   (success path)
+ *           → gone                        (expired or another admin acted)
+ *
+ * Mounted at /approve/:token; reached from the admin notification email.
+ * No login required — the token IS the capability. One click on the
+ * Approve / Reject button submits the decision with the default email
+ * template (defined in app/services/notifications/templates.py); we do
+ * NOT collect a per-instance custom message here.
+ *
+ * The page can be pre-armed via ?action=approve / ?action=reject in the
+ * URL (the email buttons set this). When pre-armed we still show the
+ * confirmation card with both buttons so admin can re-pick if they
+ * clicked the wrong one in the email.
+ */
+import { useEffect, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { CheckCircle2, Languages, Loader2, XCircle } from 'lucide-react';
+import {
+  resolveToken, approveViaToken, rejectViaToken,
+  type PendingUserPublic,
+} from '../api/approval';
+import { useUI } from '../stores/ui';
+
+type Phase = 'loading' | 'ready' | 'submitting' | 'done' | 'gone';
+
+export function Approval() {
+  const { t } = useTranslation();
+  const { locale, setLocale } = useUI();
+  const { token = '' } = useParams<{ token: string }>();
+  const [params] = useSearchParams();
+  const initialAction = (params.get('action') ?? '') as 'approve' | 'reject' | '';
+
+  const [phase, setPhase] = useState<Phase>('loading');
+  const [pending, setPending] = useState<PendingUserPublic | null>(null);
+  const [goneReason, setGoneReason] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+  const [finalState, setFinalState] = useState<'approved' | 'rejected' | null>(null);
+  // Tracks which button is currently submitting so we can show a spinner
+  // on just that one (and disable both during submission).
+  const [busyAction, setBusyAction] = useState<'approve' | 'reject' | null>(null);
+
+  // Initial fetch — resolve token → user info or gone state.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await resolveToken(token);
+        if (cancelled) return;
+        if (r.status === 'valid' && r.pending) {
+          setPending(r.pending);
+          setPhase('ready');
+        } else {
+          setGoneReason(r.status);
+          setPhase('gone');
+        }
+      } catch {
+        if (!cancelled) {
+          setGoneReason('error');
+          setPhase('gone');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  // Auto-fire when the email button pre-armed an action — saves a click.
+  // Only runs once per token resolve; after that, admin uses the in-page
+  // buttons. Gate on phase === 'ready' so we don\\'t race the initial fetch.
+  useEffect(() => {
+    if (phase !== 'ready') return;
+    if (initialAction === 'approve') void submit('approve');
+    if (initialAction === 'reject') void submit('reject');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  function flipLocale() {
+    setLocale(locale === 'th' ? 'en' : 'th');
+  }
+
+  async function submit(action: 'approve' | 'reject') {
+    setError(null);
+    setBusyAction(action);
+    setPhase('submitting');
+    try {
+      // Empty strings → backend falls back to the default template body.
+      const r = action === 'approve'
+        ? await approveViaToken(token, '')
+        : await rejectViaToken(token, '', '');
+      if (r.status === 'approved') {
+        setFinalState('approved');
+        setPhase('done');
+      } else if (r.status === 'rejected') {
+        setFinalState('rejected');
+        setPhase('done');
+      } else {
+        setGoneReason(r.status);
+        setPhase('gone');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'error');
+      setPhase('ready');
+      setBusyAction(null);
+    }
+  }
+
+  if (phase === 'loading') {
+    return (
+      <Shell onLocale={flipLocale} locale={locale}>
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </Shell>
+    );
+  }
+
+  if (phase === 'gone') {
+    const copy = goneReason === 'expired'
+      ? t('auth.approval.linkExpired')
+      : t('auth.approval.linkConsumed');
+    return (
+      <Shell onLocale={flipLocale} locale={locale}>
+        <Card>
+          <h1 className="text-xl font-semibold text-foreground">{t('auth.approval.linkUnavailable')}</h1>
+          <p className="mt-3 text-sm text-muted-foreground">{copy}</p>
+        </Card>
+      </Shell>
+    );
+  }
+
+  if (phase === 'done' && finalState) {
+    return (
+      <Shell onLocale={flipLocale} locale={locale}>
+        <DoneCard kind={finalState} pending={pending} />
+      </Shell>
+    );
+  }
+
+  // phase === 'ready' | 'submitting'
+  const submitting = phase === 'submitting';
+  const dateLocale = locale === 'th' ? 'th-TH' : 'en-US';
+  return (
+    <Shell onLocale={flipLocale} locale={locale}>
+      <Card>
+        <h1 className="text-2xl font-bold text-foreground">{t('auth.approval.title')}</h1>
+        {pending ? (
+          <div className="mt-4 rounded-md bg-secondary p-4">
+            <p className="text-sm">
+              <span className="font-semibold">{pending.fullName || `(${t('auth.approval.anonymousName')})`}</span>
+              <span className="ml-1 text-muted-foreground">({pending.email})</span>
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('auth.approval.requestedAt')} {new Date(pending.requestedAt).toLocaleString(dateLocale)}
+              {' · '}{t('auth.approval.expiresAt')} {new Date(pending.expiresAt).toLocaleDateString(dateLocale)}
+            </p>
+          </div>
+        ) : null}
+
+        <div className="mt-6 flex gap-3">
+          <button
+            type="button"
+            onClick={() => submit('approve')}
+            disabled={submitting}
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-60"
+          >
+            {busyAction === 'approve' ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            {t('auth.approval.approve')}
+          </button>
+          <button
+            type="button"
+            onClick={() => submit('reject')}
+            disabled={submitting}
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-destructive px-4 py-3 text-sm font-semibold text-destructive-foreground shadow-sm hover:bg-destructive/90 disabled:opacity-60"
+          >
+            {busyAction === 'reject' ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+            {t('auth.approval.reject')}
+          </button>
+        </div>
+
+        {error ? (
+          <p className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {t('auth.approval.submitError')} ({error})
+          </p>
+        ) : null}
+      </Card>
+      <p className="mt-3 text-center text-xs text-muted-foreground">
+        {t('auth.approval.linkSingleUse')}
+      </p>
+    </Shell>
+  );
+}
+
+function DoneCard({
+  kind, pending,
+}: { kind: 'approved' | 'rejected'; pending: PendingUserPublic | null }) {
+  const { t } = useTranslation();
+  const approved = kind === 'approved';
+  const titleKey = approved ? 'auth.approval.doneApproved' : 'auth.approval.doneRejected';
+  const hintKey = approved ? 'auth.approval.doneApprovedHint' : 'auth.approval.doneRejectedHint';
+  const Icon = approved ? CheckCircle2 : XCircle;
+  // Brand green for approve, destructive red for reject. Both screens
+  // share the same layout: centered icon + heading + identity line + hint.
+  const accent = approved ? '#114B33' : '#dc2626';
+  return (
+    <Card>
+      <div className="flex flex-col items-center text-center py-2">
+        <h1 className="flex items-center gap-2 text-xl font-bold" style={{color: accent}}>
+          {t(titleKey)}
+          <Icon className="h-6 w-6" />
+        </h1>
+        {pending ? (
+          <p className="mt-4 text-sm font-semibold">
+            {pending.fullName || ''}
+            <span className="ml-1 font-normal text-muted-foreground">({pending.email})</span>
+          </p>
+        ) : null}
+        <p className="mt-1 text-sm text-muted-foreground">{t(hintKey)}</p>
+        <Link
+          to="/"
+          className="mt-5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          {t('auth.approval.backHome')} →
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+function Shell({
+  children, onLocale, locale,
+}: { children: React.ReactNode; onLocale: () => void; locale: string }) {
+  return (
+    <main className="relative flex min-h-screen items-center justify-center bg-background px-4 py-12">
+      <div className="absolute left-0 right-0 top-0 h-1 bg-primary" />
+      <div className="absolute right-4 top-4">
+        <button
+          type="button"
+          onClick={onLocale}
+          className="inline-flex items-center gap-1 rounded-md bg-card/80 px-2 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-secondary"
+        >
+          <Languages className="h-4 w-4" />
+          <span className="uppercase">{locale}</span>
+        </button>
+      </div>
+      <div className="w-full max-w-xl">
+        {children}
+      </div>
+    </main>
+  );
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-6 shadow-sm">
+      {children}
+    </div>
+  );
+}
+
+export default Approval;
+""")
+
+    # Dashboard — same demo content as the Phase A scaffold; lifted out
+    # of App.tsx into its own page module so AppLayout can mount it.
+    _write_if_missing(src / "pages" / "Dashboard.tsx", """\
+/**
+ * Dashboard — placeholder home page with brand-token demo cards.
+ *
+ * Mounted at `/dashboard` (also the `/` redirect target). Replace the
+ * content with your project's real landing page; the StatCard helper
+ * is fine to keep as a reusable widget.
+ */
+import { Activity, CheckCircle2, TrendingUp, Users } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+type StatTone = 'primary' | 'accent' | 'success' | 'warning';
+
+interface StatCardProps {
+  label: string;
+  value: string;
+  hint: string;
+  Icon: LucideIcon;
+  tone: StatTone;
+}
+
+const TONE_BG: Record<StatTone, string> = {
+  primary: 'bg-primary/10 text-primary',
+  accent: 'bg-accent/15 text-accent-readable',
+  success: 'bg-success/15 text-success-readable',
+  warning: 'bg-warning/15 text-warning-readable',
+};
+
+function StatCard({ label, value, hint, Icon, tone }: StatCardProps) {
+  return (
+    <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium text-muted-foreground">{label}</p>
+        <span className={`flex h-8 w-8 items-center justify-center rounded-md ${TONE_BG[tone]}`}>
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <p className="mt-2 text-2xl font-semibold">{value}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+export function Dashboard() {
+  const { t } = useTranslation();
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold">{t('layout.dashboard')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Project is running</p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          <Activity className="h-4 w-4" />
+          View activity
+        </button>
+      </header>
+
+      <section className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Total users" value="248" hint="+12 this week" Icon={Users} tone="primary" />
+        <StatCard label="Sessions today" value="1,294" hint="vs 1,180 yesterday" Icon={TrendingUp} tone="accent" />
+        <StatCard label="System health" value="98%" hint="All services nominal" Icon={CheckCircle2} tone="success" />
+        <StatCard label="Pending review" value="5" hint="Action required" Icon={Activity} tone="warning" />
+      </section>
+
+      <section className="mt-8 rounded-lg border bg-card p-6 text-card-foreground shadow-sm">
+        <h2 className="text-lg font-semibold">Theme tokens</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Replace this demo with your real content. These pills illustrate the semantic tokens you can mix:
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">primary</span>
+          <span className="rounded-full bg-accent/15 px-3 py-1 text-xs font-medium text-accent-readable">accent</span>
+          <span className="rounded-full bg-success/15 px-3 py-1 text-xs font-medium text-success-readable">success</span>
+          <span className="rounded-full bg-warning/15 px-3 py-1 text-xs font-medium text-warning-readable">warning</span>
+          <span className="rounded-full bg-destructive/15 px-3 py-1 text-xs font-medium text-destructive">destructive</span>
+          <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">muted</span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export default Dashboard;
+""")
+
+    # SettingsIndex — Phase C: real links to the 5 admin pages, filtered
+    # by the current user's permission set so an admin without (say)
+    # admin_settings.read doesn't see the AuthSettings card at all.
+    _write_if_missing(src / "pages" / "SettingsIndex.tsx", """\
+/**
+ * SettingsIndex — landing page for /settings.
+ *
+ * Phase C: each card is a real <Link> to its admin page; the cards are
+ * gated by useHasPermission so the user only sees what they're allowed
+ * to navigate to. Cards are still rendered (not hidden) for the routes
+ * the user can reach — the underlying RequirePermission inside each
+ * route is the actual enforcement boundary; this is purely UX hygiene.
+ */
+import { Activity, KeyRound, ListChecks, Menu as MenuIcon, ScrollText, ShieldCheck, Users } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { useHasPermission } from '../hooks/useHasPermission';
+
+interface SettingsCard {
+  to: string;
+  perm: string;
+  titleKey: string;
+  descriptionKey: string;
+  Icon: LucideIcon;
+}
+
+const CARDS: SettingsCard[] = [
+  { to: '/settings/users', perm: 'users.read', titleKey: 'settings.users.title', descriptionKey: 'settings.users.description', Icon: Users },
+  { to: '/settings/roles', perm: 'roles.read', titleKey: 'settings.roles.title', descriptionKey: 'settings.roles.description', Icon: ShieldCheck },
+  { to: '/settings/permissions', perm: 'roles.read', titleKey: 'settings.permissions.title', descriptionKey: 'settings.permissions.description', Icon: ListChecks },
+  { to: '/settings/menus', perm: 'menus.read', titleKey: 'settings.menus.title', descriptionKey: 'settings.menus.description', Icon: MenuIcon },
+  { to: '/settings/auth', perm: 'admin_settings.read', titleKey: 'settings.auth.title', descriptionKey: 'settings.auth.description', Icon: KeyRound },
+  { to: '/settings/system-logs', perm: 'system_logs.read', titleKey: 'settings.systemLogs.title', descriptionKey: 'settings.systemLogs.description', Icon: ScrollText },
+  { to: '/settings/activity-logs', perm: 'activity_logs.read', titleKey: 'settings.activityLogs.title', descriptionKey: 'settings.activityLogs.description', Icon: Activity },
+];
+
+function SettingsCardLink({ card }: { card: SettingsCard }) {
+  const { t } = useTranslation();
+  const allowed = useHasPermission(card.perm);
+  if (!allowed) return null;
+  const { to, titleKey, descriptionKey, Icon } = card;
+  return (
+    <Link
+      to={to}
+      className="block rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm transition-colors hover:border-primary hover:bg-secondary"
+    >
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="flex-1">
+          <h2 className="text-base font-semibold">{t(titleKey)}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t(descriptionKey)}</p>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+export function SettingsIndex() {
+  const { t } = useTranslation();
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header>
+        <h1 className="text-xl font-bold">{t('settings.title')}</h1>
+      </header>
+
+      <section className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {CARDS.map((card) => (
+          <SettingsCardLink key={card.to} card={card} />
+        ))}
+      </section>
+    </div>
+  );
+}
+
+export default SettingsIndex;
+""")
+
+    # -------------------------------------------------------------------
+    # Phase C — admin pages under /settings/* . Each page guards its own
+    # mutations with the relevant menu.* permission via RequirePermission
+    # at the route level (see App.tsx). Pages are deliberately Tailwind-
+    # only (no shadcn/ui or other component lib) so the scaffold stays
+    # zero-extra-deps. Forms use react-hook-form + zod (already shipped
+    # in Phase B). Inline modals use the native <dialog> element with
+    # backdrop styling — good enough for an admin tool, no portal needed.
+    # -------------------------------------------------------------------
+
+    # Permissions — read-only catalog browser grouped by category.
+    _write_if_missing(src / "pages" / "settings" / "Permissions.tsx", """\
+/**
+ * Permissions — read-only catalog browser.
+ *
+ * The permission catalog is seeded server-side (see backend seed.py); the
+ * admin UI never creates or deletes permissions, only roles consume them.
+ * This page is mainly a discovery surface for admins building roles.
+ */
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { Loader2, Search } from 'lucide-react';
+import { groupByCategory, listPermissions } from '../../api/permissions';
+
+export function Permissions() {
+  const { t } = useTranslation();
+  const [q, setQ] = useState('');
+
+  const { data: perms = [], isLoading } = useQuery({
+    queryKey: ['permissions'],
+    queryFn: listPermissions,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return perms;
+    return perms.filter(
+      (p) =>
+        p.key.toLowerCase().includes(needle) ||
+        p.displayName.toLowerCase().includes(needle) ||
+        p.category.toLowerCase().includes(needle),
+    );
+  }, [perms, q]);
+
+  const grouped = useMemo(() => groupByCategory(filtered), [filtered]);
+
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold">{t('settings.permissions.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('settings.permissions.description')}</p>
+        </div>
+        <label className="relative flex items-center">
+          <Search className="absolute left-2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t('common.search')}
+            className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring sm:w-64"
+          />
+        </label>
+      </header>
+
+      {isLoading ? (
+        <div className="mt-12 flex items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : (
+        <section className="mt-6 flex flex-col gap-6">
+          {Object.keys(grouped).sort().map((cat) => (
+            <div key={cat} className="rounded-lg border border-border bg-card p-4 shadow-sm">
+              <h2 className="text-base font-semibold capitalize text-foreground">{cat}</h2>
+              <ul className="mt-3 flex flex-col divide-y divide-border">
+                {grouped[cat]!.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                    <div>
+                      <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{p.key}</code>
+                      <span className="ml-2 text-foreground">{p.displayName}</span>
+                    </div>
+                    {p.isMenu ? (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        {t('settings.permissions.menu')}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {Object.keys(grouped).length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t('common.noResults')}</p>
+          ) : null}
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default Permissions;
+""")
+
+    # Roles — list / create / edit + assign permissions, grouped by category.
+    _write_if_missing(src / "pages" / "settings" / "Roles.tsx", """\
+/**
+ * Roles — list / create / edit / delete; permission assignment via a
+ * multi-section checkbox group (grouped by permission.category).
+ *
+ * Name prefix discipline:
+ *   provider_scope = internal → name MUST start with "internal:"
+ *   provider_scope = external → name MUST start with "external:"
+ *   provider_scope = any      → name MUST NOT start with either prefix
+ * The form's zod schema mirrors the backend's RoleCreate validation so a
+ * round-trip 422 is rare; the backend is still the source of truth.
+ */
+import { useMemo, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useTranslation } from 'react-i18next';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  createRole,
+  deleteRole,
+  getRole,
+  listRoles,
+  updateRole,
+  type RoleCreatePayload,
+} from '../../api/roles';
+import { groupByCategory, listPermissions } from '../../api/permissions';
+import type { Permission, RoleDetail, RoleSummary } from '../../types/auth';
+
+const roleSchema = z
+  .object({
+    name: z.string().min(1, 'common.required').max(100),
+    displayName: z.string().min(1, 'common.required').max(150),
+    providerScope: z.enum(['internal', 'external', 'any']),
+    description: z.string().max(500).optional().default(''),
+    permissionKeys: z.array(z.string()).default([]),
+  })
+  .refine(
+    (v) =>
+      (v.providerScope === 'internal' && v.name.startsWith('internal:')) ||
+      (v.providerScope === 'external' && v.name.startsWith('external:')) ||
+      (v.providerScope === 'any' && !v.name.startsWith('internal:') && !v.name.startsWith('external:')),
+    { message: 'settings.roles.namePrefixMismatch', path: ['name'] },
+  );
+
+type RoleFormValues = z.infer<typeof roleSchema>;
+
+export function Roles() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const { data: roles = [], isLoading } = useQuery({
+    queryKey: ['roles'],
+    queryFn: listRoles,
+  });
+  const { data: perms = [] } = useQuery({
+    queryKey: ['permissions'],
+    queryFn: listPermissions,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const deleteM = useMutation({
+    mutationFn: (id: string) => deleteRole(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['roles'] }),
+  });
+
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold">{t('settings.roles.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('settings.roles.description')}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+        >
+          <Plus className="h-4 w-4" />
+          {t('settings.roles.new')}
+        </button>
+      </header>
+
+      <section className="mt-6 overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/50 text-left text-sm font-semibold text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2">{t('settings.roles.fields.name')}</th>
+                <th className="px-4 py-2">{t('settings.roles.fields.displayName')}</th>
+                <th className="px-4 py-2">{t('settings.roles.fields.providerScope')}</th>
+                <th className="px-4 py-2">{t('settings.roles.fields.system')}</th>
+                <th className="px-4 py-2 text-right">{t('common.actions')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {roles.map((r: RoleSummary) => (
+                <tr key={r.id} className="hover:bg-secondary/30">
+                  <td className="px-4 py-2 font-mono text-sm">{r.name}</td>
+                  <td className="px-4 py-2">{r.displayName}</td>
+                  <td className="px-4 py-2">
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{r.providerScope}</span>
+                  </td>
+                  <td className="px-4 py-2">
+                    {r.isSystem ? (
+                      <span className="rounded-full bg-warning/15 px-2 py-0.5 text-xs text-warning-readable">{t('common.yes')}</span>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <div className="flex justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(r.id)}
+                        className="rounded-md p-1.5 text-foreground hover:bg-secondary"
+                        aria-label={t('common.edit')}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (r.isSystem || (r.usersCount ?? 0) > 0) return;
+                          if (confirm(t('settings.roles.confirmDelete', { name: r.name }))) {
+                            deleteM.mutate(r.id);
+                          }
+                        }}
+                        disabled={r.isSystem || (r.usersCount ?? 0) > 0}
+                        className="rounded-md p-1.5 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={t('common.delete')}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {roles.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    {t('common.noResults')}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {creating ? (
+        <RoleEditor
+          mode="create"
+          allPerms={perms}
+          onClose={() => {
+            setCreating(false);
+            qc.invalidateQueries({ queryKey: ['roles'] });
+          }}
+        />
+      ) : null}
+
+      {editingId ? (
+        <RoleEditor
+          mode="edit"
+          roleId={editingId}
+          allPerms={perms}
+          onClose={() => {
+            setEditingId(null);
+            qc.invalidateQueries({ queryKey: ['roles'] });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface RoleEditorProps {
+  mode: 'create' | 'edit';
+  roleId?: string;
+  allPerms: Permission[];
+  onClose: () => void;
+}
+
+function RoleEditor({ mode, roleId, allPerms, onClose }: RoleEditorProps) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: existing } = useQuery<RoleDetail>({
+    queryKey: ['role', roleId],
+    queryFn: () => getRole(roleId!),
+    enabled: mode === 'edit' && !!roleId,
+  });
+
+  const defaults: RoleFormValues = useMemo(
+    () => ({
+      name: existing?.name ?? '',
+      displayName: existing?.displayName ?? '',
+      providerScope: (existing?.providerScope ?? 'any') as RoleFormValues['providerScope'],
+      description: existing?.description ?? '',
+      permissionKeys: existing?.permissions?.map((p) => p.key) ?? [],
+    }),
+    [existing],
+  );
+
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<RoleFormValues>({
+    resolver: zodResolver(roleSchema),
+    values: defaults,
+  });
+
+  const selected = new Set(watch('permissionKeys'));
+  const grouped = useMemo(() => groupByCategory(allPerms), [allPerms]);
+
+  const togglePerm = (key: string) => {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setValue('permissionKeys', Array.from(next), { shouldDirty: true });
+  };
+
+  const onSubmit = async (values: RoleFormValues) => {
+    const payload: RoleCreatePayload = {
+      name: values.name,
+      displayName: values.displayName,
+      providerScope: values.providerScope,
+      description: values.description,
+      permissionKeys: values.permissionKeys,
+    };
+    if (mode === 'create') {
+      await createRole(payload);
+    } else if (roleId) {
+      await updateRole(roleId, {
+        displayName: values.displayName,
+        description: values.description,
+        permissionKeys: values.permissionKeys,
+      });
+    }
+    reset();
+    qc.invalidateQueries({ queryKey: ['roles'] });
+    onClose();
+  };
+
+  return (
+    <ModalShell onClose={onClose} title={t(mode === 'create' ? 'settings.roles.new' : 'settings.roles.edit')}>
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">{t('settings.roles.fields.name')}</span>
+          <input
+            type="text"
+            readOnly={mode === 'edit'}
+            {...register('name')}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-70 read-only:opacity-70"
+          />
+          {errors.name ? (
+            <span className="text-xs text-destructive">{t(errors.name.message ?? '')}</span>
+          ) : null}
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">{t('settings.roles.fields.displayName')}</span>
+          <input
+            type="text"
+            {...register('displayName')}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          {errors.displayName ? (
+            <span className="text-xs text-destructive">{t(errors.displayName.message ?? '')}</span>
+          ) : null}
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">{t('settings.roles.fields.providerScope')}</span>
+          <select
+            {...register('providerScope')}
+            disabled={mode === 'edit'}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-70"
+          >
+            <option value="any">any</option>
+            <option value="internal">internal</option>
+            <option value="external">external</option>
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">{t('settings.roles.fields.description')}</span>
+          <textarea
+            rows={2}
+            {...register('description')}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+
+        <div>
+          <span className="text-sm font-medium">{t('settings.roles.fields.permissions')}</span>
+          <div className="mt-2 max-h-72 overflow-y-auto rounded-md border border-border bg-background p-2">
+            {Object.keys(grouped).sort().map((cat) => (
+              <fieldset key={cat} className="mb-3 last:mb-0">
+                <legend className="text-xs font-semibold uppercase text-muted-foreground">{cat}</legend>
+                <div className="mt-1 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                  {grouped[cat]!.map((p) => (
+                    <label key={p.id} className="flex items-start gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(p.key)}
+                        onChange={() => togglePerm(p.key)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <code className="rounded bg-muted px-1 py-0.5 text-xs">{p.key}</code>
+                        <span className="ml-1 text-foreground">{p.displayName}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+          </div>
+        </div>
+
+        <ModalActions onCancel={onClose} isSubmitting={isSubmitting} />
+      </form>
+    </ModalShell>
+  );
+}
+
+interface ModalShellProps {
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+}
+
+function ModalShell({ onClose, title, children }: ModalShellProps) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{title}</h2>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ModalActions({ onCancel, isSubmitting }: { onCancel: () => void; isSubmitting: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-2 flex justify-end gap-2">
+      <button
+        type="button"
+        onClick={onCancel}
+        className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-secondary"
+      >
+        {t('common.cancel')}
+      </button>
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+      >
+        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        {t('common.save')}
+      </button>
+    </div>
+  );
+}
+
+export default Roles;
+""")
+
+    # Users — list + create/edit + per-user overrides tab.
+    _write_if_missing(src / "pages" / "settings" / "Users.tsx", """\
+/**
+ * Users — paginated list + create/edit/deactivate + per-user
+ * permission override management (Pattern B).
+ *
+ * The detail panel has two tabs:
+ *   "Profile"  — basic fields + role multi-select.
+ *   "Overrides" — full permission list with grant/revoke toggles per row.
+ *
+ * Server-side enforcement remains the source of truth — this page is
+ * purely a UX shell over /api/v1/users + /api/v1/users/{id}/overrides.
+ */
+import { useMemo, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { Loader2, Pencil, Plus, Search, UserCheck, UserX } from 'lucide-react';
+import {
+  bulkApproveUsers,
+  createUser,
+  deactivateUser,
+  getUser,
+  listUsers,
+  setUserOverride,
+  updateUser,
+  type UserCreatePayload,
+} from '../../api/users';
+import { listRoles } from '../../api/roles';
+import { useAuth } from '../../hooks/useAuth';
+import { useHasPermission } from '../../hooks/useHasPermission';
+import { groupByCategory, listPermissions } from '../../api/permissions';
+import type { Permission, RoleSummary, UserDetail, UserSummary } from '../../types/auth';
+
+const PAGE_SIZE = 20;
+
+const userSchema = z.object({
+  email: z.string().email('auth.login.emailInvalid'),
+  fullName: z.string().min(1, 'common.required'),
+  authProvider: z.enum(['local', 'azure_ad']),
+  password: z.string().optional().default(''),
+  roleNames: z.array(z.string()).default([]),
+});
+type UserFormValues = z.infer<typeof userSchema>;
+
+export function Users() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [page, setPage] = useState(0);
+  const [q, setQ] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const { data: users = [], isLoading } = useQuery({
+    queryKey: ['users', page, q],
+    queryFn: () => listUsers({ limit: PAGE_SIZE, offset: page * PAGE_SIZE, q: q || undefined }),
+  });
+
+  const deactivateM = useMutation({
+    mutationFn: (id: string) => deactivateUser(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+
+  const toggleApproveM = useMutation({
+    mutationFn: ({ id, isApproved }: { id: string; isApproved: boolean }) =>
+      updateUser(id, { isApproved }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+
+  const bulkApproveM = useMutation({
+    mutationFn: (ids: string[]) => bulkApproveUsers(ids),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+  });
+
+  const pendingVisible = users.filter((u: UserSummary) => !u.isApproved);
+
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold">{t('settings.users.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('settings.users.description')}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+        >
+          <Plus className="h-4 w-4" />
+          {t('settings.users.new')}
+        </button>
+      </header>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <label className="relative flex flex-1 items-center sm:max-w-sm">
+          <Search className="absolute left-2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => {
+              setPage(0);
+              setQ(e.target.value);
+            }}
+            placeholder={t('settings.users.searchPlaceholder')}
+            className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        {pendingVisible.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (confirm(t('settings.users.confirmApproveAll', { count: pendingVisible.length }))) {
+                bulkApproveM.mutate(pendingVisible.map((u) => u.id));
+              }
+            }}
+            disabled={bulkApproveM.isPending}
+            className="inline-flex items-center gap-2 rounded-md bg-success px-3 py-2 text-sm font-medium text-success-foreground shadow-sm hover:bg-success/90 disabled:opacity-60"
+          >
+            {bulkApproveM.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}
+            {t('settings.users.approveAllVisible')} ({pendingVisible.length})
+          </button>
+        ) : null}
+      </div>
+
+      <section className="mt-4 overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/50 text-left text-sm font-semibold text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2">{t('settings.users.fields.email')}</th>
+                <th className="px-4 py-2">{t('settings.users.fields.fullName')}</th>
+                <th className="px-4 py-2">{t('settings.users.fields.authProvider')}</th>
+                <th className="px-4 py-2">{t('settings.users.fields.roles')}</th>
+                <th className="px-4 py-2">{t('settings.users.fields.approved')}</th>
+                <th className="px-4 py-2">{t('settings.users.fields.active')}</th>
+                <th className="px-4 py-2">{t('settings.users.fields.lastLogin')}</th>
+                <th className="px-4 py-2 text-right">{t('common.actions')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {users.map((u: UserSummary) => (
+                <tr key={u.id} className="hover:bg-secondary/30">
+                  <td className="px-4 py-2 font-mono text-sm">{u.email}</td>
+                  <td className="px-4 py-2">{u.fullName}</td>
+                  <td className="px-4 py-2">
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{u.authProvider}</span>
+                  </td>
+                  <td className="px-4 py-2">
+                    {u.roles && u.roles.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {u.roles.map((r) => (
+                          <span key={r.id} className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                            {r.displayName}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleApproveM.mutate({ id: u.id, isApproved: !u.isApproved })}
+                      disabled={toggleApproveM.isPending}
+                      className={`inline-flex h-5 w-9 items-center rounded-full border transition-colors disabled:opacity-60 ${
+                        u.isApproved ? 'border-success bg-success' : 'border-border bg-input'
+                      }`}
+                      aria-label={u.isApproved ? t('settings.users.unapprove') : t('settings.users.approve')}
+                      title={u.isApproved ? t('settings.users.unapprove') : t('settings.users.approve')}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow ring-1 ring-black/5 transition-transform ${
+                          u.isApproved ? 'translate-x-4' : 'translate-x-0.5'
+                        }`}
+                      />
+                    </button>
+                  </td>
+                  <td className="px-4 py-2">
+                    {u.isActive ? (
+                      <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs text-success-readable">
+                        {t('common.yes')}
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-destructive/15 px-2 py-0.5 text-xs text-destructive">
+                        {t('common.no')}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-sm text-muted-foreground">
+                    {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'}
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <div className="flex justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(u.id)}
+                        className="rounded-md p-1.5 text-foreground hover:bg-secondary"
+                        aria-label={t('common.edit')}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!u.isActive}
+                        onClick={() => {
+                          if (confirm(t('settings.users.confirmDeactivate', { email: u.email }))) {
+                            deactivateM.mutate(u.id);
+                          }
+                        }}
+                        className="rounded-md p-1.5 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={t('settings.users.deactivate')}
+                      >
+                        <UserX className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    {t('common.noResults')}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <nav className="mt-3 flex justify-end gap-2 text-sm">
+        <button
+          type="button"
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={page === 0}
+          className="rounded-md border border-border bg-card px-3 py-1.5 hover:bg-secondary disabled:opacity-40"
+        >
+          {t('common.previous')}
+        </button>
+        <span className="px-2 py-1.5 text-muted-foreground">{page + 1}</span>
+        <button
+          type="button"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={users.length < PAGE_SIZE}
+          className="rounded-md border border-border bg-card px-3 py-1.5 hover:bg-secondary disabled:opacity-40"
+        >
+          {t('common.next')}
+        </button>
+      </nav>
+
+      {creating ? (
+        <UserEditor
+          mode="create"
+          onClose={() => {
+            setCreating(false);
+            qc.invalidateQueries({ queryKey: ['users'] });
+          }}
+        />
+      ) : null}
+
+      {editingId ? (
+        <UserEditor
+          mode="edit"
+          userId={editingId}
+          onClose={() => {
+            setEditingId(null);
+            qc.invalidateQueries({ queryKey: ['users'] });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface UserEditorProps {
+  mode: 'create' | 'edit';
+  userId?: string;
+  onClose: () => void;
+}
+
+function UserEditor({ mode, userId, onClose }: UserEditorProps) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [tab, setTab] = useState<'profile' | 'overrides'>('profile');
+
+  // Caller must already hold super_admin to assign it (backend mirrors
+  // this in _require_role_assign — the UI just hides the checkbox so the
+  // user doesn't tick it, hit Save, and bounce off a 403).
+  const { user: currentUser } = useAuth();
+  const isSuperAdmin = !!currentUser?.roles?.some((r) => r.name === 'internal:super_admin');
+
+  const { data: allRoles = [] } = useQuery({ queryKey: ['roles'], queryFn: listRoles });
+  const roles = isSuperAdmin
+    ? allRoles
+    : allRoles.filter((r: RoleSummary) => r.name !== 'internal:super_admin');
+  const { data: perms = [] } = useQuery({
+    queryKey: ['permissions'],
+    queryFn: listPermissions,
+    staleTime: 5 * 60 * 1000,
+  });
+  const { data: existing } = useQuery<UserDetail>({
+    queryKey: ['user', userId],
+    queryFn: () => getUser(userId!),
+    enabled: mode === 'edit' && !!userId,
+  });
+
+  const defaults: UserFormValues = useMemo(
+    () => ({
+      email: existing?.email ?? '',
+      fullName: existing?.fullName ?? '',
+      authProvider: (existing?.authProvider ?? 'local') as UserFormValues['authProvider'],
+      password: '',
+      roleNames: existing?.roles?.map((r) => r.name) ?? [],
+    }),
+    [existing],
+  );
+
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<UserFormValues>({
+    resolver: zodResolver(userSchema),
+    values: defaults,
+  });
+
+  const selectedRoles = new Set(watch('roleNames'));
+  const authProvider = watch('authProvider');
+
+  const toggleRole = (name: string) => {
+    const next = new Set(selectedRoles);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setValue('roleNames', Array.from(next), { shouldDirty: true });
+  };
+
+  const onSubmit = async (values: UserFormValues) => {
+    if (mode === 'create') {
+      const payload: UserCreatePayload = {
+        email: values.email,
+        fullName: values.fullName,
+        authProvider: values.authProvider,
+        password: values.authProvider === 'local' ? values.password : undefined,
+        roleNames: values.roleNames,
+      };
+      await createUser(payload);
+    } else if (userId) {
+      await updateUser(userId, {
+        fullName: values.fullName,
+        roleNames: values.roleNames,
+      });
+    }
+    reset();
+    qc.invalidateQueries({ queryKey: ['users'] });
+    onClose();
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">
+            {t(mode === 'create' ? 'settings.users.new' : 'settings.users.edit')}
+          </h2>
+          {mode === 'edit' ? (
+            <div className="flex gap-1 rounded-md border border-border p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setTab('profile')}
+                className={`rounded px-2 py-1 ${tab === 'profile' ? 'bg-secondary' : ''}`}
+              >
+                {t('settings.users.tabs.profile')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('overrides')}
+                className={`rounded px-2 py-1 ${tab === 'overrides' ? 'bg-secondary' : ''}`}
+              >
+                {t('settings.users.tabs.overrides')}
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {tab === 'profile' || mode === 'create' ? (
+          <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">{t('settings.users.fields.email')}</span>
+              <input
+                type="email"
+                readOnly={mode === 'edit'}
+                {...register('email')}
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm read-only:opacity-70 focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {errors.email ? (
+                <span className="text-xs text-destructive">{t(errors.email.message ?? '')}</span>
+              ) : null}
+            </label>
+
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">{t('settings.users.fields.fullName')}</span>
+              <input
+                type="text"
+                {...register('fullName')}
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {errors.fullName ? (
+                <span className="text-xs text-destructive">{t(errors.fullName.message ?? '')}</span>
+              ) : null}
+            </label>
+
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">{t('settings.users.fields.authProvider')}</span>
+              <select
+                {...register('authProvider')}
+                disabled={mode === 'edit'}
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-70"
+              >
+                <option value="local">local</option>
+                <option value="azure_ad">azure_ad</option>
+              </select>
+            </label>
+
+            {mode === 'create' && authProvider === 'local' ? (
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium">{t('settings.users.fields.password')}</span>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  {...register('password')}
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </label>
+            ) : null}
+
+            <div>
+              <span className="text-sm font-medium">{t('settings.users.fields.roles')}</span>
+              <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                {roles.map((r: RoleSummary) => (
+                  <label key={r.id} className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={selectedRoles.has(r.name)}
+                      onChange={() => toggleRole(r.name)}
+                    />
+                    <span>{r.displayName} <code className="ml-1 rounded bg-muted px-1 text-xs">{r.name}</code></span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-secondary"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+              >
+                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t('common.save')}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <OverridePanel userId={userId!} allPerms={perms} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OverridePanel({ userId, allPerms }: { userId: string; allPerms: Permission[] }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  // Server enforces this too (POST /overrides -> 403). Mirror it client-side
+  // so a user without the grant perm sees disabled buttons + a reason,
+  // instead of clicking into a silent 403.
+  const canEdit = useHasPermission('permissions.grant_override');
+  const grouped = useMemo(() => groupByCategory(allPerms), [allPerms]);
+
+  // Overrides come embedded on the UserDetail payload — re-read on mount.
+  const { data: detail } = useQuery<UserDetail>({
+    queryKey: ['user', userId],
+    queryFn: () => getUser(userId),
+  });
+  const overrides = ((detail as unknown as { overrides?: { permissionKey: string; granted: boolean }[] })?.overrides) ?? [];
+  const overrideMap = new Map(overrides.map((o) => [o.permissionKey, o.granted]));
+
+  const mutate = useMutation({
+    mutationFn: ({ key, granted }: { key: string; granted: boolean }) =>
+      setUserOverride(userId, key, granted),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['user', userId] }),
+  });
+
+  return (
+    <div className="max-h-[60vh] overflow-y-auto pr-2">
+      <p className="mb-3 text-xs text-muted-foreground">{t('settings.users.overrides.help')}</p>
+      {!canEdit ? (
+        <p className="mb-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-foreground">
+          {t('settings.users.overrides.noPermission')}
+        </p>
+      ) : null}
+      {mutate.isError ? (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {t('settings.users.overrides.error')}
+          {(() => {
+            // Surface the backend reason (e.g. "Only super_admin can grant
+            // permission overrides for privilege-management keys") so a
+            // denied grant doesn't look like a random failure.
+            const detail = (mutate.error as { response?: { data?: { detail?: string } } } | null)
+              ?.response?.data?.detail;
+            return detail ? ` — ${detail}` : null;
+          })()}
+        </p>
+      ) : null}
+      {Object.keys(grouped).sort().map((cat) => (
+        <fieldset key={cat} className="mb-4">
+          <legend className="text-xs font-semibold uppercase text-muted-foreground">{cat}</legend>
+          <ul className="mt-1 divide-y divide-border">
+            {grouped[cat]!.map((p) => {
+              const current = overrideMap.get(p.key);
+              return (
+                <li key={p.id} className="flex items-center justify-between gap-2 py-2 text-xs">
+                  <div>
+                    <code className="rounded bg-muted px-1 py-0.5 text-xs">{p.key}</code>
+                    <span className="ml-1">{p.displayName}</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      disabled={!canEdit || mutate.isPending}
+                      onClick={() => mutate.mutate({ key: p.key, granted: true })}
+                      className={`rounded px-2 py-0.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${current === true ? 'bg-success/20 text-success-readable' : 'bg-muted text-muted-foreground hover:bg-secondary'}`}
+                    >
+                      {t('settings.users.overrides.grant')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canEdit || mutate.isPending}
+                      onClick={() => mutate.mutate({ key: p.key, granted: false })}
+                      className={`rounded px-2 py-0.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${current === false ? 'bg-destructive/20 text-destructive' : 'bg-muted text-muted-foreground hover:bg-secondary'}`}
+                    >
+                      {t('settings.users.overrides.revoke')}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </fieldset>
+      ))}
+    </div>
+  );
+}
+
+export default Users;
+""")
+
+    # Menus — tree CRUD with up/down reorder (drag-drop deferred).
+    _write_if_missing(src / "pages" / "settings" / "Menus.tsx", """\
+/**
+ * Menus — tree editor.
+ *
+ * Reorder strategy is intentionally simple: up/down arrows swap the
+ * order_index field with the adjacent SIBLING. Drag-and-drop is a Phase D
+ * task and would pull in dnd-kit (a 25KB+ extra dep) — out of scope here.
+ *
+ * The tree is flat-rendered with indentation. The full subtree below a
+ * node is implicit (children render under the parent in the DOM order).
+ */
+import { useMemo, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import {
+  createMenu,
+  deleteMenu,
+  listMenus,
+  swapMenuOrder,
+  updateMenu,
+  type MenuCreatePayload,
+} from '../../api/menus';
+import { listPermissions } from '../../api/permissions';
+import type { MenuItemTree } from '../../types/auth';
+
+const menuSchema = z.object({
+  key: z.string().min(1, 'common.required').regex(/^[a-z][a-z0-9_]*$/, 'settings.menus.keyFormat'),
+  labelTh: z.string().min(1, 'common.required'),
+  labelEn: z.string().min(1, 'common.required'),
+  icon: z.string().optional().default(''),
+  path: z.string().min(1, 'common.required'),
+  parentId: z.string().optional().default(''),
+  requiredPermissionKey: z.string().min(1, 'common.required'),
+  orderIndex: z.coerce.number().int().default(0),
+});
+type MenuFormValues = z.infer<typeof menuSchema>;
+
+function flatten(nodes: MenuItemTree[], depth = 0): { node: MenuItemTree; depth: number }[] {
+  const out: { node: MenuItemTree; depth: number }[] = [];
+  for (const n of nodes) {
+    out.push({ node: n, depth });
+    if (n.children?.length) out.push(...flatten(n.children, depth + 1));
+  }
+  return out;
+}
+
+function resolveIcon(name: string | null | undefined): LucideIcon | null {
+  if (!name) return null;
+  const lib = LucideIcons as unknown as Record<string, LucideIcon>;
+  // Accept both the documented PascalCase ("LayoutDashboard") and the
+  // kebab-case form shown on lucide.dev ("layout-dashboard") — normalise
+  // to PascalCase so either spelling in the seed / admin form resolves.
+  const pascal = name
+    .split(/[-_]/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('');
+  return lib[name] ?? lib[pascal] ?? null;
+}
+
+export function Menus() {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.language;
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<MenuItemTree | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const { data: tree = [], isLoading } = useQuery({
+    queryKey: ['menus'],
+    queryFn: listMenus,
+  });
+  const flat = useMemo(() => flatten(tree), [tree]);
+
+  const deleteM = useMutation({
+    mutationFn: (id: string) => deleteMenu(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menus'] }),
+  });
+
+  const swapM = useMutation({
+    mutationFn: ({ a, b }: { a: { id: string; orderIndex: number }; b: { id: string; orderIndex: number } }) =>
+      swapMenuOrder(a, b),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['menus'] }),
+  });
+
+  const siblingsOf = (node: MenuItemTree): MenuItemTree[] => {
+    const findIn = (nodes: MenuItemTree[]): MenuItemTree[] | null => {
+      if (nodes.some((n) => n.id === node.id)) return nodes;
+      for (const n of nodes) {
+        const found = findIn(n.children ?? []);
+        if (found) return found;
+      }
+      return null;
+    };
+    return findIn(tree) ?? [];
+  };
+
+  const move = (node: MenuItemTree, dir: -1 | 1) => {
+    const siblings = siblingsOf(node).slice().sort((a, b) => a.orderIndex - b.orderIndex);
+    const idx = siblings.findIndex((n) => n.id === node.id);
+    const target = siblings[idx + dir];
+    if (!target) return;
+    swapM.mutate({
+      a: { id: node.id, orderIndex: node.orderIndex },
+      b: { id: target.id, orderIndex: target.orderIndex },
+    });
+  };
+
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-xl font-bold">{t('settings.menus.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('settings.menus.description')}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+        >
+          <Plus className="h-4 w-4" />
+          {t('settings.menus.new')}
+        </button>
+      </header>
+
+      <section className="mt-6 overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {flat.map(({ node, depth }) => {
+              const Icon = resolveIcon(node.icon);
+              return (
+                <li key={node.id} className="flex items-center gap-3 px-4 py-2 text-sm">
+                  <span style={{ paddingLeft: `${depth * 16}px` }} className="flex flex-1 items-center gap-2">
+                    {Icon ? <Icon className="h-4 w-4 text-muted-foreground" /> : <span className="h-4 w-4" />}
+                    <span className="text-foreground" title={`${node.key}  /  ${lang === 'en' ? node.labelTh : node.labelEn}`}>
+                      {lang === 'en' ? node.labelEn : node.labelTh}
+                    </span>
+                    {node.path ? (
+                      <span className="ml-2 text-xs text-muted-foreground">{node.path}</span>
+                    ) : null}
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => move(node, -1)}
+                      className="rounded-md p-1.5 hover:bg-secondary"
+                      aria-label={t('settings.menus.moveUp')}
+                    >
+                      <ChevronUp className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => move(node, 1)}
+                      className="rounded-md p-1.5 hover:bg-secondary"
+                      aria-label={t('settings.menus.moveDown')}
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditing(node)}
+                      className="rounded-md p-1.5 hover:bg-secondary"
+                      aria-label={t('common.edit')}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(t('settings.menus.confirmDelete', { key: node.key }))) {
+                          deleteM.mutate(node.id);
+                        }
+                      }}
+                      className="rounded-md p-1.5 text-destructive hover:bg-destructive/10"
+                      aria-label={t('common.delete')}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+            {flat.length === 0 ? (
+              <li className="px-4 py-6 text-center text-sm text-muted-foreground">
+                {t('common.noResults')}
+              </li>
+            ) : null}
+          </ul>
+        )}
+      </section>
+
+      {creating || editing ? (
+        <MenuEditor
+          existing={editing}
+          flat={flat}
+          onClose={() => {
+            setEditing(null);
+            setCreating(false);
+            qc.invalidateQueries({ queryKey: ['menus'] });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface MenuEditorProps {
+  existing: MenuItemTree | null;
+  flat: { node: MenuItemTree; depth: number }[];
+  onClose: () => void;
+}
+
+function MenuEditor({ existing, flat, onClose }: MenuEditorProps) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+
+  const { data: perms = [] } = useQuery({
+    queryKey: ['permissions'],
+    queryFn: listPermissions,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const defaults: MenuFormValues = {
+    key: existing?.key ?? '',
+    labelTh: existing?.labelTh ?? '',
+    labelEn: existing?.labelEn ?? '',
+    icon: existing?.icon ?? '',
+    path: existing?.path ?? '',
+    parentId: existing?.parentId ?? '',
+    requiredPermissionKey: existing?.requiredPermissionKey ?? '',
+    orderIndex: existing?.orderIndex ?? 0,
+  };
+
+  const {
+    register,
+    handleSubmit,
+    watch,
+    formState: { errors, isSubmitting },
+  } = useForm<MenuFormValues>({
+    resolver: zodResolver(menuSchema),
+    defaultValues: defaults,
+  });
+
+  const iconName = watch('icon');
+  const IconPreview = resolveIcon(iconName);
+
+  const onSubmit = async (values: MenuFormValues) => {
+    const payload: MenuCreatePayload = {
+      key: values.key,
+      labelTh: values.labelTh,
+      labelEn: values.labelEn,
+      icon: values.icon || null,
+      path: values.path,
+      parentId: values.parentId || null,
+      orderIndex: values.orderIndex,
+      requiredPermissionKey: values.requiredPermissionKey,
+    };
+    if (existing) {
+      await updateMenu(existing.id, payload);
+    } else {
+      await createMenu(payload);
+    }
+    qc.invalidateQueries({ queryKey: ['menus'] });
+    onClose();
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-y-auto rounded-lg border border-border bg-card p-6 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="mb-4 text-lg font-semibold">
+          {t(existing ? 'settings.menus.edit' : 'settings.menus.new')}
+        </h2>
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.menus.fields.key')}</span>
+            <input
+              type="text"
+              readOnly={!!existing}
+              {...register('key')}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm font-mono read-only:opacity-70 focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            {errors.key ? (
+              <span className="text-xs text-destructive">{t(errors.key.message ?? '')}</span>
+            ) : null}
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">{t('settings.menus.fields.labelTh')}</span>
+              <input type="text" {...register('labelTh')} className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">{t('settings.menus.fields.labelEn')}</span>
+              <input type="text" {...register('labelEn')} className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+            </label>
+          </div>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.menus.fields.path')}</span>
+            <input type="text" {...register('path')} className="rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring" />
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.menus.fields.icon')}</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="LayoutDashboard"
+                {...register('icon')}
+                className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-background">
+                {IconPreview ? <IconPreview className="h-4 w-4" /> : <span className="text-xs text-muted-foreground">?</span>}
+              </span>
+            </div>
+            <span className="text-xs text-muted-foreground">{t('settings.menus.iconHelp')}</span>
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.menus.fields.parent')}</span>
+            <select {...register('parentId')} className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
+              <option value="">{t('settings.menus.noParent')}</option>
+              {flat
+                .filter(({ node }) => !existing || node.id !== existing.id)
+                .map(({ node, depth }) => (
+                  <option key={node.id} value={node.id}>
+                    {'  '.repeat(depth)}{node.labelTh} ({node.key})
+                  </option>
+                ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.menus.fields.permission')}</span>
+            <select {...register('requiredPermissionKey')} className="rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring">
+              <option value="">—</option>
+              {perms.filter((p) => p.isMenu).map((p) => (
+                <option key={p.id} value={p.key}>{p.key}</option>
+              ))}
+            </select>
+            {errors.requiredPermissionKey ? (
+              <span className="text-xs text-destructive">{t(errors.requiredPermissionKey.message ?? '')}</span>
+            ) : null}
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.menus.fields.order')}</span>
+            <input type="number" {...register('orderIndex')} className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+          </label>
+
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" onClick={onClose} className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-secondary">
+              {t('common.cancel')}
+            </button>
+            <button type="submit" disabled={isSubmitting} className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {t('common.save')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default Menus;
+""")
+
+    # Activity logs page — login/audit trail with loginOnly default filter.
+    _write_if_missing(src / "pages" / "settings" / "ActivityLogs.tsx", """\
+/**
+ * ActivityLogs — admin audit-trail view.
+ *
+ * Three named views (tabs) instead of a hidden checkbox so the mental
+ * models stay distinct:
+ *   - Login    — login / login_failed / logout (default; most common
+ *                reason an admin opens this page)
+ *   - Security — login + permission_denied + role_change + anything
+ *                marked is_security_event=true
+ *   - All      — full audit stream (CRUD, sensitive reads, etc.)
+ *
+ * Columns are universal across views — pills/IP already tell the story.
+ */
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { Download, Loader2, Search } from 'lucide-react';
+import { downloadActivityLogsCsv, listActivityLogs } from '../../api/activityLogs';
+import type { ActivityLog } from '../../types/auth';
+
+const PAGE_SIZE = 25;
+
+const VIEWS = ['login', 'security', 'all'] as const;
+type View = (typeof VIEWS)[number];
+
+function actionTypeClass(actionType: string): string {
+  switch (actionType) {
+    case 'login':
+      return 'bg-success/15 text-success-readable';
+    case 'login_failed':
+    case 'permission_denied':
+      return 'bg-destructive/15 text-destructive';
+    case 'logout':
+      return 'bg-info/15 text-chart-blue-deep';
+    case 'role_change':
+      return 'bg-warning/15 text-warning-readable';
+    default:
+      return 'bg-muted text-muted-foreground';
+  }
+}
+
+function riskClass(risk: string): string {
+  switch (risk) {
+    case 'high':
+      return 'bg-destructive/15 text-destructive';
+    case 'medium':
+      return 'bg-warning/15 text-warning-readable';
+    default:
+      return 'bg-muted text-muted-foreground';
+  }
+}
+
+export function ActivityLogs() {
+  const { t } = useTranslation();
+  const [page, setPage] = useState(0);
+  const [view, setView] = useState<View>('login');
+  const [riskLevel, setRiskLevel] = useState<string>('');
+  const [q, setQ] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [exporting, setExporting] = useState(false);
+
+  const filterParams = {
+    loginOnly: view === 'login' || undefined,
+    securityOnly: view === 'security' || undefined,
+    riskLevel: riskLevel || undefined,
+    q: q || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+  };
+
+  const { data: logs = [], isLoading, isFetching } = useQuery({
+    queryKey: ['activity-logs', page, view, riskLevel, q, dateFrom, dateTo],
+    queryFn: () =>
+      listActivityLogs({
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+        ...filterParams,
+      }),
+  });
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await downloadActivityLogsCsv(filterParams);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header>
+        <h1 className="text-xl font-bold">{t('settings.activityLogs.title')}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t('settings.activityLogs.description')}</p>
+      </header>
+
+      {/* Tabs replace the old "loginOnly" checkbox — each named view sets
+          a different server-side filter via the query params above. */}
+      <div className="mt-6 flex gap-1 border-b border-border" role="tablist">
+        {VIEWS.map((v) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={view === v}
+            onClick={() => {
+              setPage(0);
+              setView(v);
+            }}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+              view === v
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t(`settings.activityLogs.views.${v}`)}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <label className="relative flex flex-1 items-center sm:max-w-xs">
+          <Search className="absolute left-2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => {
+              setPage(0);
+              setQ(e.target.value);
+            }}
+            placeholder={t('settings.activityLogs.searchPlaceholder')}
+            className="w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('settings.activityLogs.fields.riskLevel')}</span>
+          <select
+            value={riskLevel}
+            onChange={(e) => {
+              setPage(0);
+              setRiskLevel(e.target.value);
+            }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">{t('settings.activityLogs.allRiskLevels')}</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('common.dateFrom')}</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setPage(0); setDateFrom(e.target.value); }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('common.dateTo')}</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setPage(0); setDateTo(e.target.value); }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exporting}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-secondary disabled:opacity-60"
+          title={t('common.exportCsv')}
+        >
+          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {t('common.exportCsv')}
+        </button>
+        {isFetching && !isLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : null}
+      </div>
+
+      <section className="mt-4 overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/50 text-left text-sm font-semibold text-muted-foreground">
+              <tr>
+                <th className="whitespace-nowrap px-4 py-2">{t('settings.activityLogs.fields.createdAt')}</th>
+                <th className="px-4 py-2">{t('settings.activityLogs.fields.user')}</th>
+                <th className="px-4 py-2">{t('settings.activityLogs.fields.action')}</th>
+                <th className="px-4 py-2">{t('settings.activityLogs.fields.actionType')}</th>
+                <th className="px-4 py-2">{t('settings.activityLogs.fields.riskLevel')}</th>
+                <th className="whitespace-nowrap px-4 py-2">{t('settings.activityLogs.fields.ipAddress')}</th>
+                <th className="whitespace-nowrap px-4 py-2 text-right">{t('settings.activityLogs.fields.httpStatus')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {logs.map((row: ActivityLog) => (
+                <tr key={row.id} className="hover:bg-secondary/30">
+                  <td className="whitespace-nowrap px-4 py-2 font-mono text-sm text-muted-foreground">
+                    {new Date(row.createdAt).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2 text-sm">
+                    {row.userEmailMasked ?? <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-4 py-2 font-mono text-sm">{row.action}</td>
+                  <td className="px-4 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${actionTypeClass(row.actionType)}`}>
+                      {row.actionType}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${riskClass(row.riskLevel)}`}>
+                      {row.riskLevel}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 font-mono text-sm text-muted-foreground">
+                    {row.ipAddress ?? '—'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right font-mono text-sm">
+                    {row.httpStatus ?? '—'}
+                  </td>
+                </tr>
+              ))}
+              {logs.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    {t('common.noResults')}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <nav className="mt-3 flex justify-end gap-2 text-sm">
+        <button
+          type="button"
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={page === 0}
+          className="rounded-md border border-border bg-card px-3 py-1.5 hover:bg-secondary disabled:opacity-40"
+        >
+          {t('common.previous')}
+        </button>
+        <span className="self-center text-muted-foreground">{page + 1}</span>
+        <button
+          type="button"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={logs.length < PAGE_SIZE}
+          className="rounded-md border border-border bg-card px-3 py-1.5 hover:bg-secondary disabled:opacity-40"
+        >
+          {t('common.next')}
+        </button>
+      </nav>
+    </div>
+  );
+}
+
+export default ActivityLogs;
+""")
+
+    # System logs page — read-only paginated table of recent system events.
+    _write_if_missing(src / "pages" / "settings" / "SystemLogs.tsx", """\
+/**
+ * SystemLogs — admin read-only view of recent system events.
+ *
+ * Columns: time / category / event / status / duration / error message.
+ * Status pill colors map the backend `status` values to semantic tokens
+ * (success / failure / warning / info / started). Pagination is server-
+ * side via limit+offset; we keep PAGE_SIZE small so the table fits
+ * without horizontal scrolling on the typical admin viewport.
+ */
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { Download, Loader2, Search } from 'lucide-react';
+import { downloadSystemLogsCsv, listSystemLogs } from '../../api/systemLogs';
+import type { SystemLog } from '../../types/auth';
+
+const PAGE_SIZE = 25;
+
+const STATUS_OPTIONS = ['', 'success', 'failure', 'warning', 'info', 'started'] as const;
+
+function statusClass(status: string): string {
+  switch (status) {
+    case 'success':
+      return 'bg-success/15 text-success-readable';
+    case 'failure':
+      return 'bg-destructive/15 text-destructive';
+    case 'warning':
+      return 'bg-warning/15 text-warning-readable';
+    case 'info':
+    case 'started':
+      return 'bg-info/15 text-chart-blue-deep';
+    default:
+      return 'bg-muted text-muted-foreground';
+  }
+}
+
+export function SystemLogs() {
+  const { t } = useTranslation();
+  const [page, setPage] = useState(0);
+  const [status, setStatus] = useState<string>('');
+  const [category, setCategory] = useState<string>('');
+  const [q, setQ] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [exporting, setExporting] = useState(false);
+
+  const filterParams = {
+    status: status || undefined,
+    category: category || undefined,
+    q: q || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+  };
+
+  const { data: logs = [], isLoading, isFetching } = useQuery({
+    queryKey: ['system-logs', page, status, category, q, dateFrom, dateTo],
+    queryFn: () =>
+      listSystemLogs({
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+        ...filterParams,
+      }),
+  });
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      await downloadSystemLogsCsv(filterParams);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <header>
+        <h1 className="text-xl font-bold">{t('settings.systemLogs.title')}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t('settings.systemLogs.description')}</p>
+      </header>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <label className="relative flex flex-1 items-center sm:max-w-xs">
+          <Search className="absolute left-2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => {
+              setPage(0);
+              setQ(e.target.value);
+            }}
+            placeholder={t('settings.systemLogs.searchPlaceholder')}
+            className="w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('settings.systemLogs.fields.status')}</span>
+          <select
+            value={status}
+            onChange={(e) => {
+              setPage(0);
+              setStatus(e.target.value);
+            }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s === '' ? t('settings.systemLogs.allStatuses') : s}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('settings.systemLogs.fields.category')}</span>
+          <input
+            type="text"
+            value={category}
+            onChange={(e) => {
+              setPage(0);
+              setCategory(e.target.value);
+            }}
+            placeholder={t('settings.systemLogs.categoryPlaceholder')}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('common.dateFrom')}</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setPage(0); setDateFrom(e.target.value); }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t('common.dateTo')}</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setPage(0); setDateTo(e.target.value); }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exporting}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium hover:bg-secondary disabled:opacity-60"
+          title={t('common.exportCsv')}
+        >
+          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {t('common.exportCsv')}
+        </button>
+        {isFetching && !isLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : null}
+      </div>
+
+      <section className="mt-4 overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/50 text-left text-sm font-semibold text-muted-foreground">
+              <tr>
+                <th className="whitespace-nowrap px-4 py-2">{t('settings.systemLogs.fields.createdAt')}</th>
+                <th className="px-4 py-2">{t('settings.systemLogs.fields.category')}</th>
+                <th className="px-4 py-2">{t('settings.systemLogs.fields.event')}</th>
+                <th className="px-4 py-2">{t('settings.systemLogs.fields.status')}</th>
+                <th className="whitespace-nowrap px-4 py-2 text-right">{t('settings.systemLogs.fields.durationMs')}</th>
+                <th className="px-4 py-2">{t('settings.systemLogs.fields.error')}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {logs.map((row: SystemLog) => (
+                <tr key={row.id} className="hover:bg-secondary/30">
+                  <td className="whitespace-nowrap px-4 py-2 font-mono text-sm text-muted-foreground">
+                    {new Date(row.createdAt).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{row.category}</span>
+                  </td>
+                  <td className="px-4 py-2">{row.event}</td>
+                  <td className="px-4 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${statusClass(row.status)}`}>
+                      {row.status}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right font-mono text-sm">
+                    {row.durationMs == null ? '—' : row.durationMs.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2 text-sm text-destructive">
+                    {row.errorType ? (
+                      <span title={row.errorMessage ?? undefined}>
+                        <span className="font-mono">{row.errorType}</span>
+                        {row.errorMessage ? `: ${row.errorMessage.slice(0, 80)}${row.errorMessage.length > 80 ? '…' : ''}` : ''}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {logs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                    {t('common.noResults')}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <nav className="mt-3 flex justify-end gap-2 text-sm">
+        <button
+          type="button"
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={page === 0}
+          className="rounded-md border border-border bg-card px-3 py-1.5 hover:bg-secondary disabled:opacity-40"
+        >
+          {t('common.previous')}
+        </button>
+        <span className="self-center text-muted-foreground">{page + 1}</span>
+        <button
+          type="button"
+          onClick={() => setPage((p) => p + 1)}
+          disabled={logs.length < PAGE_SIZE}
+          className="rounded-md border border-border bg-card px-3 py-1.5 hover:bg-secondary disabled:opacity-40"
+        >
+          {t('common.next')}
+        </button>
+      </nav>
+    </div>
+  );
+}
+
+export default SystemLogs;
+""")
+
+    # AuthSettings — provider toggles + signup config. Honors AUTH_SCOPE
+    # ceiling from the backend (which 400s a locked-key PUT) — we mirror
+    # the ceiling in the UI by reading import.meta.env.VITE_AUTH_SCOPE so
+    # the toggle is visibly disabled with a lock-icon tooltip.
+    _write_if_missing(src / "pages" / "settings" / "AuthSettings.tsx", """\
+/**
+ * AuthSettings — admin toggle UI for provider/signup settings.
+ *
+ * Sections:
+ *   1. Sign-in methods  — auth.local.enabled / auth.sso.enabled
+ *   2. Self-signup      — auth.local.signup_enabled (only if local enabled)
+ *   3. Default role     — auth.signup_default_role (only if signup enabled)
+ *
+ * AUTH_SCOPE ceiling: a project compiled with `internal_only` cannot
+ * re-enable local at runtime; `external_only` cannot enable SSO. The
+ * compile-time scope ships in VITE_AUTH_SCOPE (frontend .env) so we can
+ * disable the toggle BEFORE the user tries — the backend also rejects.
+ *
+ * Save flow:
+ *   - For each changed key, PUT /admin/settings/{key}.
+ *   - On success, invalidate ['admin-settings'] AND ['public-auth-settings']
+ *     so the Login page reflects the new state on next visit.
+ */
+import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { Loader2, Lock } from 'lucide-react';
+import { listAllSettings, updateSetting } from '../../api/adminSettings';
+import { listRoles } from '../../api/roles';
+import type { AppSettingValue, RoleSummary } from '../../types/auth';
+
+const KEYS = {
+  localEnabled: 'auth.local.enabled',
+  ssoEnabled: 'auth.sso.enabled',
+  signupEnabled: 'auth.local.signup_enabled',
+  signupRole: 'auth.signup_default_role',
+  autoApprove: 'auth.auto_approve_new_users',
+  notificationsEnabled: 'notifications.email.enabled',
+  adminRecipients: 'notifications.email.admin_recipients',
+} as const;
+
+type AuthScope = 'both' | 'internal_only' | 'external_only';
+const SCOPE: AuthScope = ((import.meta.env.VITE_AUTH_SCOPE as AuthScope | undefined) ?? 'both');
+
+interface FormState {
+  localEnabled: boolean;
+  ssoEnabled: boolean;
+  signupEnabled: boolean;
+  signupRole: string;
+  autoApprove: boolean;
+  notificationsEnabled: boolean;
+  // Editable as comma-separated text; we split + dedupe on save.
+  adminRecipientsRaw: string;
+}
+
+function asBool(v: unknown): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') return v === 'true';
+  return Boolean(v);
+}
+function asStr(v: unknown): string {
+  return typeof v === 'string' ? v : v == null ? '' : String(v);
+}
+
+export function AuthSettings() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+
+  const { data: settings = [], isLoading } = useQuery<AppSettingValue[]>({
+    queryKey: ['admin-settings'],
+    queryFn: listAllSettings,
+  });
+  const { data: roles = [] } = useQuery({ queryKey: ['roles'], queryFn: listRoles });
+
+  const byKey = new Map(settings.map((s) => [s.key, s]));
+  const recipientsRaw = (() => {
+    const v = byKey.get(KEYS.adminRecipients)?.value;
+    if (Array.isArray(v)) return v.join(', ');
+    return asStr(v ?? '');
+  })();
+  const initial: FormState = {
+    localEnabled: asBool(byKey.get(KEYS.localEnabled)?.value ?? true),
+    ssoEnabled: asBool(byKey.get(KEYS.ssoEnabled)?.value ?? true),
+    signupEnabled: asBool(byKey.get(KEYS.signupEnabled)?.value ?? false),
+    signupRole: asStr(byKey.get(KEYS.signupRole)?.value ?? 'external:user'),
+    autoApprove: asBool(byKey.get(KEYS.autoApprove)?.value ?? false),
+    notificationsEnabled: asBool(byKey.get(KEYS.notificationsEnabled)?.value ?? false),
+    adminRecipientsRaw: recipientsRaw,
+  };
+
+  const [form, setForm] = useState<FormState>(initial);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Refresh form when settings reload (e.g. invalidation after save).
+  useEffect(() => {
+    setForm(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
+
+  // Compile-time AUTH_SCOPE ceiling (per docs/auth.md §12):
+  //   internal_only = Azure AD only -> local auth is locked OFF.
+  //   external_only = local only    -> SSO is locked OFF.
+  // The backend (admin_settings.py _SCOPE_LOCKED_KEYS) re-enforces this on PUT;
+  // disabling the toggle here is the matching UX so the user can't try.
+  const localLockedOff = SCOPE === 'internal_only';
+  const ssoLockedOff = SCOPE === 'external_only';
+
+  const effectiveLocal = localLockedOff ? false : form.localEnabled;
+  const effectiveSso = ssoLockedOff ? false : form.ssoEnabled;
+
+  const saveM = useMutation({
+    mutationFn: async (next: FormState) => {
+      const ops: Promise<unknown>[] = [];
+      if (next.localEnabled !== initial.localEnabled && !localLockedOff) {
+        ops.push(updateSetting(KEYS.localEnabled, next.localEnabled));
+      }
+      if (next.ssoEnabled !== initial.ssoEnabled && !ssoLockedOff) {
+        ops.push(updateSetting(KEYS.ssoEnabled, next.ssoEnabled));
+      }
+      if (next.signupEnabled !== initial.signupEnabled) {
+        ops.push(updateSetting(KEYS.signupEnabled, next.signupEnabled));
+      }
+      if (next.signupRole !== initial.signupRole) {
+        ops.push(updateSetting(KEYS.signupRole, next.signupRole));
+      }
+      if (next.autoApprove !== initial.autoApprove) {
+        ops.push(updateSetting(KEYS.autoApprove, next.autoApprove));
+      }
+      if (next.notificationsEnabled !== initial.notificationsEnabled) {
+        ops.push(updateSetting(KEYS.notificationsEnabled, next.notificationsEnabled));
+      }
+      if (next.adminRecipientsRaw !== initial.adminRecipientsRaw) {
+        const parsed = Array.from(new Set(
+          next.adminRecipientsRaw
+            .split(/[,\\n]/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0 && s.includes('@'))
+        ));
+        ops.push(updateSetting(KEYS.adminRecipients, parsed));
+      }
+      await Promise.all(ops);
+    },
+    onSuccess: () => {
+      setSaveError(null);
+      qc.invalidateQueries({ queryKey: ['admin-settings'] });
+      qc.invalidateQueries({ queryKey: ['public-auth-settings'] });
+    },
+    onError: (e: unknown) => {
+      setSaveError(e instanceof Error ? e.message : 'unknown');
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto flex min-h-[40vh] items-center justify-center px-4">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const externalRoles = roles.filter((r: RoleSummary) => r.name.startsWith('external:'));
+
+  return (
+    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+      <header>
+        <h1 className="text-xl font-bold">{t('settings.auth.title')}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t('settings.auth.description')}</p>
+      </header>
+
+      <section className="mt-6 flex flex-col gap-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <h2 className="text-base font-semibold">{t('settings.auth.signIn.title')}</h2>
+        <ToggleRow
+          label={t('settings.auth.signIn.local')}
+          checked={effectiveLocal}
+          disabled={localLockedOff}
+          lockHint={localLockedOff ? t('settings.auth.lockedByScope') : null}
+          onChange={(v) => setForm({ ...form, localEnabled: v })}
+        />
+        <ToggleRow
+          label={t('settings.auth.signIn.sso')}
+          checked={effectiveSso}
+          disabled={ssoLockedOff}
+          lockHint={ssoLockedOff ? t('settings.auth.lockedByScope') : null}
+          onChange={(v) => setForm({ ...form, ssoEnabled: v })}
+        />
+      </section>
+
+      <section className="mt-4 flex flex-col gap-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <h2 className="text-base font-semibold">{t('settings.auth.signup.title')}</h2>
+        <ToggleRow
+          label={t('settings.auth.signup.enabled')}
+          checked={form.signupEnabled}
+          disabled={!effectiveLocal}
+          lockHint={!effectiveLocal ? t('settings.auth.signup.requiresLocal') : null}
+          onChange={(v) => setForm({ ...form, signupEnabled: v })}
+        />
+
+        {form.signupEnabled && effectiveLocal ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.auth.signup.defaultRole')}</span>
+            <select
+              value={form.signupRole}
+              onChange={(e) => setForm({ ...form, signupRole: e.target.value })}
+              className="max-w-sm rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              {externalRoles.length === 0 ? (
+                <option value="external:user">external:user</option>
+              ) : (
+                externalRoles.map((r: RoleSummary) => (
+                  <option key={r.id} value={r.name}>{r.displayName} ({r.name})</option>
+                ))
+              )}
+            </select>
+          </label>
+        ) : null}
+      </section>
+
+      <section className="mt-4 flex flex-col gap-3 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <h2 className="text-base font-semibold">{t('settings.auth.approval.title')}</h2>
+        <ToggleRow
+          label={t('settings.auth.approval.autoApprove')}
+          checked={form.autoApprove}
+          onChange={(v) => setForm({ ...form, autoApprove: v })}
+        />
+        <p className="text-xs text-muted-foreground">{t('settings.auth.approval.help')}</p>
+      </section>
+
+      <section className="mt-4 flex flex-col gap-3 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <h2 className="text-base font-semibold">{t('settings.notifications.title')}</h2>
+        <ToggleRow
+          label={t('settings.notifications.emailEnabled')}
+          checked={form.notificationsEnabled}
+          onChange={(v) => setForm({ ...form, notificationsEnabled: v })}
+        />
+        <p className="text-xs text-muted-foreground">{t('settings.notifications.help')}</p>
+        {form.notificationsEnabled ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.notifications.adminRecipients')}</span>
+            <textarea
+              value={form.adminRecipientsRaw}
+              onChange={(e) => setForm({ ...form, adminRecipientsRaw: e.target.value })}
+              rows={3}
+              placeholder="admin1@chiataigroup.com, admin2@chiataigroup.com"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <span className="text-xs text-muted-foreground">{t('settings.notifications.recipientsHelp')}</span>
+          </label>
+        ) : null}
+      </section>
+
+      {saveError ? (
+        <p className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {saveError}
+        </p>
+      ) : null}
+
+      <div className="mt-6 flex justify-end">
+        <button
+          type="button"
+          onClick={() => saveM.mutate(form)}
+          disabled={saveM.isPending}
+          className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+        >
+          {saveM.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {t('common.save')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface ToggleRowProps {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  lockHint?: string | null;
+  onChange: (v: boolean) => void;
+}
+
+function ToggleRow({ label, checked, disabled, lockHint, onChange }: ToggleRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="flex items-center gap-2">
+        <span className="font-medium">{label}</span>
+        {disabled && lockHint ? (
+          <span title={lockHint} className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="h-3 w-3" />
+            {lockHint}
+          </span>
+        ) : null}
+      </span>
+      <label className="relative inline-flex cursor-pointer items-center">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="peer sr-only"
+        />
+        <span className="h-6 w-11 rounded-full border border-border bg-input transition-colors peer-checked:border-primary peer-checked:bg-primary peer-disabled:opacity-50" />
+        <span className="absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow ring-1 ring-black/5 transition-transform peer-checked:translate-x-5" />
+      </label>
+    </div>
+  );
+}
+
+export default AuthSettings;
+""")
+
+    # AuthBootstrap — silent-refresh + session hydration on app mount.
+    #
+    # Phase B contract: always runs (no opt-out prop). On mount:
+    #   1. POST /api/v1/auth/refresh (cookie-based) — may 401 (anonymous user).
+    #   2. If 200, store the access token and call useAuthStore.initSession()
+    #      which fetches /me + /me/permissions + /me/menus into Zustand.
+    #   3. Toggles `isLoading` so <RequireAuth/> can show a spinner during
+    #      the initial round-trip rather than briefly redirecting to /login.
+    #
+    # `refreshUrl` and `enabled` props are kept (with `enabled` defaulting
+    # to true now) so tests + the auth-absorption migration retain the
+    # same surface area documented in Phase A.
+    _write_if_missing(src / "components" / "AuthBootstrap.tsx", """\
+/**
+ * AuthBootstrap — silent-refresh + session hydration on app mount.
+ *
+ * Always runs once on mount (Phase B onwards). The `enabled` prop is
+ * retained for tests + the rare case where you need to disable the
+ * bootstrap in a story/preview environment. Default: `true`.
+ *
+ * Behavior:
+ *   refresh OK → setAccessToken + hydrate user/permissions/menus.
+ *   refresh 401 → leave the Zustand store empty; <RequireAuth/> will
+ *                 redirect to /login when a protected route mounts.
+ */
+import { useEffect } from 'react';
+import type { ReactNode } from 'react';
+import { setAccessToken, clearAccessToken } from '../lib/auth-token';
+import { useAuthStore } from '../stores/auth';
+
+export interface AuthBootstrapProps {
+  /** Default true. Set false in tests/stories to skip the round-trip. */
+  enabled?: boolean;
+  refreshUrl?: string;
+  children?: ReactNode;
+}
+
+export function AuthBootstrap({
+  enabled = true,
+  refreshUrl = '/api/v1/auth/refresh',
+  children,
+}: AuthBootstrapProps) {
+  const setLoading = useAuthStore((s) => s.setLoading);
+  const hydrate = useAuthStore((s) => s.hydrateFromServer);
+
+  useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(refreshUrl, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (cancelled) return;
+        if (!res.ok) {
+          // 401/403 — anonymous. Clear any stale token and bail.
+          clearAccessToken();
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        const token: string | undefined = data?.accessToken ?? data?.access_token;
+        if (token && !cancelled) {
+          setAccessToken(token);
+          await hydrate();
+        } else {
+          clearAccessToken();
+        }
+      } catch {
+        // Network or backend-down — render the app anonymous.
+        clearAccessToken();
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, refreshUrl, hydrate, setLoading]);
+
+  // Re-sync permissions + menus when the window regains focus, so a
+  // per-user override granted by an admin shows up in this session
+  // without re-login. Throttled to once per 30s; silent on failure
+  // (see refreshPermissions in stores/auth.ts).
+  useEffect(() => {
+    if (!enabled) return;
+    let lastRun = 0;
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastRun < 30_000) return;
+      lastRun = now;
+      void useAuthStore.getState().refreshPermissions();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [enabled]);
+
+  return <>{children}</>;
+}
+
+export default AuthBootstrap;
+""")
+
+    # Opt-in module — emits its pages/api + injects routes, settings cards and
+    # i18n into the just-written base files only when the flag is set.
+    if feature_db_connections:
+        _scaffold_db_connections_frontend(src)
+
+
+def _scaffold_docker(cfg: ProjectConfig, root: Path, db_port: int = 5432,
+                     db_password: str = "") -> None:
+    docker = root / "docker"
+    docker.mkdir(exist_ok=True)
+    slug = cfg.project_slug
+    db_name = slug.replace("-", "_")
+    # Audit finding #2: never embed a static credential in the generated
+    # compose file. Caller (setup.py / init_project.py) passes the same value
+    # written to backend/.env so backend can connect with no drift.
+    if not db_password:
+        db_password = _gen_dev_db_password()
+
+    # Local dev — DB only (ใน docker/ folder).
+    # Bind to 127.0.0.1 so the dev DB isn't reachable from the LAN — backend
+    # on host still connects via localhost (audit finding #11).
+    _write_if_missing(docker / "docker-compose.yml", f"""\
+# Local dev — DB only
+# Backend และ Frontend รันบนเครื่อง (hot reload)
+#
+# Start DB:   cd docker && docker compose up -d
+# Stop DB:    cd docker && docker compose down
+#
+# Backend:    cd backend
+#             set DB_HOST=localhost  (Windows CMD)
+#             uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+#
+# Frontend:   cd frontend && npm run dev
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: {slug}-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: {db_name}
+      POSTGRES_USER: {db_name}
+      POSTGRES_PASSWORD: {db_password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      # Bind to 127.0.0.1 only — dev DB stays unreachable from other LAN hosts
+      - "127.0.0.1:{db_port}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {db_name}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+volumes:
+  db_data:
+    name: {slug}-db-data
+""")
+
+    # Production — อยู่ที่ root ของ project
+    # deploy: git pull && docker compose up -d --build
+    _write_if_missing(root / "docker-compose.yml", f"""\
+# Production
+# DB อยู่บน centralized server (ไม่มี db service ที่นี่)
+#
+# First time setup:
+#   1. แก้ backend/.env ให้เป็นค่า production
+#      DB_HOST=<production-db-host>
+#      DB_PASSWORD=<strong-password>
+#      JWT_SECRET_KEY=<generate: python3 -c "import secrets; print(secrets.token_hex(32))">
+#   2. สร้าง DB user+database บน production DB server:
+#      CREATE USER {db_name} WITH PASSWORD '<password>';
+#      CREATE DATABASE {db_name} OWNER {db_name};
+#      GRANT ALL ON SCHEMA public TO {db_name};
+#   3. แจ้ง IT เพื่อเพิ่ม Nginx upstream ชี้มาที่ container นี้
+#
+# Deploy:
+#   git pull
+#   docker compose up -d --build
+#   docker compose exec -w /app backend alembic upgrade head
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: {slug}-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - proxy-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: {slug}-frontend
+    restart: unless-stopped
+    expose:
+      - "8080"
+    depends_on:
+      - backend
+    networks:
+      - proxy-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  # ข้อบังคับ: production ทุกตัวต้องใช้ network ชื่อ proxy-net
+  # IT สร้าง network นี้ก่อน deploy:  docker network create proxy-net
+  proxy-net:
+    external: true
+""")
+
+    _write_if_missing(root / "backend" / ".env.prod.example", f"""\
+# backend/.env.prod.example — ตัวอย่างค่า production
+# วิธีใช้: คัดลอกไปเป็น backend/.env บน production server แล้วแก้ค่าจริง
+#   cp backend/.env.prod.example backend/.env
+# backend/.env ถูก gitignore อยู่แล้ว — DO NOT commit ค่าจริง
+
+APP_NAME={slug}
+APP_ENV=production
+APP_DEBUG=false
+APP_LOG_LEVEL=INFO
+
+API_CORS_ORIGINS=https://<your-production-domain>
+
+# Production DB — centralized server (ไม่ใช่ localhost)
+DB_HOST=<centralized-db-hostname>
+DB_PORT=5432
+DB_NAME={db_name}
+DB_USER={db_name}
+DB_PASSWORD=<strong-password-from-vault>
+DB_POOL_SIZE=10
+DB_MAX_OVERFLOW=20
+
+# Azure AD
+AZURE_AD_TENANT_ID=<from-azure-portal>
+AZURE_AD_CLIENT_ID=<from-azure-portal>
+AZURE_AD_CLIENT_SECRET=<from-azure-portal>
+
+# JWT
+JWT_SECRET_KEY=<generate-with: python -c "import secrets; print(secrets.token_hex(32))">
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# AI
+CLAUDE_API_KEY=<from-anthropic-console>
+CLAUDE_MODEL=claude-sonnet-4-20250514
+
+# Rate limiting
+RATE_LIMIT_PER_MINUTE=60
+
+# CT App Registry — ดู docs/ops/registry.md
+# Required at L3; opt-in for L0/L1/L2. Set URL only when registering.
+REGISTRY_URL=
+REGISTRY_API_KEY=
+PROJECT_SLUG={slug}
+""")
+
+    _write_if_missing(docker / "init-db.sql", """\
+-- Initialize PostgreSQL extensions
+-- Docker image is pgvector/pgvector:pg16 — pgvector + standard pg_trgm
+-- are AVAILABLE; enable below only what you actually use.
+-- See AGENTS.md §2 Stack Defaults.
+
+-- Default (always enable):
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Conditional (uncomment when needed):
+-- pg_trgm: full-text search / trigram similarity (incl. Thai)
+-- CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
+-- pgvector: AI embeddings / semantic search / RAG
+--   Required if STACK_VARIANT involves vector RAG (docs/patterns/ai.md §7)
+-- CREATE EXTENSION IF NOT EXISTS "vector";
+""")
+
+    # deploy.sh สำหรับ production
+    deploy_sh = root / "deploy.sh"
+    _write_if_missing(deploy_sh, f"""\
+#!/bin/bash
+# deploy.sh — Production deploy (hardened: backup + health gate + auto-rollback)
+# รันบน production server: ./deploy.sh
+#
+# ลำดับ: backup DB -> build image ใหม่ -> migrate -> รอ health -> ถ้าพัง rollback อัตโนมัติ
+# user จะไม่ค้างอยู่บนแอปที่ boot ไม่ขึ้น เพราะถ้า health ไม่ผ่านจะถอยกลับ commit เดิมให้
+#
+# Prerequisites (IT ต้องเตรียมก่อน):
+#   - backend/.env       <- copy จาก backend/.env.prod.example แล้วแก้ค่าจริง
+#   - network proxy-net  <- docker network create proxy-net
+#   - git clone repo ไว้บน server แล้ว
+#
+# First time setup:
+#   git clone <repo-url> /opt/{slug}
+#   cp backend/.env.prod.example backend/.env   # แก้ค่าจริง
+#   docker network create proxy-net
+#   ./deploy.sh
+#
+# Override ได้ผ่าน env: HEALTH_URL, HEALTH_RETRIES, BACKUP_DIR
+
+set -eo pipefail
+
+COMPOSE="docker compose"
+
+[ -n "$HEALTH_URL" ] || HEALTH_URL="http://localhost:8000/health/ready"
+[ -n "$HEALTH_RETRIES" ] || HEALTH_RETRIES=30
+[ -n "$BACKUP_DIR" ] || BACKUP_DIR="./backups"
+
+PREV_REF="$(git rev-parse HEAD)"
+echo "Deploy {slug} ... (commit เดิม: $PREV_REF)"
+
+# 1. Backup DB ก่อน migrate เสมอ (best-effort; centralized DB ให้ประสาน DBA)
+mkdir -p "$BACKUP_DIR"
+STAMP="$(date +%F_%H%M%S)"
+BACKUP_FILE="$BACKUP_DIR/db_$STAMP.sql"
+if command -v pg_dump >/dev/null 2>&1 && [ -n "$DB_NAME" ] && [ -n "$DB_HOST" ] && [ -n "$DB_USER" ]; then
+  echo "Backup DB -> $BACKUP_FILE"
+  PGPASSWORD="$DB_PASSWORD" pg_dump -h "$DB_HOST" -U "$DB_USER" "$DB_NAME" > "$BACKUP_FILE"
+else
+  echo "WARN: ข้าม DB backup (ไม่มี pg_dump หรือ DB_* ไม่ครบ) — backup centralized DB ก่อนต่อ" >&2
+fi
+
+rollback() {{
+  echo "!! Deploy ล้มเหลว — rollback code กลับ $PREV_REF" >&2
+  git reset --hard "$PREV_REF"
+  $COMPOSE up -d --build
+  echo "Rolled back code. ถ้า migrate รันไปแล้ว schema อาจเปลี่ยน — restore: psql ... < $BACKUP_FILE" >&2
+  exit 1
+}}
+
+# 2. Pull + build image ใหม่ (ยังไม่สลับ container)
+git pull origin main
+$COMPOSE build || rollback
+
+# 3. Migrate — เขียนแบบ backward-compatible เพื่อให้ container เก่ายังทำงานได้ (ดู docs/database.md §6.4)
+$COMPOSE up -d
+$COMPOSE exec -T backend alembic upgrade head || rollback
+
+# 4. Health gate — รอ /health/ready เขียว ไม่งั้น rollback อัตโนมัติ
+echo "รอ health ($HEALTH_URL) สูงสุด $HEALTH_RETRIES ครั้ง..."
+ok=0
+for i in $(seq 1 "$HEALTH_RETRIES"); do
+  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then ok=1; break; fi
+  sleep 2
+done
+[ "$ok" = "1" ] || rollback
+
+echo "Deploy เสร็จ — $(git rev-parse HEAD) healthy"
+""")
+    deploy_sh.chmod(0o755)
+
+
+# ───────────────────────────────────────────────────────────────
+# Tooling (v3.0) — pre-commit hooks + custom checks
+# ───────────────────────────────────────────────────────────────
+
+# Standard repo's tooling source files — copied to new projects as-is.
+# Source dir = the standard repo root (parent of scripts/)
+_STANDARD_ROOT = Path(__file__).resolve().parent.parent
+_TOOLING_FILES = [
+    ".pre-commit-config.yaml",
+    "scripts/checks/no_real_secrets_in_examples.py",
+    "scripts/checks/no_direct_ai_sdk.py",
+    "scripts/checks/camel_base_model_audit.py",
+    "scripts/checks/no_dict_in_endpoint.py",
+    "scripts/checks/no_raw_colors.py",
+    "scripts/checks/no_unguarded_url_fetch.py",
+    ".github/workflows/ci.yml",
+    ".github/workflows/security.yml",
+    "docker-compose.smoke.yml",
+    "scripts/smoke-prod.sh",
+    "scripts/smoke-prod.bat",
+]
+
+# CT global standard files — copied with destination remap
+# (src in standard repo → dst in scaffolded project)
+_GLOBAL_STANDARD_FILES = {
+    "docs/AupModal.tsx": "frontend/src/components/AupModal.tsx",
+}
+
+
+def _scaffold_tooling(cfg: ProjectConfig, root: Path) -> None:
+    """Copy pre-commit config + custom checks to new project.
+
+    Implements AGENTS.md §B Enforcement Matrix tooling.
+    See docs/patterns/tooling.md for the design spec.
+    """
+    for rel_path in _TOOLING_FILES:
+        src = _STANDARD_ROOT / rel_path
+        dst = root / rel_path
+        if not src.exists():
+            # Standard incomplete — skip silently (not blocking)
+            continue
+        if dst.exists():
+            continue  # don't clobber if user customized
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+    # Empty .secrets.baseline placeholder
+    # User should run: detect-secrets scan > .secrets.baseline (after install)
+    baseline = root / ".secrets.baseline"
+    if not baseline.exists():
+        baseline.write_text(
+            '{\n'
+            '  "version": "1.5.0",\n'
+            '  "plugins_used": [],\n'
+            '  "filters_used": [],\n'
+            '  "results": {},\n'
+            '  "generated_at": "1970-01-01T00:00:00Z"\n'
+            '}\n',
+            encoding="utf-8",
+        )
+
+
+def _scaffold_global_standards(cfg: ProjectConfig, root: Path) -> None:
+    """Copy CT global standard files (e.g. AupModal) to new project.
+
+    Implements AGENTS.md §18 CT Global Standards — currently:
+    - AupModal.tsx (mandatory AUP modal per docs/aup-modal-standard.md)
+
+    Files are copied to their canonical project paths (frontend/src/components/, etc.)
+    """
+    for src_rel, dst_rel in _GLOBAL_STANDARD_FILES.items():
+        src = _STANDARD_ROOT / src_rel
+        dst = root / dst_rel
+        if not src.exists():
+            continue  # standard incomplete — skip silently
+        if dst.exists():
+            continue  # don't clobber user customization
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+    # .vscode/settings.json — workspace settings recommended by onboarding §7.1.
+    # Committed (not gitignored) so every team member gets the same defaults.
+    _write_if_missing(root / ".vscode" / "settings.json", '''\
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+  "python.analysis.typeCheckingMode": "strict",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.venv": true
+  },
+  "eslint.workingDirectories": ["frontend"]
+}
+''')
+
+    # .vscode/extensions.json — surface the tooling we rely on so VS Code
+    # offers a one-click install on first open.
+    _write_if_missing(root / ".vscode" / "extensions.json", '''\
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "ms-azuretools.vscode-docker",
+    "bradlc.vscode-tailwindcss"
+  ]
+}
+''')
+
+
+# ---------------------------------------------------------------------------
+# Opt-in module: Database Connections + Query Sandbox
+# ---------------------------------------------------------------------------
+# Emitted only when FEATURE_DB_CONNECTIONS is set (project.config). The module
+# file bodies are copied verbatim from the SlipDesk reference implementation.
+# See docs/patterns/db-connections.md for the security contract.
+
+_DB_CONNECTIONS_I18N_TH = '''\
+    "dbConnections": {
+      "title": "ฐานข้อมูล (Database Connections)",
+      "description": "จัดการการเชื่อมต่อ PostgreSQL ได้หลายฐานผ่าน UI — ไม่ต้องแก้โค้ด",
+      "new": "เพิ่มการเชื่อมต่อ",
+      "edit": "แก้ไขการเชื่อมต่อ",
+      "test": "ทดสอบการเชื่อมต่อ",
+      "disabled": "ปิดใช้งาน",
+      "readOnly": "อ่านอย่างเดียว",
+      "readWrite": "อ่าน-เขียน",
+      "ok": "ปกติ",
+      "failed": "ล้มเหลว",
+      "confirmDelete": "ลบการเชื่อมต่อ {{name}}?",
+      "passwordEditHint": "เว้นว่างไว้ = ใช้รหัสผ่านเดิม",
+      "allowWriteWarning": "เปิดโหมดเขียน: Query Sandbox จะสามารถรัน INSERT/UPDATE/DELETE/DDL บนฐานข้อมูลจริงได้ ใช้ด้วยความระมัดระวัง",
+      "fields": {
+        "name": "ชื่อ",
+        "description": "คำอธิบาย",
+        "target": "ปลายทาง",
+        "mode": "โหมด",
+        "lastTest": "ผลทดสอบล่าสุด",
+        "host": "Host",
+        "port": "Port",
+        "database": "Database",
+        "username": "Username",
+        "password": "Password",
+        "sslMode": "SSL Mode",
+        "active": "เปิดใช้งาน",
+        "allowWrite": "อนุญาตให้เขียน (read-write) ใน Sandbox"
+      }
+    },
+    "querySandbox": {
+      "title": "Query Sandbox",
+      "description": "ทดสอบรัน SQL กับการเชื่อมต่อที่เลือก — read-only โดยค่าเริ่มต้น",
+      "connection": "การเชื่อมต่อ",
+      "selectConnection": "— เลือกการเชื่อมต่อ —",
+      "limit": "จำกัดจำนวนแถว",
+      "allowWrite": "รันแบบเขียนได้ (read-write)",
+      "writeLocked": "การเชื่อมต่อนี้ตั้งเป็น read-only",
+      "writeWarning": "โหมดเขียนเปิดอยู่ — คำสั่งจะเปลี่ยนข้อมูลจริงในฐานข้อมูล",
+      "run": "รัน Query",
+      "rowsReturned": "{{count}} แถว",
+      "truncated": "ผลถูกตัด (เกิน limit)",
+      "noRows": "ไม่มีแถวข้อมูล (คำสั่งสำเร็จ)",
+      "tables": "ตาราง",
+      "tablesSelectFirst": "เลือก connection เพื่อดูรายชื่อตาราง",
+      "tablesEmpty": "ไม่พบตาราง",
+      "tablesHint": "คลิกชื่อตารางเพื่อแทรกลงในช่อง SQL"
+    },
+'''
+
+_DB_CONNECTIONS_I18N_EN = '''\
+    "dbConnections": {
+      "title": "Database Connections",
+      "description": "Manage multiple PostgreSQL connections via the UI — no code change",
+      "new": "Add connection",
+      "edit": "Edit connection",
+      "test": "Test connection",
+      "disabled": "disabled",
+      "readOnly": "Read-only",
+      "readWrite": "Read-write",
+      "ok": "OK",
+      "failed": "Failed",
+      "confirmDelete": "Delete connection {{name}}?",
+      "passwordEditHint": "Leave blank to keep the current password",
+      "allowWriteWarning": "Write mode enabled: the Query Sandbox can run INSERT/UPDATE/DELETE/DDL against the live database. Use with care.",
+      "fields": {
+        "name": "Name",
+        "description": "Description",
+        "target": "Target",
+        "mode": "Mode",
+        "lastTest": "Last test",
+        "host": "Host",
+        "port": "Port",
+        "database": "Database",
+        "username": "Username",
+        "password": "Password",
+        "sslMode": "SSL Mode",
+        "active": "Active",
+        "allowWrite": "Allow writes (read-write) in Sandbox"
+      }
+    },
+    "querySandbox": {
+      "title": "Query Sandbox",
+      "description": "Test SQL against a selected connection — read-only by default",
+      "connection": "Connection",
+      "selectConnection": "— Select a connection —",
+      "limit": "Row limit",
+      "allowWrite": "Run in write mode (read-write)",
+      "writeLocked": "This connection is read-only",
+      "writeWarning": "Write mode is on — statements will change live data",
+      "run": "Run query",
+      "rowsReturned": "{{count}} rows",
+      "truncated": "Result truncated (over limit)",
+      "noRows": "No rows (statement succeeded)",
+      "tables": "Tables",
+      "tablesSelectFirst": "Select a connection to browse its tables",
+      "tablesEmpty": "No tables found",
+      "tablesHint": "Click a table to insert it into the editor"
+    },
+'''
+
+_DB_CONNECTIONS_APP_ROUTES = '''\
+            <Route
+              path="/settings/db-connections"
+              element={
+                <RequirePermission perm="db_connections.read">
+                  <SettingsDbConnections />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="/settings/query-sandbox"
+              element={
+                <RequirePermission perm="db_connections.query">
+                  <SettingsQuerySandbox />
+                </RequirePermission>
+              }
+            />
+'''
+
+
+def _scaffold_db_connections_backend(b: Path, app: Path) -> None:
+    """Emit the backend module files + wire the router into installed_routers.
+
+    Called from _scaffold_backend only when feature_db_connections is True. The
+    router append is additionally guarded at runtime by
+    get_settings().FEATURE_DB_CONNECTIONS so the env flag can toggle mounting
+    without re-scaffolding.
+    """
+    _write_if_missing(app / "core" / "crypto.py", '''\
+"""Symmetric encryption for secrets stored at rest in the app DB.
+
+Used by the Database Connections feature to keep external-DB passwords
+out of plaintext columns. Backed by Fernet (AES-128-CBC + HMAC) from the
+`cryptography` package, keyed by the `DB_CONNECTIONS_ENCRYPTION_KEY` env
+var — a url-safe base64 32-byte key.
+
+Generate a key:
+    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+The key lives in `.env` only (never in source / project.config / DB).
+Rotating it invalidates every stored ciphertext — re-enter passwords in
+the UI after a rotation. `encrypt`/`decrypt` raise a clear RuntimeError
+when the key is unset so the feature fails loudly instead of silently
+persisting recoverable secrets.
+"""
+from __future__ import annotations
+
+from functools import lru_cache
+
+from cryptography.fernet import Fernet, InvalidToken
+
+from app.core.config import get_settings
+
+
+class SecretEncryptionError(RuntimeError):
+    """Raised when encryption/decryption cannot proceed."""
+
+
+@lru_cache
+def _fernet() -> Fernet:
+    key = (get_settings().DB_CONNECTIONS_ENCRYPTION_KEY or "").strip()
+    if not key:
+        raise SecretEncryptionError(
+            "DB_CONNECTIONS_ENCRYPTION_KEY is not set. Generate one with "
+            "`python -c \\"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\\"` and add it to backend/.env "
+            "before managing database connections."
+        )
+    try:
+        return Fernet(key.encode())
+    except (ValueError, TypeError) as exc:
+        raise SecretEncryptionError(
+            "DB_CONNECTIONS_ENCRYPTION_KEY is not a valid Fernet key "
+            "(expected url-safe base64, 32 bytes)."
+        ) from exc
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """Encrypt a UTF-8 secret; returns url-safe base64 ciphertext (str)."""
+    return _fernet().encrypt(plaintext.encode("utf-8")).decode("ascii")
+
+
+def decrypt_secret(ciphertext: str) -> str:
+    """Decrypt ciphertext produced by `encrypt_secret`."""
+    try:
+        return _fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
+    except InvalidToken as exc:
+        raise SecretEncryptionError(
+            "Stored secret could not be decrypted — the encryption key may "
+            "have changed since it was saved. Re-enter the password in the UI."
+        ) from exc
+''')
+    _write_if_missing(app / "db" / "models" / "db_connection.py", '''\
+"""DbConnection — an admin-managed PostgreSQL connection target.
+
+The host app can register multiple external PostgreSQL databases at
+runtime (via Setup → Database Connections) and run ad-hoc queries against
+them in the Query Sandbox — no code change or redeploy. The connection
+password is stored Fernet-encrypted in `password_encrypted` (never
+plaintext, never returned by the API). See app/core/crypto.py.
+
+`allow_write` is a per-connection guard: even when a Sandbox request opts
+out of read-only mode, writes are only executed if the connection itself
+permits them. Defaults to read-only for safety.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base, TimestampMixin, UUIDMixin
+
+
+class DbConnection(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "db_connections"
+
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False, default=5432)
+    database: Mapped[str] = mapped_column(String(128), nullable=False)
+    username: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Fernet ciphertext — NEVER expose in any response schema.
+    password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    # libpq-style sslmode the UI lets the admin pick; mapped to asyncpg's
+    # `ssl` connect arg in the service. disable | prefer | require | verify-ca | verify-full
+    ssl_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="prefer")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Per-connection write guard for the sandbox (defaults OFF = read-only).
+    allow_write: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "success" | "failed" — last connection-test outcome, surfaced in the list.
+    last_test_status: Mapped[str | None] = mapped_column(String(20))
+
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+''')
+    _write_if_missing(app / "schemas" / "db_connection.py", '''\
+"""Database Connections + Query Sandbox schemas (CamelBaseModel).
+
+Read schemas deliberately OMIT the password — it is write-only. The
+stored password is Fernet-encrypted and never leaves the server.
+"""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import Field, field_validator
+
+from app.schemas.base import CamelBaseModel
+
+SslMode = Literal["disable", "prefer", "require", "verify-ca", "verify-full"]
+
+
+class DbConnectionRead(CamelBaseModel):
+    id: UUID
+    name: str
+    description: str | None = None
+    host: str
+    port: int
+    database: str
+    username: str
+    ssl_mode: str
+    is_active: bool
+    allow_write: bool
+    last_tested_at: datetime | None = None
+    last_test_status: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DbConnectionCreate(CamelBaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=5432, ge=1, le=65535)
+    database: str = Field(min_length=1, max_length=128)
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1)
+    ssl_mode: SslMode = "prefer"
+    is_active: bool = True
+    allow_write: bool = False
+
+
+class DbConnectionUpdate(CamelBaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    host: str | None = Field(default=None, min_length=1, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    database: str | None = Field(default=None, min_length=1, max_length=128)
+    username: str | None = Field(default=None, min_length=1, max_length=128)
+    # Only re-encrypted + stored when a non-empty value is supplied; omit to
+    # keep the existing password.
+    password: str | None = None
+    ssl_mode: SslMode | None = None
+    is_active: bool | None = None
+    allow_write: bool | None = None
+
+
+class DbConnectionTestResult(CamelBaseModel):
+    success: bool
+    message: str
+    server_version: str | None = None
+    latency_ms: int | None = None
+
+
+class DbTable(CamelBaseModel):
+    """A user table/view in a target DB — powers the sandbox table browser."""
+
+    schema_name: str
+    name: str
+    type: Literal["table", "view"]
+
+
+class QueryRequest(CamelBaseModel):
+    sql: str = Field(min_length=1)
+    # Read-only is the safe default; the UI must explicitly opt out AND the
+    # connection must have allow_write=True for a write to run.
+    read_only: bool = True
+    # Caps the returned row set; the server also enforces a hard ceiling
+    # from app_settings (db_sandbox.max_rows).
+    limit: int = Field(default=100, ge=1, le=10000)
+
+    @field_validator("sql")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("sql must not be blank")
+        return v
+
+
+class QueryResult(CamelBaseModel):
+    columns: list[str]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool
+    duration_ms: int
+    # For non-SELECT statements (UPDATE/INSERT/...) Postgres returns a
+    # command tag + affected-row count instead of a result set.
+    command: str | None = None
+    read_only: bool = True
+''')
+    _write_if_missing(app / "services" / "db_connection_service.py", '''\
+"""DbConnectionService — connect to admin-registered external PostgreSQL
+databases and run sandbox queries against them.
+
+Design notes:
+* Engines are created on demand and cached by (connection id, updated_at)
+  so an edit to host/credentials transparently invalidates the old engine.
+  NullPool is used so we never hold idle sockets open to external DBs.
+* Sandbox safety is layered:
+    - read-only requests run inside a `SET TRANSACTION READ ONLY` tx, so
+      the *server* rejects any write (defence beyond app-side checks).
+    - writes additionally require the connection's `allow_write` flag.
+    - every query runs under a `statement_timeout` and the returned row
+      set is capped. Both limits come from app_settings (admin-tunable),
+      not hardcoded constants — see _sandbox_limits.
+* The sandbox executes admin-authored SQL verbatim via `text(sql)`. That
+  is the whole point of the feature; it is gated to super_admin and fully
+  audit-logged by the router. We never interpolate user input into SQL
+  ourselves (the timeout uses set_config(...) with a bound parameter).
+"""
+from __future__ import annotations
+
+import time
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import URL, text
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from app.core.crypto import decrypt_secret
+from app.db.models.db_connection import DbConnection
+
+# Default safety limits if the app_settings rows are missing. Admin can
+# override via app_settings (keys below) without a code change.
+_DEFAULT_STATEMENT_TIMEOUT_MS = 30_000
+_DEFAULT_MAX_ROWS = 1_000
+SETTING_TIMEOUT_MS = "db_sandbox.statement_timeout_ms"
+SETTING_MAX_ROWS = "db_sandbox.max_rows"
+
+# id -> (cache_key, engine). cache_key encodes updated_at so edits rebuild.
+_engine_cache: dict[str, tuple[str, AsyncEngine]] = {}
+
+
+def _ssl_connect_args(ssl_mode: str) -> dict[str, Any]:
+    """Map libpq-style sslmode to asyncpg's `ssl` connect arg.
+
+    asyncpg has no 'prefer' fallback, so prefer/allow connect without TLS;
+    require/verify-* demand TLS. disable is explicit no-TLS.
+    """
+    mode = (ssl_mode or "prefer").lower()
+    if mode in {"require", "verify-ca", "verify-full"}:
+        return {"ssl": True}
+    if mode == "disable":
+        return {"ssl": False}
+    return {}  # prefer / allow → asyncpg default (no TLS)
+
+
+def _build_url(conn: DbConnection) -> URL:
+    # URL.create escapes credentials safely (no manual string building).
+    return URL.create(
+        "postgresql+asyncpg",
+        username=conn.username,
+        password=decrypt_secret(conn.password_encrypted),
+        host=conn.host,
+        port=conn.port,
+        database=conn.database,
+    )
+
+
+def _get_engine(conn: DbConnection) -> AsyncEngine:
+    cache_key = f"{conn.updated_at.isoformat()}"
+    cached = _engine_cache.get(str(conn.id))
+    if cached and cached[0] == cache_key:
+        return cached[1]
+    if cached:
+        # Stale engine from a previous config — dispose lazily on next loop.
+        _schedule_dispose(cached[1])
+    engine = create_async_engine(
+        _build_url(conn),
+        poolclass=NullPool,
+        connect_args=_ssl_connect_args(conn.ssl_mode),
+    )
+    _engine_cache[str(conn.id)] = (cache_key, engine)
+    return engine
+
+
+def _schedule_dispose(engine: AsyncEngine) -> None:
+    import asyncio
+
+    try:
+        asyncio.get_running_loop().create_task(engine.dispose())
+    except RuntimeError:
+        pass
+
+
+async def invalidate(conn_id: str) -> None:
+    """Drop a cached engine (call after update/delete)."""
+    cached = _engine_cache.pop(conn_id, None)
+    if cached:
+        await cached[1].dispose()
+
+
+def _coerce(value: Any) -> Any:
+    """Make a DB value JSON-serializable for the API response."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Decimal):
+        # Money/decimals as string to avoid float precision loss.
+        return str(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"<{len(bytes(value))} bytes>"
+    return str(value)
+
+
+async def test_connection(conn: DbConnection) -> tuple[bool, str, str | None, int | None]:
+    """Open a connection and read server version. Returns
+    (success, message, server_version, latency_ms)."""
+    engine = _get_engine(conn)
+    start = time.perf_counter()
+    try:
+        async with engine.connect() as db_conn:
+            result = await db_conn.execute(text("SELECT version()"))
+            version = result.scalar_one()
+        latency = int((time.perf_counter() - start) * 1000)
+        return True, "Connected", str(version), latency
+    except Exception as exc:  # noqa: BLE001 — surface any driver error to the admin
+        # Invalidate so a fixed config isn't shadowed by a broken cached engine.
+        await invalidate(str(conn.id))
+        return False, f"{type(exc).__name__}: {exc}", None, None
+
+
+async def list_tables(conn: DbConnection) -> list[dict[str, str]]:
+    """List user tables/views in the target DB for the sandbox table browser.
+
+    Read-only and constant SQL (no user input). Excludes the system schemas
+    (pg_catalog / information_schema). Returns dicts shaped for DbTable:
+    [{"schema_name": ..., "name": ..., "type": "table" | "view"}].
+    """
+    engine = _get_engine(conn)
+    async with engine.connect() as db_conn:
+        async with db_conn.begin():
+            await db_conn.execute(text("SET TRANSACTION READ ONLY"))
+            result = await db_conn.execute(
+                text(
+                    "SELECT table_schema, table_name, table_type "
+                    "FROM information_schema.tables "
+                    "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
+                    "ORDER BY table_schema, table_name"
+                )
+            )
+            return [
+                {
+                    "schema_name": row[0],
+                    "name": row[1],
+                    "type": "view" if "VIEW" in (row[2] or "").upper() else "table",
+                }
+                for row in result.fetchall()
+            ]
+
+
+async def run_query(
+    conn: DbConnection,
+    sql: str,
+    *,
+    read_only: bool,
+    limit: int,
+    statement_timeout_ms: int,
+    max_rows: int,
+) -> dict[str, Any]:
+    """Execute admin-authored SQL against the target connection.
+
+    `read_only=True` runs in a read-only transaction (server rejects
+    writes). `read_only=False` requires the connection's allow_write flag —
+    enforced by the caller (router) before reaching here.
+    """
+    effective_limit = min(limit, max_rows)
+    engine = _get_engine(conn)
+    start = time.perf_counter()
+
+    async with engine.connect() as db_conn:
+        # Open an explicit transaction so SET TRANSACTION READ ONLY applies.
+        async with db_conn.begin():
+            if read_only:
+                # Constant SQL (no user input) — strongest write guard.
+                await db_conn.execute(text("SET TRANSACTION READ ONLY"))
+            # set_config(name, value, is_local=true) — parameterized, scoped
+            # to this transaction; avoids interpolating into a SET statement.
+            await db_conn.execute(
+                text("SELECT set_config('statement_timeout', :ms, true)"),
+                {"ms": str(int(statement_timeout_ms))},
+            )
+            result = await db_conn.execute(text(sql))
+
+            if result.returns_rows:
+                columns = list(result.keys())
+                fetched = result.fetchmany(effective_limit + 1)
+                truncated = len(fetched) > effective_limit
+                visible = fetched[:effective_limit]
+                rows = [[_coerce(v) for v in row] for row in visible]
+                duration = int((time.perf_counter() - start) * 1000)
+                return {
+                    "columns": columns,
+                    "rows": rows,
+                    "row_count": len(rows),
+                    "truncated": truncated,
+                    "duration_ms": duration,
+                    "command": None,
+                    "read_only": read_only,
+                }
+
+            # Non-row statement (UPDATE/INSERT/DDL) — report affected count.
+            duration = int((time.perf_counter() - start) * 1000)
+            return {
+                "columns": [],
+                "rows": [],
+                "row_count": result.rowcount if result.rowcount != -1 else 0,
+                "truncated": False,
+                "duration_ms": duration,
+                "command": _command_tag(sql),
+                "read_only": read_only,
+            }
+
+
+def _command_tag(sql: str) -> str:
+    """First keyword of the statement, for the UI ("UPDATE", "INSERT"...)."""
+    stripped = sql.lstrip()
+    return stripped.split(None, 1)[0].upper() if stripped else ""
+''')
+    _write_if_missing(app / "api" / "v1" / "db_connections.py", '''\
+"""Database Connections + Query Sandbox API (Setup).
+
+Admin-managed external PostgreSQL targets (CRUD), a connection test, and
+a read-only-by-default query sandbox. Gated to super_admin via three
+permission keys (db_connections.read/manage/query); every mutation and
+every executed query is written to activity_logs at high risk level.
+
+Passwords are Fernet-encrypted at rest (app/core/crypto.py) and never
+returned. The sandbox executes admin-authored SQL verbatim — that is the
+feature's purpose; it is NOT user-facing input. We log the statement's
+command tag + length, never the raw SQL (it may contain literal PII).
+"""
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import CurrentUser, require_permission
+from app.auth.permissions import PermissionKey
+from app.core.crypto import SecretEncryptionError, encrypt_secret
+from app.db.models.db_connection import DbConnection
+from app.db.session import get_db
+from app.schemas.db_connection import (
+    DbConnectionCreate,
+    DbConnectionRead,
+    DbConnectionTestResult,
+    DbConnectionUpdate,
+    DbTable,
+    QueryRequest,
+    QueryResult,
+)
+from app.services import db_connection_service as svc
+from app.services.app_setting_service import AppSettingService
+from app.services.loggers.activity_logger import ActivityLogger
+
+router = APIRouter(tags=["db_connections"])
+
+
+async def _get_or_404(db: AsyncSession, conn_id: UUID) -> DbConnection:
+    conn = (
+        await db.execute(select(DbConnection).where(DbConnection.id == conn_id))
+    ).scalar_one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+    return conn
+
+
+@router.get("", response_model=list[DbConnectionRead], dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_READ))
+])
+async def list_connections(db: AsyncSession = Depends(get_db)) -> list[DbConnectionRead]:
+    result = await db.execute(select(DbConnection).order_by(DbConnection.name))
+    return [DbConnectionRead.model_validate(c) for c in result.scalars().all()]
+
+
+@router.get("/{conn_id}", response_model=DbConnectionRead, dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_READ))
+])
+async def get_connection(conn_id: UUID, db: AsyncSession = Depends(get_db)) -> DbConnectionRead:
+    return DbConnectionRead.model_validate(await _get_or_404(db, conn_id))
+
+
+@router.post("", response_model=DbConnectionRead, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_permission(PermissionKey.DB_CONNECTIONS_MANAGE))])
+async def create_connection(
+    payload: DbConnectionCreate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> DbConnectionRead:
+    existing = (
+        await db.execute(select(DbConnection).where(DbConnection.name == payload.name))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="A connection with this name already exists")
+    try:
+        encrypted = encrypt_secret(payload.password)
+    except SecretEncryptionError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    conn = DbConnection(
+        name=payload.name, description=payload.description,
+        host=payload.host, port=payload.port, database=payload.database,
+        username=payload.username, password_encrypted=encrypted,
+        ssl_mode=payload.ssl_mode, is_active=payload.is_active,
+        allow_write=payload.allow_write, created_by_user_id=user.id,
+    )
+    db.add(conn)
+    await db.flush()
+    await ActivityLogger(db).log(
+        action="db_connection.created", action_type="create",
+        resource_type="db_connection", resource_id=str(conn.id),
+        user=user, request=request, risk_level="high",
+        metadata={"name": conn.name, "host": conn.host, "database": conn.database,
+                  "allowWrite": conn.allow_write},
+    )
+    return DbConnectionRead.model_validate(conn)
+
+
+@router.put("/{conn_id}", response_model=DbConnectionRead, dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_MANAGE))
+])
+async def update_connection(
+    conn_id: UUID,
+    payload: DbConnectionUpdate,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> DbConnectionRead:
+    conn = await _get_or_404(db, conn_id)
+
+    if payload.name is not None and payload.name != conn.name:
+        clash = (
+            await db.execute(select(DbConnection).where(DbConnection.name == payload.name))
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="A connection with this name already exists")
+
+    data = payload.model_dump(exclude_unset=True)
+    password = data.pop("password", None)
+    for field, value in data.items():
+        setattr(conn, field, value)
+    if password:  # only re-encrypt when a non-empty password is supplied
+        try:
+            conn.password_encrypted = encrypt_secret(password)
+        except SecretEncryptionError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail=str(exc)) from exc
+
+    await db.flush()
+    await svc.invalidate(str(conn.id))  # drop cached engine — config changed
+    await ActivityLogger(db).log(
+        action="db_connection.updated", action_type="update",
+        resource_type="db_connection", resource_id=str(conn.id),
+        user=user, request=request, risk_level="high",
+        metadata={"name": conn.name, "passwordChanged": bool(password),
+                  "fields": sorted(data.keys())},
+    )
+    return DbConnectionRead.model_validate(conn)
+
+
+@router.delete("/{conn_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_MANAGE))
+])
+async def delete_connection(
+    conn_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    conn = await _get_or_404(db, conn_id)
+    name = conn.name
+    await db.delete(conn)
+    await svc.invalidate(str(conn_id))
+    await ActivityLogger(db).log(
+        action="db_connection.deleted", action_type="delete",
+        resource_type="db_connection", resource_id=str(conn_id),
+        user=user, request=request, risk_level="high",
+        metadata={"name": name},
+    )
+
+
+@router.post("/{conn_id}/test", response_model=DbConnectionTestResult, dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_READ))
+])
+async def test_connection(
+    conn_id: UUID,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> DbConnectionTestResult:
+    conn = await _get_or_404(db, conn_id)
+    success, message, version, latency = await svc.test_connection(conn)
+    conn.last_test_status = "success" if success else "failed"
+    from datetime import datetime, timezone
+    conn.last_tested_at = datetime.now(timezone.utc)
+    await db.flush()
+    await ActivityLogger(db).log(
+        action="db_connection.tested", action_type="other",
+        resource_type="db_connection", resource_id=str(conn.id),
+        user=user, request=request, risk_level="medium",
+        metadata={"name": conn.name, "success": success},
+    )
+    return DbConnectionTestResult(
+        success=success, message=message, server_version=version, latency_ms=latency,
+    )
+
+
+@router.get("/{conn_id}/tables", response_model=list[DbTable], dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_QUERY))
+])
+async def list_tables(conn_id: UUID, db: AsyncSession = Depends(get_db)) -> list[DbTable]:
+    """List the target DB's tables/views for the sandbox browser.
+
+    Schema metadata only (no row data) — not audit-logged: it is fetched
+    automatically when a connection is selected and would only add noise.
+    """
+    conn = await _get_or_404(db, conn_id)
+    if not conn.is_active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Connection is disabled")
+    try:
+        rows = await svc.list_tables(conn)
+    except SecretEncryptionError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — surface the driver error to the admin sandbox
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"{type(exc).__name__}: {exc}") from exc
+    return [DbTable.model_validate(r) for r in rows]
+
+
+@router.post("/{conn_id}/query", response_model=QueryResult, dependencies=[
+    Depends(require_permission(PermissionKey.DB_CONNECTIONS_QUERY))
+])
+async def run_query(
+    conn_id: UUID,
+    payload: QueryRequest,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> QueryResult:
+    conn = await _get_or_404(db, conn_id)
+    if not conn.is_active:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Connection is disabled")
+
+    # Write-guard: a write request needs BOTH an explicit read_only=false AND
+    # the connection's allow_write flag. Otherwise force read-only.
+    write_attempt = not payload.read_only
+    if write_attempt and not conn.allow_write:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=("This connection is read-only. Enable 'Allow write' on the "
+                    "connection to run write statements."),
+        )
+    effective_read_only = not (write_attempt and conn.allow_write)
+
+    settings_svc = AppSettingService(db)
+    timeout_ms = int(await settings_svc.get(svc.SETTING_TIMEOUT_MS, svc._DEFAULT_STATEMENT_TIMEOUT_MS))
+    max_rows = int(await settings_svc.get(svc.SETTING_MAX_ROWS, svc._DEFAULT_MAX_ROWS))
+
+    try:
+        result = await svc.run_query(
+            conn, payload.sql,
+            read_only=effective_read_only, limit=payload.limit,
+            statement_timeout_ms=timeout_ms, max_rows=max_rows,
+        )
+    except SecretEncryptionError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — return the DB error to the admin sandbox
+        await ActivityLogger(db).log(
+            action="db_connection.query_failed", action_type="other",
+            resource_type="db_connection", resource_id=str(conn.id),
+            user=user, request=request, risk_level="high",
+            metadata={"name": conn.name, "readOnly": effective_read_only,
+                      "sqlLength": len(payload.sql), "error": type(exc).__name__},
+        )
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"{type(exc).__name__}: {exc}") from exc
+
+    # Audit the executed query — command tag + length only, never raw SQL
+    # (it may carry literal PII; §3 rule 2).
+    await ActivityLogger(db).log(
+        action="db_connection.query", action_type="read_sensitive",
+        resource_type="db_connection", resource_id=str(conn.id),
+        user=user, request=request, risk_level="high",
+        metadata={"name": conn.name, "readOnly": effective_read_only,
+                  "command": result["command"], "rowCount": result["row_count"],
+                  "sqlLength": len(payload.sql)},
+    )
+    return QueryResult(**result)
+''')
+    _write_if_missing(b / "alembic" / "versions" / "2026_01_02_0700-0011_db_connections.py", '''\
+"""db_connections — admin-managed external PostgreSQL connection targets
+
+Revision ID: 0011_db_connections
+Revises: 0010_normalize_user_emails
+Create Date: 2026-01-02 07:00:00.000000
+"""
+from __future__ import annotations
+
+from alembic import op
+
+
+revision = "0011_db_connections"
+down_revision = "0010_normalize_user_emails"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("""
+        CREATE TABLE db_connections (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(100) NOT NULL UNIQUE,
+            description TEXT,
+            host VARCHAR(255) NOT NULL,
+            port INTEGER NOT NULL DEFAULT 5432,
+            database VARCHAR(128) NOT NULL,
+            username VARCHAR(128) NOT NULL,
+            password_encrypted TEXT NOT NULL,
+            ssl_mode VARCHAR(20) NOT NULL DEFAULT 'prefer',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            allow_write BOOLEAN NOT NULL DEFAULT FALSE,
+            last_tested_at TIMESTAMPTZ,
+            last_test_status VARCHAR(20),
+            created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX ix_db_connections_name ON db_connections (name);
+    """)
+
+
+def downgrade() -> None:
+    op.execute("DROP TABLE IF EXISTS db_connections CASCADE")
+''')
+    _write_if_missing(b / "tests" / "security" / "test_db_connection_secrets.py", '''\
+"""Database Connections — secret-handling guarantees.
+
+1. The Read schema never carries the password (write-only field).
+2. Fernet round-trip works and decrypt fails loudly on a rotated key.
+3. The connection-credential perms are in the override deny-list so a
+   non-super-admin holder of permissions.grant_override cannot acquire
+   them per-user.
+"""
+from __future__ import annotations
+
+import pytest
+from cryptography.fernet import Fernet
+
+
+def test_read_schema_has_no_password_field() -> None:
+    from app.schemas.db_connection import DbConnectionRead
+
+    assert "password" not in DbConnectionRead.model_fields
+    assert "password_encrypted" not in DbConnectionRead.model_fields
+
+
+def test_fernet_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DB_CONNECTIONS_ENCRYPTION_KEY", key)
+
+    # Rebuild settings + clear the lru_cache so the new key is picked up.
+    from app.core import config, crypto
+
+    config.get_settings.cache_clear()
+    crypto._fernet.cache_clear()
+
+    token = crypto.encrypt_secret("s3cr3t-pw")
+    assert token != "s3cr3t-pw"
+    assert crypto.decrypt_secret(token) == "s3cr3t-pw"
+
+
+def test_decrypt_with_wrong_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import config, crypto
+
+    monkeypatch.setenv("DB_CONNECTIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    config.get_settings.cache_clear()
+    crypto._fernet.cache_clear()
+    token = crypto.encrypt_secret("hello")
+
+    # Rotate the key — old ciphertext must fail to decrypt, not return garbage.
+    monkeypatch.setenv("DB_CONNECTIONS_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    config.get_settings.cache_clear()
+    crypto._fernet.cache_clear()
+    with pytest.raises(crypto.SecretEncryptionError):
+        crypto.decrypt_secret(token)
+
+    # Cleanup so other tests see a clean cache.
+    config.get_settings.cache_clear()
+    crypto._fernet.cache_clear()
+
+
+def test_credential_perms_are_super_admin_only() -> None:
+    # The deny-list lives as a local inside add_override; assert against the
+    # seed source so a future rename keeps the guard in lockstep.
+    import inspect
+
+    from app.api.v1 import users
+
+    src = inspect.getsource(users)
+    for key in ("db_connections.read", "db_connections.manage", "db_connections.query"):
+        assert key in src, f"{key} missing from users.py privilege deny-list"
+''')
+    # Wire the router into the canonical installed_routers.py (written earlier
+    # in _scaffold_backend). Idempotent — guarded by a presence check.
+    routers = app / "api" / "v1" / "installed_routers.py"
+    text = routers.read_text(encoding="utf-8")
+    if "db_connections_router" not in text:
+        text = text.replace(
+            "from fastapi import APIRouter\n",
+            "from fastapi import APIRouter\n\n"
+            "from app.api.v1.db_connections import router as db_connections_router\n"
+            "from app.core.config import get_settings\n",
+            1,
+        )
+        text = text.rstrip("\n") + (
+            "\n\n# Database Connections module — mounted only when the runtime flag is on.\n"
+            "if get_settings().FEATURE_DB_CONNECTIONS:\n"
+            "    ROUTERS.append((db_connections_router, \"/api/v1/db-connections\"))\n"
+        )
+        routers.write_text(text, encoding="utf-8")
+
+
+def _scaffold_db_connections_frontend(src: Path) -> None:
+    """Emit the frontend pages/api + inject routes, settings cards and i18n
+    into the just-written base files. Called from _scaffold_frontend only when
+    feature_db_connections is True. All injections are idempotent."""
+    _write_if_missing(src / "api" / "dbConnections.ts", '''\
+/**
+ * Database Connections + Query Sandbox API (Setup).
+ *
+ * Backs /settings/db-connections (CRUD + test) and /settings/query-sandbox.
+ * The password is write-only — it is never present on a read response.
+ */
+import { apiClient } from './client';
+
+export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+
+export interface DbConnection {
+  id: string;
+  name: string;
+  description: string | null;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  sslMode: SslMode;
+  isActive: boolean;
+  allowWrite: boolean;
+  lastTestedAt: string | null;
+  lastTestStatus: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DbConnectionCreate {
+  name: string;
+  description?: string | null;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  sslMode: SslMode;
+  isActive: boolean;
+  allowWrite: boolean;
+}
+
+// Partial update; omit `password` to keep the stored one.
+export type DbConnectionUpdate = Partial<DbConnectionCreate>;
+
+export interface DbConnectionTestResult {
+  success: boolean;
+  message: string;
+  serverVersion: string | null;
+  latencyMs: number | null;
+}
+
+export interface DbTable {
+  schemaName: string;
+  name: string;
+  type: 'table' | 'view';
+}
+
+export interface QueryRequest {
+  sql: string;
+  readOnly: boolean;
+  limit: number;
+}
+
+export interface QueryResult {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  truncated: boolean;
+  durationMs: number;
+  command: string | null;
+  readOnly: boolean;
+}
+
+const BASE = '/api/v1/db-connections';
+
+export async function listConnections(): Promise<DbConnection[]> {
+  const res = await apiClient.get<DbConnection[]>(BASE);
+  return res.data;
+}
+
+export async function createConnection(payload: DbConnectionCreate): Promise<DbConnection> {
+  const res = await apiClient.post<DbConnection>(BASE, payload);
+  return res.data;
+}
+
+export async function updateConnection(
+  id: string,
+  payload: DbConnectionUpdate,
+): Promise<DbConnection> {
+  const res = await apiClient.put<DbConnection>(`${BASE}/${id}`, payload);
+  return res.data;
+}
+
+export async function deleteConnection(id: string): Promise<void> {
+  await apiClient.delete(`${BASE}/${id}`);
+}
+
+export async function testConnection(id: string): Promise<DbConnectionTestResult> {
+  const res = await apiClient.post<DbConnectionTestResult>(`${BASE}/${id}/test`);
+  return res.data;
+}
+
+export async function listTables(id: string): Promise<DbTable[]> {
+  const res = await apiClient.get<DbTable[]>(`${BASE}/${id}/tables`);
+  return res.data;
+}
+
+export async function runQuery(id: string, payload: QueryRequest): Promise<QueryResult> {
+  const res = await apiClient.post<QueryResult>(`${BASE}/${id}/query`, payload);
+  return res.data;
+}
+''')
+    _write_if_missing(src / "pages" / "settings" / "DatabaseConnections.tsx", '''\
+/**
+ * DatabaseConnections — Setup page to register/edit external PostgreSQL
+ * targets (super_admin). Supports many connections; the Query Sandbox
+ * runs against one at a time.
+ *
+ * The password field is write-only: blank on edit means "keep existing".
+ * Saving never echoes the stored password back.
+ */
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { CheckCircle2, Database, Loader2, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
+import {
+  type DbConnection,
+  type DbConnectionCreate,
+  type SslMode,
+  createConnection,
+  deleteConnection,
+  listConnections,
+  testConnection,
+  updateConnection,
+} from '../../api/dbConnections';
+
+const SSL_MODES: SslMode[] = ['disable', 'prefer', 'require', 'verify-ca', 'verify-full'];
+
+type FormState = DbConnectionCreate;
+
+const EMPTY_FORM: FormState = {
+  name: '', description: '', host: '', port: 5432, database: '', username: '',
+  password: '', sslMode: 'prefer', isActive: true, allowWrite: false,
+};
+
+function toForm(c: DbConnection): FormState {
+  return {
+    name: c.name, description: c.description ?? '', host: c.host, port: c.port,
+    database: c.database, username: c.username, password: '', sslMode: c.sslMode,
+    isActive: c.isActive, allowWrite: c.allowWrite,
+  };
+}
+
+export function DatabaseConnections() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<DbConnection | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [testResult, setTestResult] = useState<Record<string, string>>({});
+
+  const { data: connections = [], isLoading } = useQuery({
+    queryKey: ['db-connections'],
+    queryFn: listConnections,
+  });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['db-connections'] });
+
+  const saveM = useMutation({
+    mutationFn: async (form: FormState) => {
+      if (editing) {
+        const payload = { ...form };
+        if (!payload.password) delete (payload as Partial<FormState>).password;
+        return updateConnection(editing.id, payload);
+      }
+      return createConnection(form);
+    },
+    onSuccess: () => { invalidate(); setEditing(null); setCreating(false); },
+  });
+
+  const deleteM = useMutation({
+    mutationFn: (id: string) => deleteConnection(id),
+    onSuccess: invalidate,
+  });
+
+  const testM = useMutation({
+    mutationFn: (id: string) => testConnection(id),
+    onSuccess: (res, id) => {
+      setTestResult((prev) => ({
+        ...prev,
+        [id]: res.success
+          ? `✓ ${res.message}${res.latencyMs != null ? ` (${res.latencyMs}ms)` : ''}`
+          : `✗ ${res.message}`,
+      }));
+      invalidate();
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto flex min-h-[40vh] items-center justify-center px-4">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const showForm = creating || editing !== null;
+
+  return (
+    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-bold">
+            <Database className="h-5 w-5" /> {t('settings.dbConnections.title')}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('settings.dbConnections.description')}</p>
+        </div>
+        {!showForm && (
+          <button
+            type="button"
+            onClick={() => { setCreating(true); setEditing(null); }}
+            className="inline-flex shrink-0 items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90"
+          >
+            <Plus className="h-4 w-4" /> {t('settings.dbConnections.new')}
+          </button>
+        )}
+      </header>
+
+      {showForm && (
+        <ConnectionForm
+          initial={editing ? toForm(editing) : EMPTY_FORM}
+          isEdit={editing !== null}
+          isPending={saveM.isPending}
+          error={saveM.isError ? extractError(saveM.error) : null}
+          onCancel={() => { setCreating(false); setEditing(null); saveM.reset(); }}
+          onSubmit={(form) => saveM.mutate(form)}
+        />
+      )}
+
+      <section className="mt-6 overflow-x-auto rounded-lg border border-border bg-card shadow-sm">
+        <table className="w-full text-sm">
+          <thead className="border-b border-border text-left text-muted-foreground">
+            <tr>
+              <th className="px-4 py-3 font-medium">{t('settings.dbConnections.fields.name')}</th>
+              <th className="px-4 py-3 font-medium">{t('settings.dbConnections.fields.target')}</th>
+              <th className="px-4 py-3 font-medium">{t('settings.dbConnections.fields.mode')}</th>
+              <th className="px-4 py-3 font-medium">{t('settings.dbConnections.fields.lastTest')}</th>
+              <th className="px-4 py-3 text-right font-medium">{t('common.actions')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {connections.length === 0 ? (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">{t('common.noResults')}</td></tr>
+            ) : connections.map((c) => (
+              <tr key={c.id} className="border-b border-border last:border-0">
+                <td className="px-4 py-3">
+                  <div className="font-medium">{c.name}</div>
+                  {c.description && <div className="text-xs text-muted-foreground">{c.description}</div>}
+                  {!c.isActive && <span className="text-xs text-muted-foreground">({t('settings.dbConnections.disabled')})</span>}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">{c.username}@{c.host}:{c.port}/{c.database}</td>
+                <td className="px-4 py-3">
+                  {c.allowWrite
+                    ? <span className="rounded bg-destructive/10 px-2 py-0.5 text-xs text-destructive">{t('settings.dbConnections.readWrite')}</span>
+                    : <span className="rounded bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t('settings.dbConnections.readOnly')}</span>}
+                </td>
+                <td className="px-4 py-3 text-xs">
+                  {testResult[c.id]
+                    ? <span className={testResult[c.id].startsWith('✓') ? 'text-green-600' : 'text-destructive'}>{testResult[c.id]}</span>
+                    : c.lastTestStatus === 'success'
+                      ? <span className="inline-flex items-center gap-1 text-green-600"><CheckCircle2 className="h-3 w-3" /> {t('settings.dbConnections.ok')}</span>
+                      : c.lastTestStatus === 'failed'
+                        ? <span className="inline-flex items-center gap-1 text-destructive"><XCircle className="h-3 w-3" /> {t('settings.dbConnections.failed')}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex justify-end gap-1">
+                    <IconButton title={t('settings.dbConnections.test')} onClick={() => testM.mutate(c.id)} busy={testM.isPending && testM.variables === c.id}>
+                      <Plug className="h-4 w-4" />
+                    </IconButton>
+                    <IconButton title={t('common.edit')} onClick={() => { setEditing(c); setCreating(false); }}>
+                      <Pencil className="h-4 w-4" />
+                    </IconButton>
+                    <IconButton title={t('common.delete')} danger
+                      onClick={() => { if (window.confirm(t('settings.dbConnections.confirmDelete', { name: c.name }))) deleteM.mutate(c.id); }}>
+                      <Trash2 className="h-4 w-4" />
+                    </IconButton>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
+
+function IconButton({ children, title, onClick, danger, busy }: {
+  children: React.ReactNode; title: string; onClick: () => void; danger?: boolean; busy?: boolean;
+}) {
+  return (
+    <button
+      type="button" title={title} onClick={onClick} disabled={busy}
+      className={`rounded-md p-2 transition-colors hover:bg-secondary disabled:opacity-50 ${danger ? 'text-destructive' : 'text-muted-foreground'}`}
+    >
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : children}
+    </button>
+  );
+}
+
+function ConnectionForm({ initial, isEdit, isPending, error, onCancel, onSubmit }: {
+  initial: FormState; isEdit: boolean; isPending: boolean; error: string | null;
+  onCancel: () => void; onSubmit: (form: FormState) => void;
+}) {
+  const { t } = useTranslation();
+  const [form, setForm] = useState<FormState>(initial);
+  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const inputCls = 'rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
+
+  return (
+    <section className="mt-6 rounded-lg border border-border bg-card p-6 shadow-sm">
+      <h2 className="text-base font-semibold">
+        {isEdit ? t('settings.dbConnections.edit') : t('settings.dbConnections.new')}
+      </h2>
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label={t('settings.dbConnections.fields.name')}>
+          <input className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.description')}>
+          <input className={inputCls} value={form.description ?? ''} onChange={(e) => set('description', e.target.value)} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.host')}>
+          <input className={inputCls} value={form.host} onChange={(e) => set('host', e.target.value)} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.port')}>
+          <input type="number" className={inputCls} value={form.port} onChange={(e) => set('port', Number(e.target.value))} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.database')}>
+          <input className={inputCls} value={form.database} onChange={(e) => set('database', e.target.value)} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.username')}>
+          <input className={inputCls} autoComplete="off" value={form.username} onChange={(e) => set('username', e.target.value)} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.password')} hint={isEdit ? t('settings.dbConnections.passwordEditHint') : undefined}>
+          <input type="password" className={inputCls} autoComplete="new-password"
+            placeholder={isEdit ? '••••••••' : ''} value={form.password} onChange={(e) => set('password', e.target.value)} />
+        </Field>
+        <Field label={t('settings.dbConnections.fields.sslMode')}>
+          <select className={inputCls} value={form.sslMode} onChange={(e) => set('sslMode', e.target.value as SslMode)}>
+            {SSL_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={form.isActive} onChange={(e) => set('isActive', e.target.checked)} />
+          {t('settings.dbConnections.fields.active')}
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={form.allowWrite} onChange={(e) => set('allowWrite', e.target.checked)} />
+          <span>{t('settings.dbConnections.fields.allowWrite')}</span>
+        </label>
+        {form.allowWrite && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {t('settings.dbConnections.allowWriteWarning')}
+          </p>
+        )}
+      </div>
+
+      {error && <p className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+
+      <div className="mt-6 flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-secondary">
+          {t('common.cancel')}
+        </button>
+        <button
+          type="button"
+          disabled={isPending || !form.name || !form.host || !form.database || !form.username || (!isEdit && !form.password)}
+          onClick={() => onSubmit(form)}
+          className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-60"
+        >
+          {isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+          {t('common.save')}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 text-sm">
+      <span className="font-medium">{label}</span>
+      {children}
+      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+    </label>
+  );
+}
+
+function extractError(err: unknown): string {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+    if (detail) return detail;
+  }
+  return err instanceof Error ? err.message : 'Error';
+}
+
+export default DatabaseConnections;
+''')
+    _write_if_missing(src / "pages" / "settings" / "QuerySandbox.tsx", '''\
+/**
+ * QuerySandbox — run ad-hoc SQL against a registered connection
+ * (super_admin). Read-only by default; the write toggle is only honoured
+ * when the selected connection has allow_write enabled (the server
+ * re-enforces this). Results are capped server-side (db_sandbox.max_rows).
+ */
+import { useRef, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { AlertTriangle, Eye, Loader2, Play, Table2, Terminal } from 'lucide-react';
+import {
+  type DbConnection,
+  type DbTable,
+  type QueryResult,
+  listConnections,
+  listTables,
+  runQuery,
+} from '../../api/dbConnections';
+
+export function QuerySandbox() {
+  const { t } = useTranslation();
+  const [connId, setConnId] = useState('');
+  const [sql, setSql] = useState('');
+  const [readOnly, setReadOnly] = useState(true);
+  const [limit, setLimit] = useState(100);
+  const sqlRef = useRef<HTMLTextAreaElement>(null);
+
+  const { data: connections = [] } = useQuery({
+    queryKey: ['db-connections'],
+    queryFn: listConnections,
+  });
+
+  const active = connections.filter((c) => c.isActive);
+  const selected: DbConnection | undefined = connections.find((c) => c.id === connId);
+
+  const { data: tables = [], isLoading: tablesLoading } = useQuery({
+    queryKey: ['db-tables', connId],
+    queryFn: () => listTables(connId),
+    enabled: !!connId,
+  });
+
+  const runM = useMutation({
+    mutationFn: () => runQuery(connId, { sql, readOnly, limit }),
+  });
+
+  // Insert a table's identifier into the SQL editor: prefill a SELECT when
+  // empty, otherwise splice it in at the cursor.
+  const insertTable = (tbl: DbTable) => {
+    const ident = tbl.schemaName === 'public' ? tbl.name : `${tbl.schemaName}.${tbl.name}`;
+    setSql((prev) => {
+      if (!prev.trim()) return `SELECT * FROM ${ident} LIMIT ${limit};`;
+      const el = sqlRef.current;
+      if (!el) return `${prev} ${ident}`;
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      return prev.slice(0, start) + ident + prev.slice(end);
+    });
+    sqlRef.current?.focus();
+  };
+
+  const canRunWrite = selected?.allowWrite ?? false;
+  const inputCls = 'rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
+
+  const result: QueryResult | undefined = runM.data;
+
+  return (
+    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+      <header>
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <Terminal className="h-5 w-5" /> {t('settings.querySandbox.title')}
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t('settings.querySandbox.description')}</p>
+      </header>
+
+      <section className="mt-6 flex flex-col gap-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.querySandbox.connection')}</span>
+            <select className={inputCls} value={connId} onChange={(e) => { setConnId(e.target.value); setReadOnly(true); }}>
+              <option value="">{t('settings.querySandbox.selectConnection')}</option>
+              {active.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">{t('settings.querySandbox.limit')}</span>
+            <input type="number" min={1} max={10000} className={inputCls} value={limit} onChange={(e) => setLimit(Number(e.target.value))} />
+          </label>
+          <label className="flex items-end gap-2 text-sm">
+            <input
+              type="checkbox"
+              disabled={!canRunWrite}
+              checked={!readOnly && canRunWrite}
+              onChange={(e) => setReadOnly(!e.target.checked)}
+              className="mb-2.5"
+            />
+            <span className="mb-2">
+              {t('settings.querySandbox.allowWrite')}
+              {!canRunWrite && <span className="block text-xs text-muted-foreground">{t('settings.querySandbox.writeLocked')}</span>}
+            </span>
+          </label>
+        </div>
+
+        {!readOnly && canRunWrite && (
+          <p className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" /> {t('settings.querySandbox.writeWarning')}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-4 lg:flex-row">
+          <label className="flex flex-1 flex-col gap-1 text-sm">
+            <span className="font-medium">SQL</span>
+            <textarea
+              ref={sqlRef}
+              value={sql}
+              onChange={(e) => setSql(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              placeholder="SELECT * FROM ..."
+              className={`${inputCls} font-mono`}
+            />
+          </label>
+          <TablesPanel
+            hasConnection={!!connId}
+            loading={tablesLoading}
+            tables={tables}
+            onPick={insertTable}
+          />
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="button"
+            disabled={runM.isPending || !connId || !sql.trim()}
+            onClick={() => runM.mutate()}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-60"
+          >
+            {runM.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {t('settings.querySandbox.run')}
+          </button>
+        </div>
+      </section>
+
+      {runM.isError && (
+        <p className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive whitespace-pre-wrap">
+          {extractError(runM.error)}
+        </p>
+      )}
+
+      {result && <ResultPanel result={result} />}
+    </div>
+  );
+}
+
+function TablesPanel({ hasConnection, loading, tables, onPick }: {
+  hasConnection: boolean;
+  loading: boolean;
+  tables: DbTable[];
+  onPick: (tbl: DbTable) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <aside className="flex w-full flex-col rounded-md border border-border bg-background lg:w-64 lg:shrink-0">
+      <div className="border-b border-border px-3 py-2 text-sm font-medium">
+        {t('settings.querySandbox.tables')}
+        {hasConnection && tables.length > 0 && (
+          <span className="ml-1 text-xs text-muted-foreground">({tables.length})</span>
+        )}
+      </div>
+      <div className="max-h-64 overflow-auto p-1 lg:max-h-[14.5rem]">
+        {!hasConnection ? (
+          <p className="px-2 py-3 text-xs text-muted-foreground">{t('settings.querySandbox.tablesSelectFirst')}</p>
+        ) : loading ? (
+          <div className="flex justify-center py-4"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
+        ) : tables.length === 0 ? (
+          <p className="px-2 py-3 text-xs text-muted-foreground">{t('settings.querySandbox.tablesEmpty')}</p>
+        ) : (
+          <ul>
+            {tables.map((tbl) => (
+              <li key={`${tbl.schemaName}.${tbl.name}`}>
+                <button
+                  type="button"
+                  onClick={() => onPick(tbl)}
+                  title={`${tbl.schemaName}.${tbl.name}`}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-secondary"
+                >
+                  {tbl.type === 'view'
+                    ? <Eye className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    : <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                  <span className="truncate font-mono">{tbl.name}</span>
+                  {tbl.schemaName !== 'public' && (
+                    <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{tbl.schemaName}</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {hasConnection && tables.length > 0 && (
+        <p className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
+          {t('settings.querySandbox.tablesHint')}
+        </p>
+      )}
+    </aside>
+  );
+}
+
+function ResultPanel({ result }: { result: QueryResult }) {
+  const { t } = useTranslation();
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-card shadow-sm">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 text-xs text-muted-foreground">
+        <span>{t('settings.querySandbox.rowsReturned', { count: result.rowCount })}</span>
+        {result.command && <span className="font-mono">{result.command}</span>}
+        <span>{result.durationMs} ms</span>
+        {result.readOnly && <span className="rounded bg-secondary px-2 py-0.5">{t('settings.dbConnections.readOnly')}</span>}
+        {result.truncated && (
+          <span className="rounded bg-amber-500/10 px-2 py-0.5 text-amber-600">{t('settings.querySandbox.truncated')}</span>
+        )}
+      </div>
+      {result.columns.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-muted-foreground">{t('settings.querySandbox.noRows')}</p>
+      ) : (
+        <div className="max-h-[55vh] overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 border-b border-border bg-card text-muted-foreground">
+              <tr>{result.columns.map((col) => <th key={col} className="px-3 py-2 font-medium">{col}</th>)}</tr>
+            </thead>
+            <tbody className="font-mono">
+              {result.rows.map((row, i) => (
+                <tr key={i} className="border-b border-border last:border-0">
+                  {row.map((cell, j) => (
+                    <td key={j} className="max-w-xs truncate px-3 py-1.5" title={fmt(cell)}>{fmt(cell)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function fmt(v: unknown): string {
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function extractError(err: unknown): string {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+    if (detail) return detail;
+  }
+  return err instanceof Error ? err.message : 'Error';
+}
+
+export default QuerySandbox;
+''')
+    # App.tsx — add the two page imports + the two guarded routes.
+    app_tsx = src / "App.tsx"
+    text = app_tsx.read_text(encoding="utf-8")
+    if "SettingsDbConnections" not in text:
+        text = text.replace(
+            "import { MODULE_ROUTES } from './routes';\n",
+            "import { DatabaseConnections as SettingsDbConnections } from './pages/settings/DatabaseConnections';\n"
+            "import { QuerySandbox as SettingsQuerySandbox } from './pages/settings/QuerySandbox';\n"
+            "import { MODULE_ROUTES } from './routes';\n",
+            1,
+        )
+        text = text.replace(
+            "            {MODULE_ROUTES}\n",
+            _DB_CONNECTIONS_APP_ROUTES + "            {MODULE_ROUTES}\n",
+            1,
+        )
+        app_tsx.write_text(text, encoding="utf-8")
+    # SettingsIndex.tsx — add the two lucide icons + the two cards.
+    settings_index = src / "pages" / "SettingsIndex.tsx"
+    text = settings_index.read_text(encoding="utf-8")
+    if "db-connections" not in text:
+        text = text.replace(
+            "import { Activity, KeyRound, ListChecks, Menu as MenuIcon, ScrollText, ShieldCheck, Users } from 'lucide-react';",
+            "import { Activity, Database, KeyRound, ListChecks, Menu as MenuIcon, ScrollText, ShieldCheck, Terminal, Users } from 'lucide-react';",
+            1,
+        )
+        text = text.replace(
+            "  { to: '/settings/activity-logs', perm: 'activity_logs.read', titleKey: 'settings.activityLogs.title', descriptionKey: 'settings.activityLogs.description', Icon: Activity },\n",
+            "  { to: '/settings/activity-logs', perm: 'activity_logs.read', titleKey: 'settings.activityLogs.title', descriptionKey: 'settings.activityLogs.description', Icon: Activity },\n"
+            "  { to: '/settings/db-connections', perm: 'db_connections.read', titleKey: 'settings.dbConnections.title', descriptionKey: 'settings.dbConnections.description', Icon: Database },\n"
+            "  { to: '/settings/query-sandbox', perm: 'db_connections.query', titleKey: 'settings.querySandbox.title', descriptionKey: 'settings.querySandbox.description', Icon: Terminal },\n",
+            1,
+        )
+        settings_index.write_text(text, encoding="utf-8")
+    # i18n — add settings.dbConnections + settings.querySandbox before the
+    # existing settings.activityLogs group in both locales.
+    for loc, frag in (("th", _DB_CONNECTIONS_I18N_TH), ("en", _DB_CONNECTIONS_I18N_EN)):
+        path = src / "i18n" / "locales" / (loc + ".json")
+        text = path.read_text(encoding="utf-8")
+        if '"dbConnections"' not in text:
+            text = text.replace('    "activityLogs": {', frag + '    "activityLogs": {', 1)
+            path.write_text(text, encoding="utf-8")

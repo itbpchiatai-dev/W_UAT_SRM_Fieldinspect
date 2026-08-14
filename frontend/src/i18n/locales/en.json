@@ -1,0 +1,265 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "loading": "Loading...",
+    "edit": "Edit",
+    "delete": "Delete",
+    "actions": "Actions",
+    "search": "Search",
+    "noResults": "No results",
+    "yes": "Yes",
+    "no": "No",
+    "required": "Required",
+    "previous": "Previous",
+    "next": "Next",
+    "forbidden": "Access denied",
+    "missingPermission": "You don't have permission `{{perm}}` for this page",
+    "language": "Language",
+    "refresh": "Refresh",
+    "lightMode": "Light mode",
+    "darkMode": "Dark mode",
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "exportCsv": "Export CSV",
+    "dateFrom": "From",
+    "dateTo": "To"
+  },
+  "auth": {
+    "login": {
+      "title": "Sign in",
+      "email": "Email",
+      "password": "Password",
+      "showPassword": "Show password",
+      "hidePassword": "Hide password",
+      "submit": "Sign in",
+      "sso": "Sign in with Azure AD",
+      "or": "or",
+      "bothDisabled": "Login is disabled — please contact your administrator",
+      "invalidCredentials": "Incorrect email or password",
+      "notApproved": "Your account is awaiting administrator approval",
+      "emailRequired": "Email is required",
+      "emailInvalid": "Invalid email format",
+      "passwordRequired": "Password is required"
+    },
+    "approval": {
+      "title": "Access Request Approval",
+      "requestedAt": "Requested at",
+      "expiresAt": "Expires",
+      "approve": "Approve",
+      "reject": "Reject",
+      "linkSingleUse": "Single-use link — expires automatically if another admin acts first.",
+      "linkExpired": "This link has expired — ask the user to sign up again or use the User Management page.",
+      "linkConsumed": "Another administrator has already acted on this request. This link is no longer usable.",
+      "linkUnavailable": "Link unavailable",
+      "doneApproved": "Approved",
+      "doneRejected": "Rejected",
+      "doneApprovedHint": "The user may now sign in.",
+      "doneRejectedHint": "The user has been notified by email.",
+      "backHome": "Back to home",
+      "submitError": "Submit failed — please retry",
+      "anonymousName": "user"
+    },
+    "logout": "Sign out"
+  },
+  "layout": {
+    "settings": "Settings",
+    "dashboard": "Dashboard",
+    "profile": "Profile"
+  },
+  "settings": {
+    "title": "Settings",
+    "comingSoon": "Coming in Phase C",
+    "users": {
+      "title": "Users",
+      "description": "Manage user accounts and access",
+      "new": "New user",
+      "edit": "Edit user",
+      "deactivate": "Deactivate",
+      "searchPlaceholder": "Search by email",
+      "confirmDeactivate": "Deactivate {{email}}?",
+      "tabs": {
+        "profile": "Profile",
+        "overrides": "Overrides"
+      },
+      "fields": {
+        "email": "Email",
+        "fullName": "Full name",
+        "authProvider": "Provider",
+        "active": "Active",
+        "approved": "Approved",
+        "lastLogin": "Last login",
+        "roles": "Roles",
+        "password": "Password"
+      },
+      "overrides": {
+        "help": "Per-user permission grants/revokes (added on top of role permissions) — system keys (user/role/permission/settings management) are super_admin-only; the affected user sees changes when they refocus or refresh the app",
+        "grant": "Grant",
+        "revoke": "Revoke",
+        "noPermission": "You lack permission to edit overrides (requires permissions.grant_override)",
+        "error": "Could not save"
+      },
+      "approve": "Approve",
+      "unapprove": "Un-approve",
+      "approveAllVisible": "Approve all visible",
+      "confirmApproveAll": "Approve {{count}} visible user(s)?"
+    },
+    "roles": {
+      "title": "Roles",
+      "description": "Define default permissions per role",
+      "new": "New role",
+      "edit": "Edit role",
+      "confirmDelete": "Delete role {{name}}?",
+      "namePrefixMismatch": "Role name prefix must match the provider scope (e.g. internal:* / external:*)",
+      "fields": {
+        "name": "Name (key)",
+        "displayName": "Display name",
+        "providerScope": "Provider scope",
+        "system": "System?",
+        "description": "Description",
+        "permissions": "Permissions"
+      }
+    },
+    "permissions": {
+      "title": "Permissions",
+      "description": "Read-only catalog of permission keys known to the system",
+      "menu": "Menu"
+    },
+    "menus": {
+      "title": "Menus",
+      "description": "Customize the sidebar navigation tree",
+      "new": "New menu",
+      "edit": "Edit menu",
+      "noParent": "— No parent (root) —",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "iconHelp": "Lucide icon name (e.g. LayoutDashboard)",
+      "keyFormat": "Use lowercase a-z 0-9 _, starting with a letter",
+      "confirmDelete": "Delete menu {{key}}?",
+      "fields": {
+        "key": "Key",
+        "labelTh": "Label (Thai)",
+        "labelEn": "Label (English)",
+        "icon": "Icon",
+        "path": "Path",
+        "parent": "Parent",
+        "permission": "Required permission",
+        "order": "Order"
+      }
+    },
+    "auth": {
+      "title": "Authentication",
+      "description": "Toggle local login and SSO providers",
+      "lockedByScope": "Locked by AUTH_SCOPE (compile-time)",
+      "signIn": {
+        "title": "Sign-in methods",
+        "local": "Local (email/password)",
+        "sso": "SSO (Azure AD)"
+      },
+      "signup": {
+        "title": "Self-signup",
+        "enabled": "Allow users to sign up",
+        "defaultRole": "Default role on signup",
+        "requiresLocal": "Local login must be enabled first"
+      },
+      "approval": {
+        "title": "New user approval",
+        "autoApprove": "Auto-approve on sign-up / first login",
+        "help": "When off, new users must wait for an admin to approve them before they can sign in"
+      }
+    },
+    "notifications": {
+      "title": "Email notifications",
+      "emailEnabled": "Send email on new signup / approval",
+      "help": "When on, admins receive email when a user signs up and users receive email when admin approves them (delivered via Microsoft 365 — requires M365_* env vars in backend/.env)",
+      "adminRecipients": "Admin emails to notify",
+      "recipientsHelp": "Comma or newline separated. Example: admin1@chiataigroup.com, admin2@chiataigroup.com"
+    },
+    "systemLogs": {
+      "title": "System Logs",
+      "description": "Recent job / integration / scheduler / system events (read-only)",
+      "allStatuses": "All statuses",
+      "categoryPlaceholder": "e.g. job, integration, scheduler",
+      "searchPlaceholder": "Search event / error / correlation id",
+      "fields": {
+        "createdAt": "Time",
+        "category": "Category",
+        "event": "Event",
+        "status": "Status",
+        "durationMs": "Duration (ms)",
+        "error": "Error"
+      }
+    },
+    "dbConnections": {
+      "title": "Database Connections",
+      "description": "Manage multiple PostgreSQL connections via the UI — no code change",
+      "new": "Add connection",
+      "edit": "Edit connection",
+      "test": "Test connection",
+      "disabled": "disabled",
+      "readOnly": "Read-only",
+      "readWrite": "Read-write",
+      "ok": "OK",
+      "failed": "Failed",
+      "confirmDelete": "Delete connection {{name}}?",
+      "passwordEditHint": "Leave blank to keep the current password",
+      "allowWriteWarning": "Write mode enabled: the Query Sandbox can run INSERT/UPDATE/DELETE/DDL against the live database. Use with care.",
+      "fields": {
+        "name": "Name",
+        "description": "Description",
+        "target": "Target",
+        "mode": "Mode",
+        "lastTest": "Last test",
+        "host": "Host",
+        "port": "Port",
+        "database": "Database",
+        "username": "Username",
+        "password": "Password",
+        "sslMode": "SSL Mode",
+        "active": "Active",
+        "allowWrite": "Allow writes (read-write) in Sandbox"
+      }
+    },
+    "querySandbox": {
+      "title": "Query Sandbox",
+      "description": "Test SQL against a selected connection — read-only by default",
+      "connection": "Connection",
+      "selectConnection": "— Select a connection —",
+      "limit": "Row limit",
+      "allowWrite": "Run in write mode (read-write)",
+      "writeLocked": "This connection is read-only",
+      "writeWarning": "Write mode is on — statements will change live data",
+      "run": "Run query",
+      "rowsReturned": "{{count}} rows",
+      "truncated": "Result truncated (over limit)",
+      "noRows": "No rows (statement succeeded)",
+      "tables": "Tables",
+      "tablesSelectFirst": "Select a connection to browse its tables",
+      "tablesEmpty": "No tables found",
+      "tablesHint": "Click a table to insert it into the editor"
+    },
+    "activityLogs": {
+      "title": "Activity Logs",
+      "description": "User audit trail: login / logout / create / update / delete / role change (read-only)",
+      "views": {
+        "login": "Login",
+        "security": "Security",
+        "all": "All"
+      },
+      "loginOnly": "Login / logout / login_failed only",
+      "allRiskLevels": "All risk levels",
+      "searchPlaceholder": "Search action / email / IP / resource",
+      "fields": {
+        "createdAt": "Time",
+        "user": "User",
+        "action": "Action",
+        "actionType": "Type",
+        "riskLevel": "Risk",
+        "ipAddress": "IP",
+        "httpStatus": "HTTP"
+      }
+    }
+  }
+}

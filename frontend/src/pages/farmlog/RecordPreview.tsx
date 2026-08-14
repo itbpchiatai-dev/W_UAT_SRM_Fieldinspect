@@ -6,6 +6,14 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Printer, Navigation, Camera } from 'lucide-react';
 import { getRecord, type RecordDetail } from '../../api/records';
+import { AuthenticatedPhoto } from '../../components/farmlog/AuthenticatedPhoto';
+import {
+  formattedPhoneSnapshot, hasPhoneAttribution, inspectorTypeLabel, phoneTypeLabel, submittedByLine,
+} from '../../lib/inspection-attribution';
+import { getScoreDisplayItems } from '../../lib/inspection-protocol-snapshot';
+import { describeCycleStatus, recordCycleDisplayName } from '../../lib/plot-cycle';
+import { formatYieldQuantity, YIELD_WARNING_PCT } from '../../lib/yield-planning';
+import { toNumberOrNull } from '../../lib/numeric';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -27,32 +35,134 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-/** "ไม่พบ"/empty render muted; any real severity gets an alert chip. */
-function StatusValue({ value }: { value: string | null }) {
-  if (!value) return null;
-  if (value === 'ไม่พบ') return <span className="text-green-700">ไม่พบ</span>;
+/** A condition score (1-10) — flagged orange when low (<= 3). */
+function ScoreValue({ value }: { value: number | null }) {
+  if (value == null) return null;
+  const tone = value <= 3 ? 'bg-orange-50 text-orange-700' : 'bg-green-50 text-green-700';
   return (
-    <span className="inline-flex items-center rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
-      {value}
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${tone}`}>
+      {value} / 10
     </span>
   );
 }
 
+/** The bar's WIDTH is capped at the container (100%) purely as a visual
+ * device — round 8-8C confirms the displayed NUMBER is never capped/clamped,
+ * only the bar's fill width, e.g. a real 510% still renders the text "510%"
+ * with a full-width bar. Past YIELD_WARNING_PCT (150, non-blocking — see
+ * yield-planning.ts) shows an informational amber note, never red/error. */
 function YieldBar({ pct }: { pct: number }) {
   const width = Math.min(100, (pct / 150) * 100);
   const tone = pct >= 100 ? 'bg-green-500' : pct >= 70 ? 'bg-yellow-500' : 'bg-red-500';
   return (
-    <div className="flex items-center gap-3">
-      <div className="h-2.5 w-48 overflow-hidden rounded-full bg-gray-200">
-        <div className={`h-full ${tone}`} style={{ width: `${width}%` }} />
+    <div>
+      <div className="flex items-center gap-3">
+        <div className="h-2.5 w-48 max-w-full overflow-hidden rounded-full bg-gray-200">
+          <div data-testid="yield-bar-fill" className={`h-full ${tone}`} style={{ width: `${width}%` }} />
+        </div>
+        <span className="text-base font-bold text-gray-900">{pct}%</span>
       </div>
-      <span className="text-base font-bold text-gray-900">{pct}%</span>
+      {pct > YIELD_WARNING_PCT && (
+        <p className="mt-1 text-xs text-amber-700">ผลผลิตสูงกว่า 150% ของเป้าหมาย — ข้อมูลจริง ไม่ใช่ข้อผิดพลาด</p>
+      )}
     </div>
   );
 }
 
-function PreviewContent({ r }: { r: RecordDetail }) {
+/** Yield section (round 8-8C) — a kg-first record (yieldQuantityKg present)
+ * shows quantity + the frozen target snapshot + percent; a legacy record
+ * (yieldPct only, no kg) falls back to the original percent-only display.
+ * Quantity present but no comparable target (round 8-8A's derive_yield can
+ * return this — e.g. the cycle's unit wasn't a weight unit) shows the
+ * quantity plus an explicit "no target" note rather than a silent gap.
+ * Renders nothing when there's no yield data at all (both null). */
+function YieldSection({ r }: { r: RecordDetail }) {
   const yieldPct = r.yieldPct != null ? parseFloat(r.yieldPct) : null;
+  const quantityKg = toNumberOrNull(r.yieldQuantityKg);
+  const targetKg = toNumberOrNull(r.yieldTargetKgSnapshot);
+
+  if (quantityKg == null && yieldPct == null) return null;
+
+  return (
+    <Section title="ผลผลิต (Yield)">
+      <dl className="divide-y divide-gray-100">
+        {quantityKg != null && (
+          <>
+            <Field label="ปริมาณผลผลิตที่ประเมินได้" value={formatYieldQuantity(quantityKg, 'kg')} />
+            {targetKg != null ? (
+              <Field label="เป้าหมายที่ใช้คำนวณ" value={formatYieldQuantity(targetKg, 'kg')} />
+            ) : (
+              <Field
+                label="เป้าหมายที่ใช้คำนวณ"
+                value={<span className="text-xs italic text-gray-400">ไม่มีเป้าหมายสำหรับคำนวณเปอร์เซ็นต์</span>}
+              />
+            )}
+          </>
+        )}
+        {yieldPct != null && (
+          <Field
+            label={quantityKg != null ? 'เปอร์เซ็นต์เทียบเป้าหมาย' : '% คาดว่าจะได้ผลผลิต'}
+            value={<YieldBar pct={yieldPct} />}
+          />
+        )}
+      </dl>
+    </Section>
+  );
+}
+
+/** Planting-cycle block (round 7.4) — the record's OWN cycle (bound at
+ * create time via record.plot_cycle), NOT the plot's current active cycle: a
+ * record made in an earlier/closed cycle keeps showing that cycle here even
+ * after the plot moves on to a newer one. Falls back gracefully when the
+ * record carries only a cycle number, or no cycle at all. */
+function CycleSection({ r }: { r: RecordDetail }) {
+  const hasCycle = r.plotCycleId != null || r.cycleNo != null;
+  if (!hasCycle) {
+    return (
+      <Section title="รอบปลูก">
+        <p className="text-sm italic text-gray-400">ไม่พบข้อมูลรอบปลูก</p>
+      </Section>
+    );
+  }
+  const hasDetail = !!(
+    r.cycleCrop || r.cycleVariety || r.cycleLotNo || r.cyclePlantingDate ||
+    r.cyclePlantCount != null || toNumberOrNull(r.cycleExpectedYieldFull) != null
+  );
+  return (
+    <Section title="รอบปลูก">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-sm font-semibold text-gray-800">
+          {recordCycleDisplayName(r)}
+        </span>
+        {r.cycleStatus && (
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+            {describeCycleStatus(r.cycleStatus)}
+          </span>
+        )}
+      </div>
+      {hasDetail ? (
+        <dl className="divide-y divide-gray-100">
+          <Field label="ชนิดพืช (รอบปลูก)" value={r.cycleCrop} />
+          <Field label="พันธุ์/สายพันธุ์ (รอบปลูก)" value={r.cycleVariety} />
+          <Field label="เลขล็อต (Lot No.)" value={r.cycleLotNo} />
+          <Field label="วันที่ปลูก (รอบปลูก)" value={r.cyclePlantingDate} />
+          <Field
+            label="จำนวนต้น/จำนวนปลูก"
+            value={r.cyclePlantCount != null ? r.cyclePlantCount.toLocaleString('th-TH') : null}
+          />
+          <Field
+            label="Expected Yield ที่ 100%"
+            value={formatYieldQuantity(r.cycleExpectedYieldFull, r.cycleExpectedYieldUnit)}
+          />
+        </dl>
+      ) : (
+        <p className="text-sm italic text-gray-400">มีเฉพาะหมายเลขรอบปลูก</p>
+      )}
+    </Section>
+  );
+}
+
+function PreviewContent({ r }: { r: RecordDetail }) {
   return (
     <div className="space-y-0">
       <div className="mb-6 flex items-start justify-between gap-4 border-b pb-4">
@@ -67,17 +177,48 @@ function PreviewContent({ r }: { r: RecordDetail }) {
         <div className="text-right">
           <p className="text-lg font-semibold">{r.recordDate}</p>
           <p className="mt-0.5 text-xs text-gray-400">บันทึกโดย {r.recordedByName || r.recordedByEmail || '—'}</p>
+          {submittedByLine(r) && (
+            <p className="mt-0.5 text-xs text-gray-400">
+              ผู้กรอกข้อมูลหน้างาน {submittedByLine(r)}
+            </p>
+          )}
+          {r.submittedIp && (
+            <p className="mt-0.5 text-xs text-gray-400">IP ผู้บันทึก: <span className="font-mono">{r.submittedIp}</span></p>
+          )}
           <p className="mt-0.5 text-xs text-gray-400">
             สถานะ: {r.isActive ? <span className="text-green-600">ใช้งาน</span> : <span className="text-gray-400">ปิด</span>}
           </p>
         </div>
       </div>
 
-      {yieldPct != null && (
-        <Section title="ผลผลิต (Yield)">
-          <Field label="% คาดว่าจะได้ผลผลิต" value={<YieldBar pct={yieldPct} />} />
-        </Section>
-      )}
+      <CycleSection r={r} />
+
+      <Section title="ข้อมูลการเข้าตรวจ">
+        {hasPhoneAttribution(r) ? (
+          <dl className="divide-y divide-gray-100">
+            <Field
+              label="เบอร์ที่ใช้เข้าตรวจ"
+              value={
+                r.submittedPhoneSnapshot ? (
+                  <span>
+                    {formattedPhoneSnapshot(r.submittedPhoneSnapshot)}
+                    {phoneTypeLabel(r.submittedPhoneType) && (
+                      <span className="ml-1.5 text-xs text-gray-400">
+                        ({phoneTypeLabel(r.submittedPhoneType)})
+                      </span>
+                    )}
+                  </span>
+                ) : null
+              }
+            />
+            <Field label="เข้าตรวจในฐานะ" value={inspectorTypeLabel(r.inspectorType)} />
+          </dl>
+        ) : (
+          <p className="text-sm italic text-gray-400">ผู้ใช้ในระบบ / ข้อมูลเดิม</p>
+        )}
+      </Section>
+
+      <YieldSection r={r} />
 
       <Section title="ข้อมูลพื้นฐาน">
         <dl className="divide-y divide-gray-100">
@@ -89,15 +230,14 @@ function PreviewContent({ r }: { r: RecordDetail }) {
         </dl>
       </Section>
 
-      <Section title="การประเมินสภาพแปลง">
+      <Section title="การประเมินสภาพแปลง (คะแนน 1–10)">
         <dl className="divide-y divide-gray-100">
-          <Field label="การเตรียมแปลง" value={r.fieldPrepLevel} />
-          <Field label="การดูแลรักษา" value={r.careLevel} />
-          <Field label="แมลงศัตรูพืช" value={<StatusValue value={r.pestStatus} />} />
-          <Field label="โรคพืช" value={<StatusValue value={r.diseaseStatus} />} />
-          <Field label="วัชพืช" value={<StatusValue value={r.weedStatus} />} />
-          <Field label="วิธีการให้น้ำ" value={r.irrigationMethod} />
-          <Field label="ปุ๋ยที่ใช้" value={r.fertilizer} />
+          {/* Labels come from the record's frozen protocol snapshot (round
+              5.3) so a historical record shows the criteria it was scored
+              under; records with no snapshot fall back to the original set. */}
+          {getScoreDisplayItems(r).map((item) => (
+            <Field key={item.slot} label={item.label} value={<ScoreValue value={item.score} />} />
+          ))}
         </dl>
       </Section>
 
@@ -129,7 +269,7 @@ function PreviewContent({ r }: { r: RecordDetail }) {
               </div>
               <div className="flex flex-wrap gap-2">
                 {r.photoUrls.map((url, i) => (
-                  <img key={i} src={url} alt={`ภาพ ${i + 1}`} className="h-24 w-24 rounded-md object-cover shadow-sm" />
+                  <AuthenticatedPhoto key={i} recordId={r.id} photoUrl={url} alt={`ภาพ ${i + 1}`} className="h-24 w-24 rounded-md object-cover shadow-sm" />
                 ))}
               </div>
             </div>
@@ -157,7 +297,7 @@ export function RecordPreview() {
     <div className="min-h-screen bg-gray-50 print:bg-white">
       <div className="print:hidden sticky top-0 z-10 border-b bg-white px-4 py-2 shadow-sm">
         <div className="container mx-auto flex items-center justify-between gap-4">
-          <Link to={`/farmlog/records/${id}`} className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700">
+          <Link to="/farmlog/records" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700">
             <ArrowLeft className="h-4 w-4" /> กลับ
           </Link>
           <button onClick={() => window.print()}

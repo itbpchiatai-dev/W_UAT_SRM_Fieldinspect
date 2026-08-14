@@ -3,9 +3,15 @@
  * Replaces the plain <select> for plot_id in RecordForm.
  */
 import { useState, useEffect, useRef } from 'react';
-import { Search, MapPin, ChevronDown, X, Loader2, Navigation } from 'lucide-react';
+import { Search, MapPin, ChevronDown, X, Loader2, Navigation, QrCode } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { listPlots, type PlotSummary } from '../../api/plots';
+import { LazyPlotQrScan } from './LazyPlotQrScan';
+import { parsePlotQr } from '../../lib/plot-qr';
+import { toNumberOrNull } from '../../lib/numeric';
+import { plotHasActiveCycle } from '../../lib/plot-cycle';
+
+const NO_ACTIVE_CYCLE_REASON = 'ต้องเริ่มรอบปลูกก่อนจึงจะบันทึกการตรวจแปลงได้';
 
 interface Props {
   supplierId?: string;
@@ -27,12 +33,23 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/** plot.latitude/longitude can come back as strings (Decimal serialization)
+ * — normalize both before ever handing them to haversineKm, and treat an
+ * unparseable value the same as "no GPS" rather than propagating NaN. */
+function plotGps(plot: PlotSummary): { lat: number; lng: number } | null {
+  const lat = toNumberOrNull(plot.latitude);
+  const lng = toNumberOrNull(plot.longitude);
+  return lat != null && lng != null ? { lat, lng } : null;
+}
+
 export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }: Props) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState('');
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrError, setQrError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const { data: allPlots = [], isLoading } = useQuery({
@@ -42,6 +59,10 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
   });
 
   const selected = allPlots.find(p => p.id === value) ?? null;
+  // A previously-picked plot may lose its active cycle later (closed
+  // elsewhere) — warn rather than silently auto-clearing the selection, so
+  // the user decides whether to pick a different plot themselves.
+  const selectedNoActiveCycle = selected != null && !plotHasActiveCycle(selected);
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 50);
@@ -75,13 +96,13 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
     })
     .sort((a, b) => {
       if (!userPos) return 0;
-      const aHasGps = a.latitude != null && a.longitude != null;
-      const bHasGps = b.latitude != null && b.longitude != null;
-      if (!aHasGps && !bHasGps) return 0;
-      if (!aHasGps) return 1;
-      if (!bHasGps) return -1;
-      const da = haversineKm(userPos.lat, userPos.lng, a.latitude!, a.longitude!);
-      const db = haversineKm(userPos.lat, userPos.lng, b.latitude!, b.longitude!);
+      const aGps = plotGps(a);
+      const bGps = plotGps(b);
+      if (!aGps && !bGps) return 0;
+      if (!aGps) return 1;
+      if (!bGps) return -1;
+      const da = haversineKm(userPos.lat, userPos.lng, aGps.lat, aGps.lng);
+      const db = haversineKm(userPos.lat, userPos.lng, bGps.lat, bGps.lng);
       return da - db;
     });
 
@@ -94,6 +115,38 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
   function clear(e: React.MouseEvent) {
     e.stopPropagation();
     onChange('', null);
+  }
+
+  function handleQrResult(code: string) {
+    setQrOpen(false);
+    // Round 20 — a scanned URL may carry the new opaque qrKey instead of a
+    // bare plot code; match against the already-loaded allPlots list
+    // client-side rather than a fresh API call (no lookup endpoint needed
+    // here, unlike RecordForm's QR scan, since the list is already
+    // fetched). Falls back to the original bare-plotCode match for
+    // anything parsePlotQr doesn't recognize as a URL/JSON/pipe format —
+    // some older field signs just carry the plain code.
+    const parsed = parsePlotQr(code);
+    const match = parsed?.mode === 'qr'
+      ? allPlots.find(p => p.qrKey === parsed.qrKey)
+      : allPlots.find(p => p.plotCode.toLowerCase() === (parsed?.mode === 'legacy' ? parsed.plotCode : code).trim().toLowerCase());
+    if (!match) {
+      setQrError(`ไม่พบแปลงรหัส "${code}" — ลองค้นหาด้วยมือ`);
+      setSearch(code);
+      return;
+    }
+    if (!plotHasActiveCycle(match)) {
+      // Round 7.11 — a matched plot with no active cycle must never be
+      // auto-selected (that would just relocate the eventual 409 to here).
+      // Only the QR-scanner sub-modal closes (setQrOpen(false) above); the
+      // plot-list modal stays open with the error visible, so the user
+      // doesn't read this as "scan succeeded".
+      setQrError('แปลงนี้ยังไม่มีรอบปลูกที่เปิดอยู่ กรุณาให้ผู้ดูแลเริ่มรอบปลูกก่อน');
+      setSearch(match.plotCode);
+      return;
+    }
+    setQrError('');
+    select(match);
   }
 
   return (
@@ -124,6 +177,10 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
           <ChevronDown className="h-4 w-4 text-gray-400" />
         </span>
       </button>
+
+      {selectedNoActiveCycle && (
+        <p className="mt-1 text-xs text-amber-600">แปลงนี้ยังไม่มีรอบปลูกที่เปิดอยู่ กรุณาเลือกแปลงอื่น</p>
+      )}
 
       {/* Modal */}
       {open && (
@@ -156,6 +213,15 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
               </div>
               <button
                 type="button"
+                onClick={() => { setQrError(''); setQrOpen(true); }}
+                title="สแกน QR รหัสแปลง"
+                className="flex items-center gap-1 rounded-md border border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 shadow-sm hover:border-green-400 hover:text-green-600"
+              >
+                <QrCode className="h-4 w-4" />
+                สแกน
+              </button>
+              <button
+                type="button"
                 onClick={requestGps}
                 disabled={gpsLoading}
                 title="เรียงตามระยะใกล้ฉัน"
@@ -173,6 +239,7 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
                 ใกล้ฉัน
               </button>
             </div>
+            {qrError && <p className="px-4 pb-1 text-xs text-red-600">{qrError}</p>}
             {gpsError && <p className="px-4 pb-1 text-xs text-red-600">{gpsError}</p>}
             {userPos && (
               <p className="px-4 pb-1 text-xs text-green-600">
@@ -191,27 +258,43 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
                 <li className="py-8 text-center text-sm text-gray-400">ไม่พบแปลง</li>
               )}
               {filtered.map(plot => {
-                const dist =
-                  userPos && plot.latitude != null && plot.longitude != null
-                    ? haversineKm(userPos.lat, userPos.lng, plot.latitude, plot.longitude)
-                    : null;
+                const gps = plotGps(plot);
+                const dist = userPos && gps ? haversineKm(userPos.lat, userPos.lng, gps.lat, gps.lng) : null;
+                // Round 7.11 — a plot with no active planting cycle is still
+                // shown (the user should know it exists) but can't be picked:
+                // selecting it would only surface a 409 from the backend
+                // after the whole inspection form is filled in.
+                const hasActiveCycle = plotHasActiveCycle(plot);
                 return (
                   <li key={plot.id}>
                     <button
                       type="button"
                       onClick={() => select(plot)}
-                      className={`flex w-full items-center justify-between px-4 py-3 text-left hover:bg-green-50 ${
-                        plot.id === value ? 'bg-green-50' : ''
+                      disabled={!hasActiveCycle}
+                      title={hasActiveCycle ? undefined : NO_ACTIVE_CYCLE_REASON}
+                      className={`flex w-full items-center justify-between px-4 py-3 text-left ${
+                        hasActiveCycle
+                          ? `hover:bg-green-50 ${plot.id === value ? 'bg-green-50' : ''}`
+                          : 'cursor-not-allowed bg-gray-50'
                       }`}
                     >
                       <span>
-                        <span className="block text-sm font-medium text-gray-900">{plot.plotCode}</span>
-                        <span className="block text-xs text-gray-500">{plot.name}</span>
+                        <span className={`block text-sm font-medium ${hasActiveCycle ? 'text-gray-900' : 'text-gray-400'}`}>
+                          {plot.plotCode}
+                        </span>
+                        <span className={`block text-xs ${hasActiveCycle ? 'text-gray-500' : 'text-gray-400'}`}>
+                          {plot.name}
+                        </span>
                         {plot.province && (
                           <span className="block text-xs text-gray-400">{plot.province}</span>
                         )}
+                        {!hasActiveCycle && (
+                          <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                            รอเริ่มรอบปลูก
+                          </span>
+                        )}
                       </span>
-                      {dist != null && (
+                      {dist != null && hasActiveCycle && (
                         <span className="flex shrink-0 items-center gap-0.5 text-xs text-gray-400">
                           <MapPin className="h-3 w-3" />
                           {dist < 1 ? `${(dist * 1000).toFixed(0)} ม.` : `${dist.toFixed(1)} กม.`}
@@ -225,6 +308,8 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
           </div>
         </div>
       )}
+
+      {qrOpen && <LazyPlotQrScan onResult={handleQrResult} onClose={() => setQrOpen(false)} />}
     </div>
   );
 }

@@ -26,6 +26,14 @@ from app.api.v1.plots import router as plots_router
 from app.api.v1.records import router as records_router
 from app.api.v1.fielddefs import router as fielddefs_router
 from app.api.v1.masterdata import router as masterdata_router
+from app.api.v1.inspection_protocols import router as inspection_protocols_router
+from app.api.v1.inspection_protocols_admin import router as inspection_protocols_admin_router
+from app.api.v1.reports import router as reports_router
+from app.api.v1.public_plots import router as public_plots_router
+from app.api.v1.public_records import router as public_records_router
+from app.api.v1.public_masterdata import router as public_masterdata_router
+from app.api.v1.public_inspection_protocols import router as public_inspection_protocols_router
+from app.api.v1.public_inspection_access import router as public_inspection_access_router
 
 ROUTERS: list[tuple[APIRouter, str]] = [
     (auth_router, "/api/v1/auth"),
@@ -47,6 +55,19 @@ ROUTERS: list[tuple[APIRouter, str]] = [
     (records_router, "/api/v1/records"),
     (fielddefs_router, "/api/v1/fielddefs"),
     (masterdata_router, "/api/v1/masterdata"),
+    (inspection_protocols_router, "/api/v1/inspection-protocols"),
+    (inspection_protocols_admin_router, "/api/v1/admin/inspection-protocols"),
+    (reports_router, "/api/v1/reports"),
+    # Public (unauthenticated) — inspection-code gate, gated record
+    # creation, (round 19.1) read-only allowlisted-type master-data lookups,
+    # and (round 5.1) read-only inspection-protocol labels — both for the
+    # /public/inspect dropdowns/score inputs. No public write anywhere here.
+    (public_plots_router, "/api/v1/public"),
+    (public_records_router, "/api/v1/public"),
+    (public_masterdata_router, "/api/v1/public"),
+    (public_inspection_protocols_router, "/api/v1/public"),
+    # round 8-3B — phone-only inspection access (lookup/plots/select-plot).
+    (public_inspection_access_router, "/api/v1/public"),
 ]
 
 # Database Connections module — mounted only when the runtime flag is on.

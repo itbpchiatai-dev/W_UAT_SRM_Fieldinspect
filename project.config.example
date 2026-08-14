@@ -1,0 +1,155 @@
+# project.config.example
+#
+# Single source of truth สำหรับ project-level metadata
+#
+# วิธีใช้:
+#   1. cp project.config.example project.config
+#   2. แก้ค่าใน project.config (หรือรัน `python scripts/init_project.py` เพื่อ guided setup)
+#   3. project.config ถูก gitignore — ห้าม commit
+#
+# ค่าในไฟล์นี้จะถูก inject เข้า:
+#   - backend/pyproject.toml      (name, description)
+#   - frontend/package.json       (name, description)
+#   - docker/docker-compose.yml   (PROJECT_NAME env var)
+#   - backend/.env                (APP_NAME, AZURE_AD_*, DB_NAME, ฯลฯ)
+#   - frontend/.env               (VITE_AZURE_AD_*)
+#   - README.md                   (display name, description)
+
+# ─────────────────────────────────────────────────────────────
+# Identity
+# ─────────────────────────────────────────────────────────────
+
+# Slug (lowercase, kebab-case) — ใช้เป็น docker image name, db name, etc.
+PROJECT_SLUG=
+
+# Display name (Title Case) — ใช้ใน UI titles, log labels, README
+PROJECT_DISPLAY_NAME=
+
+# One-line description
+PROJECT_DESCRIPTION=
+
+# ─────────────────────────────────────────────────────────────
+# Maturity Level (v3.0 — gates Tier 4 patterns)
+# ─────────────────────────────────────────────────────────────
+
+# Values: "L0" | "L1" | "L2" | "L3"
+# - L0 Prototype       : < 3 เดือน OR < 10 users OR MVP/POC — Tier 1 only
+# - L1 Internal Tool   : stable, single BU, < 50 users — + activity logs + App Settings
+# - L2 Business-Critical: multi-BU, mission-critical — + Feature Flags + AI cost budget
+# - L3 External/Regulated: vendor/customer-facing, PDPA scope — + Permissions + full audit + Registry
+#
+# Default: L1 (เหมาะกับ internal tool ทั่วไป)
+# ดู AGENTS.md §13 สำหรับ criteria เต็ม
+MATURITY_LEVEL=L1
+
+# ─────────────────────────────────────────────────────────────
+# Stack Variant (v3.0 — set ตอน init เท่านั้น)
+# ─────────────────────────────────────────────────────────────
+
+# Values: "default" | "next-js" | "htmx" | "streamlit" | "timescale"
+#
+# default    : FastAPI + React/Vite
+#              ใช้ทำ: internal CRUD, dashboard, admin tool, standard web app
+#              เลือกตัวนี้ถ้าไม่แน่ใจ — ครอบคลุม use case ส่วนใหญ่ของ CT
+#
+# next-js    : Next.js 15+ (App Router) + FastAPI BFF
+#              ใช้ทำ: public site ที่ต้องการ SEO / SSR / Edge rendering
+#              เช่น vendor portal, customer-facing landing, marketing site
+#              (Internal tool ไม่ต้องใช้ — overkill)
+#
+# htmx       : FastAPI + HTMX + Jinja templates
+#              ใช้ทำ: tiny internal tool < 5 หน้า ที่ไม่ต้องการ SPA interactivity
+#              เช่น form submission tool, simple report viewer, small admin panel
+#              (โตเกิน 5 หน้าควรย้ายไป default)
+#
+# streamlit  : Streamlit / Gradio (L0 only)
+#              ใช้ทำ: AI prototype / data exploration / POC < 1 เดือน
+#              เช่น demo LLM chat, model evaluation UI, quick data viz
+#              ⚠️ ต้อง refactor เป็น default ก่อนขึ้น L1 — ไม่ใช่ production stack
+#
+# timescale  : Default stack + TimescaleDB (PostgreSQL extension)
+#              ใช้ทำ: heavy time-series workload
+#              เช่น sensor data, IoT telemetry, monitoring metrics, log analytics
+#              (ถ้า time-series น้อย ใช้ default + Postgres ธรรมดาก็พอ)
+#
+# เปลี่ยน variant ภายหลัง init → log ใน docs/human/STACK_DEVIATIONS.md
+# ดู AGENTS.md §A สำหรับ scenario matrix
+STACK_VARIANT=default
+
+# Database ownership mode: "new" | "existing"
+# new      : standard owns the schema and may run its migrations (default)
+# existing : connect only; setup must not modify the existing schema automatically
+DATABASE_MODE=new
+
+# ─────────────────────────────────────────────────────────────
+# Auth Scope
+# ─────────────────────────────────────────────────────────────
+
+# Which user types does this project support?
+# Values: "internal_only" | "external_only" | "both"
+# - internal_only: เฉพาะ Azure AD SSO (employees)
+# - external_only: เฉพาะ local auth (vendors/customers)
+# - both: ทั้งคู่ (default ของ standard)
+AUTH_SCOPE=both
+
+# ─────────────────────────────────────────────────────────────
+# Azure AD (สำหรับ internal users; ปล่อยว่างถ้า external_only)
+# ─────────────────────────────────────────────────────────────
+
+AZURE_AD_TENANT_ID=
+AZURE_AD_CLIENT_ID=
+# AZURE_AD_CLIENT_SECRET ห้ามใส่ที่นี่ — ใส่ใน .env เท่านั้น (gitignored)
+
+# ─────────────────────────────────────────────────────────────
+# Production URL
+# ─────────────────────────────────────────────────────────────
+
+PRODUCTION_URL=
+STAGING_URL=
+
+# ─────────────────────────────────────────────────────────────
+# Governance (AGENTS.md §10)
+# ─────────────────────────────────────────────────────────────
+#
+# Lightweight ownership metadata — used by Registry, security review,
+# and audit. All optional at L0/L1 but recommended; required at L2+
+# (business-critical) and L3 (external/regulated).
+#
+# Format: free text — name, email, or team handle. ตัวอย่าง:
+#   APP_OWNER=somchai.k@chiataigroup.com
+#   TECH_OWNER=team-platform@chiataigroup.com
+
+APP_OWNER=             # business owner — accountable for app's existence
+TECH_OWNER=            # technical owner — accountable for code & deploy
+SECURITY_APPROVER=     # approves Risky operations (§4); defaults to TECH_OWNER if blank
+DATA_OWNER=            # data steward — required when handling PII/regulated data
+
+# ─────────────────────────────────────────────────────────────
+# Optional
+# ─────────────────────────────────────────────────────────────
+
+# Default UI language: "th" or "en"
+DEFAULT_LANGUAGE=th
+
+# CI/CD platform: "github_actions" | "gitlab_ci" | "azure_devops"
+CICD_PLATFORM=github_actions
+
+# Env var prefix สำหรับ shared infrastructure (ADVISORY / documentation only)
+# บันทึกไว้เพื่ออ้างอิงตอน deploy บน shared infra เท่านั้น — scaffold/init_project
+# จะ "ไม่" เติม prefix ลง .env keys จริง เพราะ backend อ่านชื่อ canonical ทั้งทาง
+# pydantic Settings (ไม่มี env_prefix) และทาง raw os.getenv (AUTH_SCOPE,
+# AUTH_BOOTSTRAP_*) — ถ้า prefix จะ boot ไม่ขึ้น. ถ้าจำเป็นต้องใช้จริง ต้องตั้ง
+# env_prefix ใน Settings เอง + เติม prefix ให้ os.getenv ทุกจุดด้วยตนเอง.
+ENV_VAR_PREFIX=
+
+# ─────────────────────────────────────────────────────────────
+# Feature Modules (opt-in — default off)
+# ─────────────────────────────────────────────────────────────
+
+# Database Connections + Query Sandbox: register external PostgreSQL
+# targets via the UI (super_admin) and run ad-hoc, audited, read-only-by-
+# default SQL against them. Enable only when the project needs to connect
+# to external databases.
+#   When true, ALSO set DB_CONNECTIONS_ENCRYPTION_KEY in backend/.env
+#   (Fernet key — encrypts stored passwords) and re-run `python -m app.seed`.
+FEATURE_DB_CONNECTIONS=false

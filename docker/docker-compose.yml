@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DEPRECATED — this DB-only dev compose file has been retired.
+#
+# Local dev now runs DB **and** backend in a single Compose project
+# (srm_fieldinspect) via the root compose plus a dev overlay. Frontend still
+# runs on the Windows host (Vite, :5173).
+#
+# Canonical command (see docs/deployment.md §4 and scripts/dev-service.ps1):
+#
+#   docker compose --env-file backend/.env -p srm_fieldinspect \
+#       -f docker-compose.yml -f docker-compose.dev.yml up -d db backend
+#
+# Or simply:  start-service.bat   (start)   /   stop-service.bat   (stop)
+#
+# This file is intentionally inert: it declares no services and no project
+# `name:`, so running `docker compose -f docker/docker-compose.yml ...` here
+# cannot recreate the old `srm-fieldinspect-dev` project or collide with the
+# unrelated `docker` project. It is kept only so scaffold/migration tooling
+# that checks for the presence of docker/docker-compose.yml still recognizes
+# this as a scaffolded project.
+#
+# The companion docker/init-db.sql is still used by the dev overlay's db
+# service — do not delete it.
+# ─────────────────────────────────────────────────────────────────────────────

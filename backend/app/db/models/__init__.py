@@ -11,15 +11,20 @@ from app.db.models.menu_item import MenuItem
 from app.db.models.app_setting import AppSetting
 from app.db.models.supplier import Supplier
 from app.db.models.plot import Plot
+from app.db.models.plot_access_credential import PlotAccessCredential
+from app.db.models.plot_access_phone import PlotAccessPhone
 from app.db.models.plot_assignment import PlotAssignment
+from app.db.models.plot_cycle import PlotCycle
 from app.db.models.record import Record
 from app.db.models.field_definition import FieldDefinition
 from app.db.models.master_data import MasterData
+from app.db.models.inspection_protocol import InspectionProtocolCriterion
 
 __all__ = [
     "ActivityLog", "AiCallLog", "SystemLog",
     "User", "Role", "Permission", "RolePermission", "UserRole",
     "UserPermissionOverride", "MenuItem", "AppSetting",
-    "Supplier", "Plot", "PlotAssignment", "Record", "FieldDefinition",
-    "MasterData",
+    "Supplier", "Plot", "PlotAccessCredential", "PlotAccessPhone", "PlotAssignment",
+    "PlotCycle", "Record", "FieldDefinition",
+    "MasterData", "InspectionProtocolCriterion",
 ]

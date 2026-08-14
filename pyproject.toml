@@ -1,0 +1,14 @@
+[project]
+name = "ct-web-app-standard"
+version = "3.1.0"
+description = "CT Web App Standard — repo-level tooling + scaffolding"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

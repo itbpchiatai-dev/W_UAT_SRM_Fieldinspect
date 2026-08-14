@@ -1,9 +1,13 @@
 /**
  * Field Master (Step 12) — manage the schema-driven form field catalog.
  *
- * Core fields (is_core) are seed-managed: label / required / order / active are
- * editable but key / type are locked and they cannot be deleted. Custom fields
- * are admin-created and stored in records.custom_fields.
+ * Core fields (is_core) are seed-managed: label / order / active are editable
+ * but key / type are locked and they cannot be deleted. Their `required` flag
+ * is NOT editable here — the record form hard-codes core-field requiredness in
+ * code, so a toggle here would be decorative/misleading; it's hidden for core
+ * (shown & enforced only for custom fields, which RecordForm validates via
+ * validateField). Custom fields are admin-created and stored in
+ * records.custom_fields.
  */
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -112,7 +116,21 @@ export function Fields() {
                       ? <span className="rounded-full bg-secondary px-2 py-0.5 text-xs">core</span>
                       : <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs text-primary">custom</span>}
                   </td>
-                  <td className="px-4 py-2">{f.required ? '✓' : '—'}</td>
+                  <td className="px-4 py-2">
+                    {f.isCore ? (
+                      // Core requiredness is enforced in RecordForm's code, not
+                      // from this row — show it read-only so no one thinks
+                      // toggling it here does anything.
+                      <span
+                        className="text-muted-foreground"
+                        title="ฟิลด์หลักถูกกำหนดโดยระบบ — แก้ที่นี่ไม่ได้"
+                      >
+                        {f.required ? '✓ (ระบบ)' : '— (ระบบ)'}
+                      </span>
+                    ) : (
+                      f.required ? '✓' : '—'
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     {canUpdate ? (
                       <button
@@ -196,6 +214,7 @@ function FieldModal({
   onSaved: () => void;
 }) {
   const isEdit = field !== null;
+  const isCoreEdit = isEdit && field!.isCore;
 
   const {
     register,
@@ -229,10 +248,14 @@ function FieldModal({
       ? (values.optionsText ?? '').split(',').map((s) => s.trim()).filter(Boolean)
       : [];
     if (isEdit) {
-      // key / type are immutable — only mutable attrs are sent.
+      // key / type are immutable — only mutable attrs are sent. For core
+      // fields `required` is system-managed (the record form hard-codes it),
+      // so we deliberately omit it from the update to avoid a decorative edit.
       await updateM.mutateAsync({
         id: field!.id,
-        p: { label: values.label, required: values.required, options, orderIndex: values.orderIndex },
+        p: isCoreEdit
+          ? { label: values.label, options, orderIndex: values.orderIndex }
+          : { label: values.label, required: values.required, options, orderIndex: values.orderIndex },
       });
     } else {
       await createM.mutateAsync({
@@ -290,10 +313,21 @@ function FieldModal({
               <label className="text-xs font-medium text-muted-foreground">ลำดับ</label>
               <input type="number" {...register('orderIndex', { valueAsNumber: true })} className={inputCls} />
             </div>
-            <label className="flex items-center gap-2 pt-6 cursor-pointer">
-              <input type="checkbox" {...register('required')} className="h-4 w-4 rounded border-input text-primary" />
-              <span className="text-sm">บังคับกรอก</span>
-            </label>
+            {/* "บังคับกรอก" applies only to custom fields — core requiredness is
+                enforced in the record form's code, so editing it here would be
+                decorative. Hide it for core edits. */}
+            {isCoreEdit ? (
+              <div className="flex flex-col justify-end pb-2">
+                <p className="text-xs text-muted-foreground">
+                  การบังคับกรอกของฟิลด์หลักถูกกำหนดโดยระบบ
+                </p>
+              </div>
+            ) : (
+              <label className="flex items-center gap-2 pt-6 cursor-pointer">
+                <input type="checkbox" {...register('required')} className="h-4 w-4 rounded border-input text-primary" />
+                <span className="text-sm">บังคับกรอก</span>
+              </label>
+            )}
           </div>
 
           {err && <p className="text-sm text-destructive">{err.message}</p>}

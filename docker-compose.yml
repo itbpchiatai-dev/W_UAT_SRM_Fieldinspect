@@ -1,0 +1,121 @@
+# Production
+# DB อยู่บน centralized server (ไม่มี db service ที่นี่)
+#
+# First time setup:
+#   1. แก้ backend/.env ให้เป็นค่า production
+#      DB_HOST=<production-db-host>
+#      DB_PASSWORD=<strong-password>
+#      JWT_SECRET_KEY=<generate: python3 -c "import secrets; print(secrets.token_hex(32))">
+#   2. สร้าง DB user+database บน production DB server:
+#      CREATE USER srm_fieldinspect WITH PASSWORD '<password>';
+#      CREATE DATABASE srm_fieldinspect OWNER srm_fieldinspect;
+#      GRANT ALL ON SCHEMA public TO srm_fieldinspect;
+#   3. แจ้ง IT เพื่อเพิ่ม Nginx upstream ชี้มาที่ container นี้
+#   4. สร้าง external volume สำหรับรูปตรวจแปลง (ครั้งเดียวต่อ host):
+#      docker volume create srm-fieldinspect-media
+#      (ประกาศ external แบบเดียวกับ proxy-net — `docker compose down -v`
+#       จึงลบรูปของผู้ใช้ไม่ได้)
+#   5. ตั้ง VITE_* ที่ต้องใช้ตอน build frontend ใน environment ของ deploy host
+#      (ดู frontend/.env.example) — ค่าที่ไม่ตั้งจะใช้ default ในไฟล์นี้
+#
+# Deploy:
+#   git pull
+#   docker compose up -d --build
+#   docker compose exec -w /app backend alembic upgrade head
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: srm-fieldinspect-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    expose:
+      - "8000"
+    volumes:
+      # Inspection photos (round 8-16B). Without this, stored photos live in
+      # the container's writable layer and are LOST on every recreate/rebuild
+      # — while the DB rows still point at them, so records silently lose
+      # their images. Mount point matches INSPECTION_PHOTOS_DIR's default
+      # (var/inspection-photos, resolved against WORKDIR /app).
+      # The image pre-creates this path owned by app:app (uid/gid 1000), so a
+      # fresh volume inherits that ownership and the non-root process can
+      # write with no chmod.
+      - media:/app/var/inspection-photos
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - proxy-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # Round 8-16B — Vite inlines these at BUILD time. Without them the
+      # production image was built with every VITE_* unset: no app name, no
+      # auth scope, no Azure AD client id, and a QR base URL that silently
+      # fell back to window.location.origin.
+      #
+      # Values come from the deploy host's environment (or the --env-file
+      # compose is given) — never hardcoded here, so this file carries no
+      # production domain. ONLY public config belongs in build args: Vite
+      # bakes them into a bundle any visitor can read, so never put
+      # AZURE_AD_CLIENT_SECRET, JWT_SECRET_KEY, a DB password, the plot
+      # password pepper, or any API key here.
+      args:
+        VITE_APP_NAME: ${VITE_APP_NAME:-Chia Tai}
+        # Empty ⇒ same-origin: the API client falls back to a relative base
+        # (frontend/src/api/client.ts) and the reverse proxy in front of
+        # this container routes /api to the backend. Set only if the API is
+        # genuinely served from a different origin.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        # Empty ⇒ QR deep links use the browser's own origin.
+        VITE_PUBLIC_APP_URL: ${VITE_PUBLIC_APP_URL:-}
+        VITE_AUTH_SCOPE: ${VITE_AUTH_SCOPE:-both}
+        VITE_AZURE_AD_TENANT_ID: ${VITE_AZURE_AD_TENANT_ID:-}
+        VITE_AZURE_AD_CLIENT_ID: ${VITE_AZURE_AD_CLIENT_ID:-}
+        VITE_AZURE_AD_REDIRECT_URI: ${VITE_AZURE_AD_REDIRECT_URI:-}
+        VITE_DEFAULT_LANGUAGE: ${VITE_DEFAULT_LANGUAGE:-th}
+    container_name: srm-fieldinspect-frontend
+    restart: unless-stopped
+    expose:
+      - "8080"
+    depends_on:
+      - backend
+    networks:
+      - proxy-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  # ข้อบังคับ: production ทุกตัวต้องใช้ network ชื่อ proxy-net
+  # IT สร้าง network นี้ก่อน deploy:  docker network create proxy-net
+  proxy-net:
+    external: true
+
+volumes:
+  # Inspection photos — user data, must outlive any container.
+  # `external: true` for the same reason proxy-net is: Compose must never be
+  # able to create it implicitly or destroy it, so neither `down -v` nor a
+  # project rename can delete stored photos. Create once per host:
+  #   docker volume create srm-fieldinspect-media
+  # Local dev/prodlike reuse this exact same declaration (docker-compose.
+  # prodlike.yml no longer redeclares it) so the two environments cannot
+  # drift apart on the media contract.
+  media:
+    name: srm-fieldinspect-media
+    external: true

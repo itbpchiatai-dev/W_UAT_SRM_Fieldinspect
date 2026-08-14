@@ -1,0 +1,16 @@
+.pytest_tmp*
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+tests/
+# Round 8-16A — runtime data, never build input. Without this, `COPY . .`
+# baked every stored inspection photo into the image (34 files / 32 MiB at
+# the time this was found): image bloat plus a stale copy of user data that
+# a fresh named volume would then be seeded from. Photos belong in the
+# srm-fieldinspect-media volume; the Dockerfile pre-creates the (empty)
+# directory so that volume still inherits app:app ownership.
+var/

@@ -1,0 +1,108 @@
+# Local dev overlay — consolidates DB + backend into ONE Compose project.
+#
+# This file OVERLAYS the root docker-compose.yml. Running the root compose file
+# ALONE (production) is unaffected: no db service, no host port publishing, no
+# bind mount, no reload. Those are added only when this overlay is included.
+#
+# Canonical command (used by scripts/dev-service.ps1 and everywhere):
+#   docker compose --env-file backend/.env -p srm_fieldinspect \
+#       -f docker-compose.yml -f docker-compose.dev.yml up -d db backend
+#
+# Result — a single Compose project "srm_fieldinspect":
+#   srm-fieldinspect-backend  Docker, 127.0.0.1:8000, DB_HOST=db, reload
+#   srm-fieldinspect-db       Docker, 127.0.0.1:5432, external volume (data kept)
+# Frontend stays on the Windows host at http://localhost:5173 (not in Docker).
+name: srm_fieldinspect
+
+services:
+  # Local dev database (production points DB_HOST at a centralized server, so
+  # root compose has no db service — this overlay adds it for dev only).
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: srm-fieldinspect-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: srm_fieldinspect
+      POSTGRES_USER: srm_fieldinspect
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in backend/.env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      # Bind to 127.0.0.1 only — dev DB stays unreachable from other LAN hosts.
+      - "127.0.0.1:5432:5432"
+    networks:
+      - dev-db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U srm_fieldinspect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  backend:
+    # Dev-only overrides on top of the production backend service.
+    environment:
+      # Reach the db service over the dev-db network (overrides .env DB_HOST).
+      DB_HOST: db
+      # Windows bind mounts don't emit inotify events — poll so --reload works.
+      WATCHFILES_FORCE_POLLING: "true"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Live source for hot reload. Runtime deps live in /home/app/.local, so
+      # this mount does not shadow installed packages.
+      - ./backend:/app
+      # Round 8-16B — root compose now mounts the srm-fieldinspect-media
+      # volume at this path for production. Compose merges service volumes
+      # by TARGET, so re-declaring the same target here replaces that volume
+      # with the host directory and dev keeps writing photos where it always
+      # has (browsable from Windows at backend/var/inspection-photos).
+      # Without this line the named volume would win over the /app bind for
+      # this subpath and dev's photo location would change silently.
+      - ./backend/var/inspection-photos:/app/var/inspection-photos
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload",
+      # Round 8-5D.1 — stray backend/.pytest_tmp_* dirs (siblings of app/,
+      # created by ad-hoc past `pytest --basetemp=...` runs) can end up mode
+      # 0111 (no read for anyone, not even root). watchfiles' Rust-level
+      # recursive scan hit those during --reload's polling walk and crashed
+      # the reloader outright with WatchfilesRustInternalError: Permission
+      # denied. Tried WATCHFILES_IGNORE_PERMISSION_DENIED first, but uvicorn's
+      # WatchFilesReload already hardcodes ignore_permission_denied=True (see
+      # uvicorn/supervisors/watchfilesreload.py) and the crash still
+      # reproduced live — that flag doesn't cover a directory whose mode
+      # blocks even readdir(). --reload-exclude is filtered in Python *after*
+      # the scan, so it can't stop this either. The fix that actually works:
+      # --reload-dir narrows the watched root away from the backend/ top
+      # level entirely, so the scan never descends into any sibling
+      # .pytest_tmp_* dir in the first place.
+      "--reload-dir", "app",
+      # Belt-and-suspenders only (not load-bearing): still ignore the pattern
+      # if a future .pytest_tmp_* dir ever lands inside app/ itself.
+      "--reload-exclude", ".pytest_tmp*"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - proxy-net
+      - dev-db
+
+networks:
+  # Private backend<->db network for dev.
+  dev-db:
+    driver: bridge
+  # Declared external in root compose too; re-declared here so this overlay is
+  # self-consistent when merged.
+  proxy-net:
+    external: true
+
+volumes:
+  # Reuse the existing named volume; external so a project/name change or a
+  # stray `down -v` can never delete local data.
+  db_data:
+    name: srm-fieldinspect-db-data
+    external: true

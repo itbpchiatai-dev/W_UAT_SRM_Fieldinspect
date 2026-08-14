@@ -2,25 +2,345 @@
 
 Read is gated by `records.read` so the record form can load options. Mutations
 are gated by `masterdata.*` (Super Admin / Supervisor — manageMaster).
+
+Round 8-15A adds the crop/variety Excel import (backend foundation only, no
+frontend UI this round) — template/preview/commit + read-only result-
+workbook variants, all under crop-variety-import/. Registered BEFORE
+`/{item_id}` in file order for the same reason plots.py orders its /import/
+routes before /{plot_id}: a static multi-segment path can't collide with a
+single-segment `{item_id}` match anyway, but keeping the static routes first
+matches the established convention.
 """
 from __future__ import annotations
 
+import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import Response
+from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import require_permission
+from app.auth.dependencies import CurrentUser, require_any_permission, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.session import get_db
 from app.repositories import master_data_repository as repo
 from app.schemas.master_data import MasterDataCreate, MasterDataRead, MasterDataUpdate
+from app.schemas.master_data_import import (
+    CropVarietyImportCommitResult,
+    CropVarietyImportPreview,
+    CropVarietyImportPreviewState,
+)
+from app.services import master_data_crop_variety_import as cv_import
+from app.services.loggers.activity_logger import ActivityLogger
+from app.services.master_data_crop_variety_import_report import (
+    PHASE_COMMIT,
+    PHASE_PREVIEW,
+    build_crop_variety_import_result_workbook,
+    result_filename,
+)
 
 router = APIRouter(tags=["masterdata"])
 
+# Same file-size cap Plot Import enforces (app/api/v1/plots.py's
+# _IMPORT_MAX_BYTES) — an admin master-data import is small.
+_CV_IMPORT_MAX_BYTES = 2 * 1024 * 1024
 
+# Round 8-15A.1 — previewState is a client-echoed JSON blob, one entry per
+# import row, so its worst-case size scales with MAX_IMPORT_ROWS × the
+# widest possible row (crop/variety/variety_parent_at_preview each up to 255
+# chars + field overhead ≈ under 1 KB/row worst case). 1000 rows × ~1 KB ≈
+# 1 MB; this cap matches the file-upload cap above for a simple, consistent
+# story ("nothing in this feature accepts more than 2 MB") with ~2x headroom
+# over the worst-case row content. Checked BEFORE json.loads/model_validate_
+# json ever runs, so an oversized blob is rejected without the cost of
+# parsing it.
+_CV_PREVIEW_STATE_MAX_BYTES = 2 * 1024 * 1024
+
+_MSG_INVALID_PREVIEW_STATE = "previewState ไม่ถูกต้อง"
+
+
+async def _read_cv_import_upload(file: UploadFile) -> bytes:
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="รองรับเฉพาะไฟล์ .xlsx เท่านั้น")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="ไฟล์ว่างเปล่า")
+    if len(content) > _CV_IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=422, detail="ไฟล์ใหญ่เกินไป (สูงสุด 2 MB)")
+    return content
+
+
+def _parse_cv_preview_state(raw: str | None) -> CropVarietyImportPreviewState | None:
+    """Parse + bounds-check the optional multipart previewState field before
+    it ever reaches the service layer (round 8-15A.1). Absent/blank → None
+    (the service itself then raises a state-conflict — every commit needs an
+    approved preview).
+
+    Every failure path below — oversized, malformed JSON, a field outside
+    its schema bounds (see schemas/master_data_import.py's Field
+    constraints: row_number>0, crop/variety/parent<=255 chars, file_sha256
+    must be 64 lowercase hex chars, action must be one of the 6 known
+    values), too many rows, or a duplicate row_number — raises the SAME
+    generic HTTPException(422, "previewState ไม่ถูกต้อง"). None of them ever
+    echoes the raw string, a row's crop/variety, or any other submitted
+    value back to the caller — previewState is never a credential, but it
+    IS attacker-reachable input, so a validation error must reveal nothing
+    about what was rejected or why.
+
+    This mirrors plot_import's own _parse_preview_state (plots.py): an
+    input-boundary check only, never an authorization/state decision — the
+    service always re-derives the real plan from a fresh parse + fresh DB
+    query and treats a syntactically-valid previewState as nothing more than
+    "one candidate expectation to compare against," never as trusted state.
+    """
+    if raw is None or raw.strip() == "":
+        return None
+    # Checked BEFORE any JSON parsing — an oversized blob is rejected by its
+    # byte size alone, without the cost of parsing it.
+    if len(raw.encode("utf-8")) > _CV_PREVIEW_STATE_MAX_BYTES:
+        raise HTTPException(status_code=422, detail=_MSG_INVALID_PREVIEW_STATE)
+    try:
+        state = CropVarietyImportPreviewState.model_validate_json(raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_MSG_INVALID_PREVIEW_STATE) from exc
+    # Row-list length and row_number uniqueness aren't expressible as a
+    # single pydantic Field constraint on CropVarietyImportPreviewStateRow
+    # itself (they're properties of the LIST, and the cap needs the service's
+    # own MAX_IMPORT_ROWS) — checked here, same as plot_import's own
+    # equivalent list-level checks in _parse_preview_state.
+    if len(state.rows) > cv_import.MAX_IMPORT_ROWS:
+        raise HTTPException(status_code=422, detail=_MSG_INVALID_PREVIEW_STATE)
+    row_numbers = [r.row_number for r in state.rows]
+    if len(row_numbers) != len(set(row_numbers)):
+        raise HTTPException(status_code=422, detail=_MSG_INVALID_PREVIEW_STATE)
+    return state
+
+
+@router.get("/crop-variety-import/template", dependencies=[
+    Depends(require_permission(PermissionKey.MASTERDATA_READ)),
+])
+async def download_crop_variety_import_template(
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Read-only — never writes to the DB. See
+    services/master_data_crop_variety_import.build_template for the full
+    content contract (active crops only, active+inactive varieties, one
+    blank-variety row for a crop with none, dropdowns on crop/varietyStatus)."""
+    content = await cv_import.build_template(db)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="crop-variety-import-template.xlsx"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/crop-variety-import/preview", response_model=CropVarietyImportPreview,
+    dependencies=[
+        Depends(require_permission(PermissionKey.MASTERDATA_CREATE)),
+        Depends(require_permission(PermissionKey.MASTERDATA_UPDATE)),
+    ],
+)
+async def preview_crop_variety_import(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> CropVarietyImportPreview:
+    """Parse + validate every row, WITHOUT writing anything. Safe/read-only."""
+    content = await _read_cv_import_upload(file)
+    try:
+        return await cv_import.build_preview(db, content)
+    except cv_import.CropVarietyImportFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/crop-variety-import/commit", response_model=CropVarietyImportCommitResult,
+    dependencies=[
+        Depends(require_permission(PermissionKey.MASTERDATA_CREATE)),
+        Depends(require_permission(PermissionKey.MASTERDATA_UPDATE)),
+    ],
+)
+async def commit_crop_variety_import(
+    request: Request,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    # Explicit alias — every other API field on the wire is camelCase, and a
+    # client sends the multipart field as "previewState" (same convention as
+    # plots.py's commit_plot_import).
+    preview_state: str | None = Form(None, alias="previewState"),
+    db: AsyncSession = Depends(get_db),
+) -> CropVarietyImportCommitResult:
+    """Re-validate server-side (never trusting a client preview) and execute
+    every row in ONE transaction (this endpoint's single get_db session —
+    the service only ever flushes). Any invalid row → 422 with the full
+    preview, nothing written. A stale file/plan/master_data-state → 409,
+    nothing written."""
+    content = await _read_cv_import_upload(file)
+    parsed_state = _parse_cv_preview_state(preview_state)
+    try:
+        result = await cv_import.commit(db, content, preview_state=parsed_state)
+    except cv_import.CropVarietyImportHasErrors as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "พบข้อผิดพลาดในบางแถว — ไม่ได้บันทึกข้อมูลใด ๆ",
+                "preview": exc.preview.model_dump(by_alias=True, mode="json"),
+            },
+        ) from exc
+    except cv_import.CropVarietyImportStateConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except cv_import.CropVarietyImportFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="นำเข้าไม่สำเร็จเนื่องจากมีการเปลี่ยนแปลงที่ขัดแย้ง — ไม่ได้บันทึกข้อมูลใด ๆ",
+        ) from exc
+
+    await ActivityLogger(db).log(
+        action="masterdata.crop_variety_import.commit",
+        action_type="update",
+        resource_type="master_data",
+        user=user,
+        request=request,
+        risk_level="low",
+        metadata={
+            "createdCrops": result.created_crops,
+            "createdVarieties": result.created_varieties,
+            "activatedVarieties": result.activated_varieties,
+            "deactivatedVarieties": result.deactivated_varieties,
+            "skippedRows": result.skipped_rows,
+            "totalRows": result.total_rows,
+        },
+    )
+    return result
+
+
+def _cv_xlsx_response(content: bytes, filename: str) -> Response:
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/crop-variety-import/preview-report",
+    dependencies=[
+        Depends(require_permission(PermissionKey.MASTERDATA_CREATE)),
+        Depends(require_permission(PermissionKey.MASTERDATA_UPDATE)),
+    ],
+)
+async def preview_crop_variety_import_report(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Read-only: same core as .../preview, returned as a validation
+    workbook (READY/SKIPPED/ERROR per row) instead of JSON. Never writes."""
+    content = await _read_cv_import_upload(file)
+    try:
+        summary, row_views = await cv_import.preview_row_views(db, content)
+    except cv_import.CropVarietyImportFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    processed_at = datetime.datetime.now(datetime.timezone.utc)
+    # Round 8-15A.1 — counts come from the authoritative `summary` (already
+    # correctly deduplicated), never re-tallied from row_views.
+    workbook = build_crop_variety_import_result_workbook(
+        row_views, phase=PHASE_PREVIEW, completed=False,
+        original_filename=file.filename, processed_at=processed_at,
+        crops_to_create=summary.crops_to_create, varieties_to_create=summary.varieties_to_create,
+        varieties_to_activate=summary.varieties_to_activate,
+        varieties_to_deactivate=summary.varieties_to_deactivate,
+    )
+    return _cv_xlsx_response(workbook, result_filename(PHASE_PREVIEW, processed_at))
+
+
+@router.post(
+    "/crop-variety-import/commit-report",
+    dependencies=[
+        Depends(require_permission(PermissionKey.MASTERDATA_CREATE)),
+        Depends(require_permission(PermissionKey.MASTERDATA_UPDATE)),
+    ],
+)
+async def commit_crop_variety_import_report(
+    request: Request,
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    preview_state: str | None = Form(None, alias="previewState"),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Same core as .../commit (re-validates, checks drift, executes ONCE in
+    this endpoint's single transaction), returned as a completed-result
+    workbook (COMPLETED/SKIPPED per row) instead of JSON."""
+    content = await _read_cv_import_upload(file)
+    parsed_state = _parse_cv_preview_state(preview_state)
+    try:
+        # Round 8-15A.1 — `result` is the SAME CropVarietyImportCommitResult
+        # the JSON /commit endpoint returns (created_crops already
+        # deduplicated by _commit_execute's `new_crop_values` set). Sourcing
+        # BOTH the activity log AND the workbook summary from this ONE
+        # object — never re-deriving from row_views — is what keeps all
+        # three (JSON result, workbook, activity log) in agreement.
+        result, row_views = await cv_import.commit_row_views(db, content, preview_state=parsed_state)
+    except cv_import.CropVarietyImportHasErrors as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "พบข้อผิดพลาดในบางแถว — ไม่ได้บันทึกข้อมูลใด ๆ",
+                "preview": exc.preview.model_dump(by_alias=True, mode="json"),
+            },
+        ) from exc
+    except cv_import.CropVarietyImportStateConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except cv_import.CropVarietyImportFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="นำเข้าไม่สำเร็จเนื่องจากมีการเปลี่ยนแปลงที่ขัดแย้ง — ไม่ได้บันทึกข้อมูลใด ๆ",
+        ) from exc
+
+    await ActivityLogger(db).log(
+        action="masterdata.crop_variety_import.commit",
+        action_type="update",
+        resource_type="master_data",
+        user=user,
+        request=request,
+        risk_level="low",
+        metadata={
+            "createdCrops": result.created_crops,
+            "createdVarieties": result.created_varieties,
+            "activatedVarieties": result.activated_varieties,
+            "deactivatedVarieties": result.deactivated_varieties,
+            "skippedRows": result.skipped_rows,
+            "totalRows": result.total_rows,
+            "via": "commit-report",
+        },
+    )
+
+    processed_at = datetime.datetime.now(datetime.timezone.utc)
+    workbook = build_crop_variety_import_result_workbook(
+        row_views, phase=PHASE_COMMIT, completed=True,
+        original_filename=file.filename, processed_at=processed_at,
+        crops_to_create=result.created_crops, varieties_to_create=result.created_varieties,
+        varieties_to_activate=result.activated_varieties, varieties_to_deactivate=result.deactivated_varieties,
+    )
+    return _cv_xlsx_response(workbook, result_filename(PHASE_COMMIT, processed_at))
+
+
+# Read accepts records.read OR records.create (round 5.6) — the RecordForm
+# loads these options and /farmlog/records/new is opened with records.create.
+# Mutations below stay gated by masterdata.* (unchanged).
 @router.get("", response_model=list[MasterDataRead], dependencies=[
-    Depends(require_permission(PermissionKey.RECORDS_READ))
+    Depends(require_any_permission(PermissionKey.RECORDS_READ, PermissionKey.RECORDS_CREATE))
 ])
 async def list_master_data(
     db: AsyncSession = Depends(get_db),

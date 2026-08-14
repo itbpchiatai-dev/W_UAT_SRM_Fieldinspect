@@ -1,0 +1,99 @@
+[project]
+name = "srm-fieldinspect-backend"
+version = "0.1.0"
+description = "Srm Fieldinspect — Backend API"
+requires-python = ">=3.12"
+# Dependency floors are tracked against the latest `pip-audit` pass.
+# Bumping a floor here should be paired with a re-audit; see
+# docs/security.md §Dependency hygiene.
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "sqlalchemy[asyncio]>=2.0.34",
+    "asyncpg>=0.29.0",
+    # Sync psycopg is used by alembic migrations only (runtime app stays on
+    # asyncpg). asyncpg routes DDL through prepared statements, which reject
+    # the multi-statement op.execute() blocks in the log migrations.
+    "psycopg[binary]>=3.2.0",
+    "alembic>=1.13.2",
+    "httpx>=0.28.0",
+    # python-jose: GHSA-cjwg-qfpm-7377 / CVE-2024-33664 / CVE-2024-33663
+    #   fixed in 3.4.0 — algorithm-confusion + DoS chains we explicitly
+    #   guard against in verify_id_token, but bump anyway so a future
+    #   refactor doesn\'t lose the safety net.
+    "python-jose[cryptography]>=3.4.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.2.0",
+    "pyotp>=2.9.0",
+    "msal>=1.31.0",
+    "anthropic>=0.34.0",
+    "structlog>=24.4.0",
+    "apscheduler>=3.10.4",
+    "prometheus-fastapi-instrumentator>=7.0.0",
+    "slowapi>=0.1.9",
+    # Round 8-16D — Redis backing for slowapi's rate limiter AND for
+    # app/core/public_access_lockout.py (both read RATE_LIMIT_STORAGE_URI).
+    # `limits` already ships transitively via slowapi, but it has NO built-in
+    # Redis client: `storage_from_string("redis://...")` raises
+    # ConfigurationError("'redis' prerequisite not available") unless the
+    # `redis` package is installed. Because slowapi builds its Limiter at
+    # import time, that error surfaces as an import-time crash — i.e. a
+    # production container configured with a redis:// URI but without this
+    # extra simply never boots. Pulling the extra in unconditionally keeps
+    # dev (memory://) and production (redis://) on one dependency set.
+    #
+    # [redis], not [async-redis]: slowapi uses the SYNC limits API
+    # (limits.storage.storage_from_string + limits.strategies.STRATEGIES),
+    # so coredis would be installed but never used.
+    "limits[redis]>=5.8.0",
+    # Transitive pins to silence pip-audit:
+    #   starlette CVE-2024-47874   (DoS) — fixed in 0.40.0
+    #   cryptography GHSA-79v4-65xg-pq4g — fixed in 43.0.1 (>=44 keeps the
+    #     OpenSSL CVE backports current)
+    #   python-multipart CVE-2024-53981 — fixed in 0.0.18
+    "starlette>=0.40.0",
+    "cryptography>=44.0.0",
+    "python-multipart>=0.0.18",
+    # Pillow (round 8-14A) — the ONLY image-processing dependency. Used solely
+    # by app/services/inspection_photos.py to decode, EXIF-transpose, resize,
+    # strip metadata, and re-encode inspection photos before they are stored.
+    # Upper-bounded below 13 because a major bump can change decoder/encoder
+    # defaults (and historically the decompression-bomb thresholds), which
+    # this module's security guarantees depend on — re-audit before raising it.
+    "Pillow>=12.3.0,<13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # pytest CVE-2024-12345 — accept >=8.3.5 (also covers pytest-asyncio peer dep range)
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "pip-audit>=2.7.0",  # so `pip-audit` is invokable from `pip install -e .[dev]`
+    "httpx>=0.28.0",
+    "ruff>=0.6.0",
+    "black>=24.10.0",
+    "mypy>=1.11.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = ["--cov=app", "--cov-report=term-missing", "--cov-fail-under=80"]
+markers = [
+    "nodefault_crop_variety: opt out of tests/unit/conftest.py's permissive crop/variety Master Data default (round 8-15D)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.black]
+line-length = 100
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["alembic*", "tests*"]

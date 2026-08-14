@@ -32,3 +32,16 @@ class MasterDataRead(CamelBaseModel):
     active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class PublicMasterDataItem(CamelBaseModel):
+    """Minimal shape for the unauthenticated /api/v1/public/masterdata
+    endpoint (round 19.1) — deliberately excludes id/type/orderIndex/
+    active/timestamps. `type` is redundant (the caller already knows what
+    they asked for) and the rest is internal bookkeeping a public dropdown
+    has no use for. Server-side ordering (repository's order_index, then
+    value) is preserved in list order — the client never needs the sort
+    key itself."""
+
+    value: str
+    parent: str | None

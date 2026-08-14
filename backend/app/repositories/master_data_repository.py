@@ -34,6 +34,18 @@ async def list_items(
     return list(result.scalars().all())
 
 
+async def list_by_type_values(db: AsyncSession, type: str, values: set[str]) -> list[MasterData]:
+    """Batch-fetch existing rows of `type` whose value is in `values` — ONE
+    query regardless of row count (round 8-15A's crop/variety Excel import:
+    every crop/variety cell in the file is looked up in a single round trip,
+    never per-row). Empty `values` short-circuits without a query."""
+    if not values:
+        return []
+    stmt = select(MasterData).where(MasterData.type == type, MasterData.value.in_(values))
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def create(db: AsyncSession, payload: MasterDataCreate) -> MasterData:
     item = MasterData(
         type=payload.type.strip(),

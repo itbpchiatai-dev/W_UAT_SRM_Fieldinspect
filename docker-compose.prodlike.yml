@@ -1,0 +1,123 @@
+# Local PRODUCTION-LIKE overlay (round 8-16A).
+#
+# Purpose: run the app the way production runs it — built frontend assets
+# served by nginx, backend with no source bind mount and no --reload, both
+# behind ONE same-origin URL — while still using the local dev database
+# container. It overlays the root docker-compose.yml and deliberately does
+# NOT include docker-compose.dev.yml: the dev overlay is what adds the
+# ./backend:/app bind mount and the --reload command, so simply leaving it
+# out is what makes this backend production-like (root compose declares
+# neither, so the image's own CMD `uvicorn ... --workers 4` applies).
+#
+# Canonical command — note --no-deps (round 8-16B):
+#   docker compose --env-file backend/.env -p srm_fieldinspect \
+#       -f docker-compose.yml -f docker-compose.prodlike.yml \
+#       up -d --no-deps backend frontend
+#
+# WHY --no-deps: `backend` declares depends_on: db, so without it Compose
+# walks into the db service on every prodlike up/rebuild. Today that is
+# merely a "Waiting/Healthy" check because this file's db block is
+# byte-identical to docker-compose.dev.yml's — but that safety rests on two
+# hand-maintained copies staying in sync. The moment either drifts, an
+# ordinary `up -d backend frontend` would RECREATE the database container.
+# --no-deps removes the traversal entirely, so switching or rebuilding the
+# app can never reach the DB. The database's lifecycle belongs to the dev
+# overlay / start-service.bat; start it there first. (Data itself is safe
+# regardless — db_data is an external volume — but a surprise container
+# recreate mid-work is not something to leave to luck.)
+#
+# Result — the SAME Compose project "srm_fieldinspect" as dev:
+#   srm-fieldinspect-frontend  http://localhost:8080  (nginx, built assets, /api proxied)
+#   srm-fieldinspect-backend   127.0.0.1:8000         (kept published for debugging only)
+#   srm-fieldinspect-db        127.0.0.1:5432         (untouched — not named, not traversed)
+#
+# NOT production:
+#   - APP_ENV stays `dev` (APP_ENV=production fail-fasts on the in-memory
+#     rate-limit storage this stack still uses — see app/core/config.py).
+#   - Plain HTTP on localhost. Real production terminates TLS at the IT
+#     reverse proxy; this is topology parity, not transport parity.
+name: srm_fieldinspect
+
+services:
+  # Same local dev database as docker-compose.dev.yml — declared identically
+  # here only so `depends_on` resolves and `docker compose config` validates
+  # when this overlay is used alone. The canonical `up` command names just
+  # backend+frontend, so this service is never recreated by prodlike; the
+  # already-running dev container keeps serving, and its data lives in an
+  # external volume Compose cannot delete either way.
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: srm-fieldinspect-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: srm_fieldinspect
+      POSTGRES_USER: srm_fieldinspect
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in backend/.env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - dev-db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U srm_fieldinspect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  backend:
+    environment:
+      # Reach the db service over the dev-db network (overrides .env DB_HOST).
+      DB_HOST: db
+    ports:
+      # Loopback only. Not required by the frontend (it proxies over the
+      # proxy-net network to backend:8000), but kept published so a failing
+      # smoke test can be attributed to the backend or to the proxy without
+      # guessing.
+      - "127.0.0.1:8000:8000"
+    # No `volumes:` here — round 8-16B moved the media mount into the ROOT
+    # compose file so production and prodlike share one declaration and
+    # cannot drift apart on where photos live.
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - proxy-net
+      - dev-db
+
+  frontend:
+    build:
+      # Round 8-16B — the full VITE_* arg list now lives in the ROOT compose
+      # file (production is the contract; this overlay only differs where
+      # local genuinely differs). Same-origin API and the empty public-app
+      # URL are already the root defaults, so the only local-specific value
+      # left is the Azure AD redirect, which must point at :8080.
+      args:
+        VITE_APP_NAME: ${VITE_APP_NAME:-Chia Tai – FarmLog}
+        VITE_AZURE_AD_REDIRECT_URI: ${VITE_AZURE_AD_REDIRECT_URI:-http://localhost:8080/auth/callback}
+    ports:
+      # nginx-unprivileged listens on 8080 inside the container; loopback
+      # only, same as every other local port in this project.
+      - "127.0.0.1:8080:8080"
+    networks:
+      - proxy-net
+
+networks:
+  dev-db:
+    driver: bridge
+  proxy-net:
+    external: true
+
+volumes:
+  db_data:
+    name: srm-fieldinspect-db-data
+    external: true
+  # `media` is NOT redeclared here — round 8-16B put it in the root compose
+  # file (external, srm-fieldinspect-media) so there is exactly one place
+  # defining where inspection photos live.

@@ -32,8 +32,15 @@ export function MasterDataSelect({ type, value, onChange, parent, disabled, plac
       onChange={(e) => onChange(e.target.value || null)}
     >
       <option value="">{placeholder ?? '— เลือก —'}</option>
-      {/* Keep a value that's no longer in the list visible (e.g. after edit) */}
-      {value && !items.some((i) => i.value === value) && <option value={value}>{value}</option>}
+      {/* Round 8-15D — keep a value that's no longer in the active list
+          visible (e.g. deactivated in Master Data after this cycle was
+          created) so the field never goes blank and looks like data loss.
+          Marked + disabled: it stays visible as the CURRENT value but can't
+          be re-selected as a NEW choice once the user picks something else
+          (this option only renders while it's still the live `value`). */}
+      {value && !items.some((i) => i.value === value) && (
+        <option value={value} disabled>{value} (ปิดใช้งาน/ค่าเดิม)</option>
+      )}
       {items.map((i) => (
         <option key={i.id} value={i.value}>{i.value}</option>
       ))}

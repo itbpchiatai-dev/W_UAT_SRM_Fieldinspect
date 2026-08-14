@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import require_permission
+from app.auth.dependencies import require_any_permission, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.session import get_db
 from app.repositories import field_definition_repository as repo
@@ -25,8 +25,11 @@ from app.schemas.field_definition import (
 router = APIRouter(tags=["fielddefs"])
 
 
+# Read accepts records.read OR records.create (round 5.6) — the RecordForm
+# renders from this catalog and /farmlog/records/new is opened with
+# records.create. Mutations below stay gated by fielddefs.* (unchanged).
 @router.get("", response_model=list[FieldDefinitionRead], dependencies=[
-    Depends(require_permission(PermissionKey.RECORDS_READ))
+    Depends(require_any_permission(PermissionKey.RECORDS_READ, PermissionKey.RECORDS_CREATE))
 ])
 async def list_field_definitions(
     db: AsyncSession = Depends(get_db),

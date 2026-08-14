@@ -1,29 +1,46 @@
 /**
  * Master Data admin (Step 12.5) — manage dropdown options per type.
  * Options edited here appear immediately in the record form's selects.
+ *
+ * Round 8-15B adds the crop/variety Excel import entry points — a
+ * standalone "ดาวน์โหลด Template" button (masterdata.read; works even for a
+ * caller who can't import) and a "นำเข้า Excel" button that opens
+ * MasterDataCropVarietyImportModal (requires masterdata.create AND
+ * masterdata.update — the modal's own commit-report call needs both). The
+ * table below is unchanged — a successful import just invalidates the
+ * shared ['masterdata'] query key, same as every existing mutation here, so
+ * the crop/variety tabs pick up the new rows on their normal refetch.
  */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Download, Loader2, Pencil, Plus, Trash2, Upload } from 'lucide-react';
 import {
   createMasterData,
   deleteMasterData,
+  downloadCropVarietyImportTemplate,
   listMasterData,
   updateMasterData,
   type MasterDataItem,
 } from '../../../api/masterdata';
+import { MasterDataCropVarietyImportModal } from '../../../components/farmlog/MasterDataCropVarietyImportModal';
 import { MasterDataSelect } from '../../../components/farmlog/MasterDataSelect';
 import { useHasPermission } from '../../../hooks/useHasPermission';
+import { downloadBlob } from '../../../lib/downloadBlob';
 
+// Rounds 8-14E / 8-14E.1 — 'level', 'severity', 'irrigation', and
+// 'fertilizer' removed from this admin UI: no production consumer reads
+// them (Record Form only uses growth_stage/weather via MasterDataButtons;
+// confirmed via rg audit before each change, including fertilizer against
+// Record Form/Public Inspect/Plot Cycle/Inspection Protocol/Report in
+// round 8-14E.1). Frontend-only — the master_data rows for these types are
+// untouched in the database and the authenticated list/CRUD API still
+// serves them if queried directly.
 const MD_TYPES: { type: string; label: string; parentType?: string }[] = [
   { type: 'crop', label: 'ชนิดพืช' },
   { type: 'variety', label: 'พันธุ์/สายพันธุ์', parentType: 'crop' },
   { type: 'growth_stage', label: 'ระยะการเจริญเติบโต' },
   { type: 'weather', label: 'สภาพอากาศ' },
-  { type: 'level', label: 'ระดับ (เตรียม/ดูแล)' },
-  { type: 'severity', label: 'ระดับความรุนแรง' },
-  { type: 'irrigation', label: 'การให้น้ำ' },
-  { type: 'fertilizer', label: 'ปุ๋ย' },
+  { type: 'province', label: 'จังหวัด' },
 ];
 
 export function MasterData() {
@@ -31,10 +48,21 @@ export function MasterData() {
   const [activeType, setActiveType] = useState('crop');
   const [editing, setEditing] = useState<MasterDataItem | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
+  const canRead = useHasPermission('masterdata.read');
   const canCreate = useHasPermission('masterdata.create');
   const canUpdate = useHasPermission('masterdata.update');
   const canDelete = useHasPermission('masterdata.delete');
+  // Round 8-15B — the import modal's commit-report call needs BOTH, same
+  // gate the backend itself enforces (masterdata.py's crop-variety-import
+  // preview/commit routes).
+  const canImportCropVariety = canCreate && canUpdate;
+
+  const templateM = useMutation({
+    mutationFn: () => downloadCropVarietyImportTemplate(),
+    onSuccess: ({ blob, filename }) => downloadBlob(blob, filename),
+  });
 
   const meta = MD_TYPES.find((t) => t.type === activeType)!;
 
@@ -61,12 +89,28 @@ export function MasterData() {
           <h1 className="text-xl font-bold">Master Data</h1>
           <p className="mt-1 text-sm text-muted-foreground">จัดการตัวเลือก dropdown ของฟอร์มบันทึก</p>
         </div>
-        {canCreate && (
-          <button type="button" onClick={() => { setEditing(null); setCreating(true); }}
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90">
-            <Plus className="h-4 w-4" /> เพิ่มตัวเลือก
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {canRead && (
+            <button type="button" onClick={() => templateM.mutate()} disabled={templateM.isPending}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium shadow-sm hover:bg-secondary disabled:opacity-60">
+              {templateM.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              ดาวน์โหลด Template (ชนิดพืชและพันธุ์)
+            </button>
+          )}
+          {canImportCropVariety && (
+            <button type="button" onClick={() => setImportOpen(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium shadow-sm hover:bg-secondary">
+              <Upload className="h-4 w-4" />
+              นำเข้า Excel (ชนิดพืชและพันธุ์)
+            </button>
+          )}
+          {canCreate && (
+            <button type="button" onClick={() => { setEditing(null); setCreating(true); }}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90">
+              <Plus className="h-4 w-4" /> เพิ่มตัวเลือก
+            </button>
+          )}
+        </div>
       </header>
 
       {/* Type tabs */}
@@ -146,6 +190,13 @@ export function MasterData() {
           parentType={meta.parentType}
           onClose={() => { setCreating(false); setEditing(null); }}
           onSaved={() => { setCreating(false); setEditing(null); qc.invalidateQueries({ queryKey: ['masterdata'] }); }}
+        />
+      )}
+
+      {importOpen && (
+        <MasterDataCropVarietyImportModal
+          onClose={() => setImportOpen(false)}
+          onImported={() => qc.invalidateQueries({ queryKey: ['masterdata'] })}
         />
       )}
     </div>

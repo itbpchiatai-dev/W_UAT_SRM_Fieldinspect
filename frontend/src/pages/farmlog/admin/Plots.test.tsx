@@ -11,6 +11,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { Plots } from './Plots';
+import { masterDataQueryKey } from '../../../api/masterdata';
 import { useAuthStore } from '../../../stores/auth';
 import type { Role, User } from '../../../types/auth';
 
@@ -95,8 +96,10 @@ function masterDataItem(overrides: Partial<{
   };
 }
 
-function renderPlotsPage(initialEntry = '/farmlog/admin/plots') {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderPlotsPage(
+  initialEntry = '/farmlog/admin/plots',
+  qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initialEntry]}>
@@ -1189,6 +1192,33 @@ describe('Plots list — crop/variety filters', () => {
 
     fireEvent.click(within(varietyListbox).getByText('พริกขี้หนู'));
     await waitFor(() => expect(hasListPlotsCallContaining({ crop: 'พริก', variety: 'พริกขี้หนู' })).toBe(true));
+  });
+
+  it('round 8-22A: the crop filter never reuses the Admin Master Data (all-status) cache entry', async () => {
+    listPlotsMock.mockResolvedValue(onePlot());
+    mockCropVarietyMasterData();
+    // Simulates the Admin Master Data page having already loaded 'crop'
+    // (ALL statuses, including a deactivated one) under ITS query key,
+    // before this Plots page mounts and queries the SAME type/parent with
+    // activeOnly=true.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+    });
+    qc.setQueryData(masterDataQueryKey('crop', null, false), [
+      masterDataItem({ id: 'crop-1', type: 'crop', value: 'พริก' }),
+      masterDataItem({ id: 'crop-2', type: 'crop', value: 'เมล่อน' }),
+      masterDataItem({ id: 'crop-3', type: 'crop', value: 'ทุเรียนปิด' }),
+    ]);
+
+    renderPlotsPage('/farmlog/admin/plots', qc);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'กรองชนิดพืช' }));
+    const listbox = await screen.findByRole('listbox');
+    await waitFor(() => expect(within(listbox).getByText('พริก')).toBeTruthy());
+    // A distinct key means this filter's own activeOnly=true fetch ran
+    // instead — the deactivated crop from the Admin page's cache entry
+    // never leaks in as a selectable option for a new/existing plot.
+    expect(within(listbox).queryByText('ทุเรียนปิด')).toBeNull();
   });
 
   it('changing the crop filter resets a stale variety selection', async () => {

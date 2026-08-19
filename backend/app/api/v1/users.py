@@ -18,6 +18,8 @@ from app.db.models.user import User
 from app.db.models.user_permission_override import UserPermissionOverride
 from app.db.session import get_db
 from app.schemas.auth import (
+    AdminPasswordResetRequest,
+    AdminPasswordResetResult,
     BulkApproveRequest,
     OverrideRequest,
     UserCreate,
@@ -374,6 +376,134 @@ async def deactivate_user(
     return {"status": "ok"}
 
 
+# --- Admin password reset (round 8-23A) ---------------------------------
+#
+# Every message below is fixed Thai text. None of them contains the
+# submitted password, its length, or which policy rule it broke — the
+# response body and the audit row are both attacker-visible surfaces.
+_MSG_RESET_SELF = "ไม่สามารถตั้งรหัสผ่านใหม่ให้บัญชีของตนเองผ่านหน้าจัดการผู้ใช้ได้"
+_MSG_RESET_AZURE = (
+    "บัญชีนี้เข้าสู่ระบบผ่าน Microsoft (Azure AD) "
+    "กรุณาจัดการรหัสผ่านผ่านระบบของ Microsoft"
+)
+_MSG_RESET_NOT_LOCAL = "บัญชีนี้ไม่ได้ใช้รหัสผ่านของระบบ จึงตั้งรหัสผ่านใหม่ไม่ได้"
+_MSG_RESET_BAD_INPUT = "รูปแบบรหัสผ่านไม่ถูกต้อง"
+_MSG_RESET_POLICY = (
+    "รหัสผ่านไม่ผ่านเกณฑ์ความปลอดภัย — ต้องยาวอย่างน้อย 12 ตัวอักษร "
+    "และไม่เกิน 72 ไบต์เมื่อเข้ารหัสแบบ UTF-8 (ตัวอักษรที่ไม่ใช่ ASCII เช่นภาษาไทย "
+    "นับมากกว่า 1 ไบต์ต่อตัว), "
+    "ผสมอย่างน้อย 2 ประเภท (พิมพ์ใหญ่ / พิมพ์เล็ก / ตัวเลข / สัญลักษณ์), "
+    "ไม่ใช่รหัสที่คาดเดาง่ายหรือเรียงตามแป้นพิมพ์ "
+    "และต้องไม่มีอีเมลของผู้ใช้อยู่ในรหัสผ่าน"
+)
+# Round 8-23A.1 — this is ONLY a coarse request-size/DoS guard (an
+# unbounded string is needless work to even count/encode before it is
+# ever hashed). It is deliberately generous and MUST NOT be read as the
+# real bcrypt limit: bcrypt's actual boundary is 72 BYTES of UTF-8, not
+# 200 characters, and up to 3 bytes/char for non-ASCII text (Thai, etc.)
+# means a string well under this cap can still exceed 72 bytes. The
+# authoritative byte-length check is app.auth.password.validate_password's
+# MAX_PASSWORD_BYTES gate, called (via hash_password) below — this
+# constant only rejects a pathologically long input before that call.
+_RESET_PASSWORD_MAX_LEN = 200
+
+
+@router.post("/{user_id}/reset-password", response_model=AdminPasswordResetResult,
+             dependencies=[
+                 Depends(require_permission(PermissionKey.USERS_RESET_PASSWORD))
+             ])
+async def reset_user_password(
+    user_id: UUID,
+    payload: AdminPasswordResetRequest,
+    request: Request,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> AdminPasswordResetResult:
+    """Admin sets a new password on a LOCAL account (round 8-23A).
+
+    Gated by users.reset_password — a SEPARATE permission from
+    users.update, because setting someone's password is account takeover.
+    Seeded to internal:super_admin only.
+
+    Touches exactly two columns — password_hash and auth_version — under a
+    row lock, in the single transaction get_db commits. Email, roles,
+    supplier, approval, and active state are never read for writing here.
+
+    Bumping auth_version is what makes the old sessions dead: every
+    access/refresh token carries the generation it was minted at, and both
+    get_current_user and /auth/refresh reject a mismatch fail-closed. This
+    is NOT the self-service email flow — /api/v1/auth/password-reset stays
+    a separate (still stubbed) endpoint and is not repurposed here.
+    """
+    # Self-reset guard first: cheap, and it leaks nothing (the caller
+    # necessarily already knows their own id). An admin changing their own
+    # password must go through the self-service flow, so that a stolen
+    # admin session cannot quietly lock the real owner out of their account
+    # while keeping itself alive. Same family as the patch_user /
+    # deactivate_user / add_override self-guards.
+    if user_id == user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_MSG_RESET_SELF)
+
+    # Lock the row for the whole read-modify-write. Two concurrent resets
+    # therefore serialise here, and the second one computes its increment
+    # from the first one's committed value — no lost update. Same shape as
+    # plot_access_credential_repository's credential_version bump.
+    target = (await db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    )).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target.auth_provider != "local":
+        raise HTTPException(
+            status_code=400,
+            detail=_MSG_RESET_AZURE if target.auth_provider == "azure_ad"
+            else _MSG_RESET_NOT_LOCAL,
+        )
+
+    # Hand-written input checks — see AdminPasswordResetRequest's docstring
+    # for why this cannot be a pydantic constraint. Both branches answer
+    # with the SAME fixed message and never include the value.
+    new_password = payload.new_password
+    if not isinstance(new_password, str) or not new_password:
+        raise HTTPException(status_code=400, detail=_MSG_RESET_BAD_INPUT)
+    if len(new_password) > _RESET_PASSWORD_MAX_LEN:
+        raise HTTPException(status_code=400, detail=_MSG_RESET_BAD_INPUT)
+
+    # 400 matches create_user's existing PasswordPolicyError convention.
+    # The message is a fixed Thai summary of the policy — deliberately NOT
+    # str(exc), which would reveal which specific rule the candidate broke.
+    try:
+        new_hash = hash_password(
+            new_password, context_terms=[target.email.split("@", 1)[0]]
+        )
+    except PasswordPolicyError as exc:
+        raise HTTPException(status_code=400, detail=_MSG_RESET_POLICY) from exc
+
+    target.password_hash = new_hash
+    target.auth_version = (target.auth_version or 0) + 1
+    await db.flush()
+
+    # Security event, high risk. The ONLY identifiers recorded are the two
+    # user ids (actor via `user=`, target via resource_id) — never the
+    # password, its hash, its length, or the request body.
+    await ActivityLogger(db).log(
+        action="user.password_reset",
+        action_type="update",
+        resource_type="user",
+        resource_id=str(target.id),
+        user=user,
+        request=request,
+        is_security_event=True,
+        risk_level="high",
+    )
+
+    return AdminPasswordResetResult(
+        user_id=target.id,
+        auth_version=target.auth_version,
+    )
+
+
 @router.post("/{user_id}/overrides", response_model=UserRead, dependencies=[
     Depends(require_permission(PermissionKey.PERMISSIONS_GRANT_OVERRIDE))
 ])
@@ -440,6 +570,10 @@ async def add_override(
         "users.delete",
         "users.deactivate",
         "users.create",
+        # Round 8-23A — setting another account's password IS account
+        # takeover, so it can never be handed out via a per-user override
+        # by a non-super-admin holder of permissions.grant_override.
+        "users.reset_password",
         "roles.create", "roles.update", "roles.delete", "roles.assign",
         "menus.delete",
         # Database Connections module (opt-in) — stored external-DB credentials

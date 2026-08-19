@@ -21,7 +21,7 @@ import {
   type CycleYieldParams,
 } from '../../../api/reports';
 import { listSuppliers } from '../../../api/suppliers';
-import { listMasterData } from '../../../api/masterdata';
+import { listMasterData, masterDataQueryKey } from '../../../api/masterdata';
 import { describeFinalEstimate, formatYieldQuantity } from '../../../lib/yield-planning';
 import { useHasPermission } from '../../../hooks/useHasPermission';
 
@@ -81,7 +81,7 @@ export function CycleYieldReport() {
   });
 
   const { data: crops = [] } = useQuery({
-    queryKey: ['masterdata', 'crop'],
+    queryKey: masterDataQueryKey('crop', null, true),
     queryFn: () => listMasterData({ type: 'crop', activeOnly: true }),
     staleTime: 5 * 60 * 1000,
   });

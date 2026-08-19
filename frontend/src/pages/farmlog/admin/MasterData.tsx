@@ -13,12 +13,14 @@
  */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import { Download, Loader2, Pencil, Plus, Trash2, Upload } from 'lucide-react';
 import {
   createMasterData,
   deleteMasterData,
   downloadCropVarietyImportTemplate,
   listMasterData,
+  masterDataQueryKey,
   updateMasterData,
   type MasterDataItem,
 } from '../../../api/masterdata';
@@ -66,8 +68,13 @@ export function MasterData() {
 
   const meta = MD_TYPES.find((t) => t.type === activeType)!;
 
+  // Round 8-22A — this page shows BOTH active and inactive rows (so an
+  // inactive one can be toggled back on), unlike every other masterdata
+  // consumer below (activeOnly=true) — the query key must say so, or this
+  // query and theirs would collide (see api/masterdata.ts's
+  // masterDataQueryKey docstring).
   const { data: items = [], isLoading } = useQuery({
-    queryKey: ['masterdata', activeType, null],
+    queryKey: masterDataQueryKey(activeType),
     queryFn: () => listMasterData({ type: activeType }),
   });
 
@@ -203,6 +210,23 @@ export function MasterData() {
   );
 }
 
+// Round 8-22A — before this, a failed create/update showed `(err as
+// Error)?.message`, which for an axios error is a generic string like
+// "Request failed with status code 409" — never the backend's actual Thai
+// detail message (e.g. the new duplicate-value 409). Same extraction shape
+// as Plots.tsx's own plotMutationErrorMessage (independent local copy, same
+// convention this codebase already uses for its other create/edit modals).
+function masterDataMutationErrorMessage(error: unknown): string {
+  if (!error) return '';
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as { detail?: unknown } | string | undefined;
+    if (typeof data === 'string') return data;
+    if (typeof data?.detail === 'string') return data.detail;
+    return error.message;
+  }
+  return error instanceof Error ? error.message : 'บันทึกไม่สำเร็จ';
+}
+
 function MasterDataModal({
   item, type, parentType, onClose, onSaved,
 }: {
@@ -235,7 +259,7 @@ function MasterDataModal({
       }
       onSaved();
     } catch (err) {
-      setError((err as Error)?.message || 'บันทึกไม่สำเร็จ');
+      setError(masterDataMutationErrorMessage(err) || 'บันทึกไม่สำเร็จ');
     }
   }
 

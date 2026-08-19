@@ -4,7 +4,7 @@
  * renders them as tap chips. Drop-in replacement for MasterDataSelect in the form.
  */
 import { useQuery } from '@tanstack/react-query';
-import { listMasterData } from '../../api/masterdata';
+import { listMasterData, masterDataQueryKey } from '../../api/masterdata';
 import { OptionButtons } from './OptionButtons';
 
 interface Props {
@@ -19,7 +19,7 @@ interface Props {
 
 export function MasterDataButtons({ type, value, onChange, parent, disabled, multiple }: Props) {
   const { data: items = [], isLoading } = useQuery({
-    queryKey: ['masterdata', type, parent ?? null],
+    queryKey: masterDataQueryKey(type, parent, true),
     queryFn: () => listMasterData({ type, parent: parent ?? undefined, activeOnly: true }),
   });
 

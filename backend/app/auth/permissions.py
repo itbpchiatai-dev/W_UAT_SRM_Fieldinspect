@@ -26,6 +26,13 @@ class PermissionKey:
     # fields without being able to silently flip is_approved=true and
     # bypass the approval flow (Deep-Audit HIGH-2).
     USERS_APPROVE = "users.approve"
+    # Round 8-23A — admin sets a new password on a LOCAL account. A
+    # SEPARATE key from USERS_UPDATE on purpose: setting someone's password
+    # is account takeover, so holding users.update (which internal:admin has
+    # by default) must never be enough. Seeded to internal:super_admin only
+    # and listed in users.py _PRIVILEGE_MANAGEMENT_KEYS so it cannot be
+    # handed out via a per-user override by a non-super-admin either.
+    USERS_RESET_PASSWORD = "users.reset_password"
 
     # Roles
     ROLES_CREATE = "roles.create"

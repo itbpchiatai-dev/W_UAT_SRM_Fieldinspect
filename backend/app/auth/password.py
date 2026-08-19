@@ -23,6 +23,21 @@ import bcrypt
 
 MIN_PASSWORD_LENGTH = 12
 
+# Round 8-23A.1 — bcrypt (this repo uses the `bcrypt` package directly, not
+# passlib) only ever looks at the first 72 BYTES of the UTF-8-encoded
+# password. Past that boundary bcrypt 5.0.0 does NOT silently truncate —
+# bcrypt.hashpw()/checkpw() raise a bare ValueError, which is NOT a
+# PasswordPolicyError (even though PasswordPolicyError subclasses
+# ValueError, a `except PasswordPolicyError` does not catch its own
+# parent class) and was escaping every caller as an uncaught 500.
+#
+# This is a BYTE limit, not a character limit: Thai text is 3 bytes/char
+# in UTF-8, so as few as 25 Thai characters can exceed it while comfortably
+# passing a naive `len(password) <= 200` character-count guard — exactly
+# the gap that let a policy-valid, human-reasonable Thai passphrase 500 the
+# admin reset endpoint (round 8-23A.1 root cause).
+MAX_PASSWORD_BYTES = 72
+
 COMMON_PASSWORDS = frozenset({
     "password", "passw0rd", "passwd", "qwerty", "qwertyuiop", "letmein",
     "iloveyou", "admin", "administrator", "root", "welcome", "monkey",
@@ -74,6 +89,26 @@ def validate_password(password: str, *, context_terms: Iterable[str] = ()) -> No
         raise PasswordPolicyError(
             f"Password must be at least {MIN_PASSWORD_LENGTH} characters long."
         )
+    # Round 8-23A.1 — the bcrypt byte boundary, checked here (BEFORE any
+    # bcrypt call) so it always surfaces as a PasswordPolicyError, never a
+    # bare ValueError. Never truncate: a silently-shortened password would
+    # let two different long passwords hash identically past byte 72,
+    # which is confusing and defeats the point of a length check. A
+    # malformed/unencodable string (e.g. a lone UTF-16 surrogate that can
+    # slip through JSON decoding) is rejected the same way — encoding
+    # failure is itself a reason to refuse the password, not a crash.
+    try:
+        encoded_len = len(password.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise PasswordPolicyError(
+            "Password contains characters that cannot be encoded."
+        ) from exc
+    if encoded_len > MAX_PASSWORD_BYTES:
+        raise PasswordPolicyError(
+            f"Password is too long — must be at most {MAX_PASSWORD_BYTES} bytes "
+            "when UTF-8 encoded (non-ASCII characters, e.g. Thai, take up more "
+            "than 1 byte each)."
+        )
     if _classes_present(password) < 2:
         raise PasswordPolicyError(
             "Password must mix at least 2 of: uppercase, lowercase, digit, "
@@ -102,16 +137,35 @@ def validate_password(password: str, *, context_terms: Iterable[str] = ()) -> No
 
 
 def hash_password(password: str, *, context_terms: Iterable[str] = ()) -> str:
-    """bcrypt with 12 rounds (~250ms on modern hardware — slow enough)."""
+    """bcrypt with 12 rounds (~250ms on modern hardware — slow enough).
+
+    validate_password() (called first) already guarantees the password's
+    UTF-8 encoding exists and fits within MAX_PASSWORD_BYTES, so the
+    encode() below can never raise and bcrypt.hashpw() can never see an
+    over-length input. Every rejection from this function is therefore a
+    PasswordPolicyError — bcrypt's own bare ValueError never escapes here.
+    Bcrypt rounds (12) and hash format are unchanged by this contract.
+    """
     validate_password(password, context_terms=context_terms)
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    """Fail closed, never throws — a wrong/oversized/unencodable password
+    or a malformed hash on disk are all "not a match", not a crash.
+
+    The broad `except ValueError` covers three distinct bcrypt failure
+    modes with one line: a malformed hash on disk, checkpw() rejecting a
+    password over MAX_PASSWORD_BYTES (login itself has no length-precheck
+    the way hash_password's validate_password call does — a login attempt
+    with a too-long password must still fail closed, not 500), and
+    UnicodeEncodeError (a ValueError subclass) from an unencodable
+    password. None of the three should ever be distinguishable to the
+    caller — a login failure looks like a login failure either way.
+    """
     if not password_hash:
         return False
     try:
         return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
     except ValueError:
-        # Malformed hash on disk — treat as auth failure, not crash.
         return False

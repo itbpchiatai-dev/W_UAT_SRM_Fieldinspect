@@ -1,0 +1,50 @@
+name: Security
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC — weekly
+  pull_request:
+    paths:
+      - 'backend/pyproject.toml'
+      - 'frontend/package*.json'
+      - '.github/workflows/security.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    if: hashFiles('backend/pyproject.toml') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - name: pip-audit (backend deps)
+        working-directory: backend
+        run: pip-audit --disable-pip --strict
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    if: hashFiles('frontend/package.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: npm audit (high severity only)
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

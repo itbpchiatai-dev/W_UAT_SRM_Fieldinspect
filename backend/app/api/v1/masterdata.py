@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_any_permission, require_permission
 from app.auth.permissions import PermissionKey
+from app.db.models.master_data import MasterData
 from app.db.session import get_db
 from app.repositories import master_data_repository as repo
 from app.schemas.master_data import MasterDataCreate, MasterDataRead, MasterDataUpdate
@@ -336,6 +337,28 @@ async def commit_crop_variety_import_report(
     return _cv_xlsx_response(workbook, result_filename(PHASE_COMMIT, processed_at))
 
 
+# Round 8-22A — master_data has a UNIQUE(type, value) index (migration 0019,
+# uq_master_data_type_value) spanning BOTH active and inactive rows, so
+# re-adding a value that already exists (even a deactivated one) always
+# fails at the DB. Before this round, create/update never caught that
+# IntegrityError at all — it propagated out of the endpoint as an unhandled
+# 500 (Starlette's generic, stack-trace-free response, since APP_DEBUG is
+# false outside dev — see app/main.py's `debug=settings.APP_DEBUG`), which
+# read to the user as "Add ชนิดพืช ไม่สำเร็จ" with no explanation of why.
+# The messages below never echo the DB driver's own error text (it can
+# carry the raw SQL) — only the user's own already-known input value.
+_MSG_DUPLICATE_ACTIVE = 'มี "{value}" อยู่แล้วในระบบ'
+_MSG_DUPLICATE_INACTIVE = (
+    'มี "{value}" อยู่แล้วแต่ถูกปิดใช้งานอยู่ — กรุณาเปิดใช้งานรายการเดิมแทนการสร้างรายการใหม่'
+)
+
+
+def _duplicate_master_data_detail(existing: MasterData | None, value: str) -> str:
+    if existing is not None and not existing.active:
+        return _MSG_DUPLICATE_INACTIVE.format(value=value)
+    return _MSG_DUPLICATE_ACTIVE.format(value=value)
+
+
 # Read accepts records.read OR records.create (round 5.6) — the RecordForm
 # loads these options and /farmlog/records/new is opened with records.create.
 # Mutations below stay gated by masterdata.* (unchanged).
@@ -358,7 +381,23 @@ async def create_master_data(
     payload: MasterDataCreate,
     db: AsyncSession = Depends(get_db),
 ) -> MasterDataRead:
-    item = await repo.create(db, payload)
+    # repo.create() itself strips type/value before writing, so the
+    # pre-check below compares against the SAME stripped value that would
+    # actually be persisted.
+    type_ = payload.type.strip()
+    value = payload.value.strip()
+    existing = await repo.get_by_type_value(db, type_, value)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=_duplicate_master_data_detail(existing, value))
+    try:
+        item = await repo.create(db, payload)
+    except IntegrityError as exc:
+        # Race: a concurrent insert of the same (type, value) landed between
+        # the check above and this flush — the DB's unique index is the
+        # real guard. Never echoes the driver's message.
+        raise HTTPException(
+            status_code=409, detail=_MSG_DUPLICATE_ACTIVE.format(value=value),
+        ) from exc
     return MasterDataRead.model_validate(item)
 
 
@@ -373,7 +412,24 @@ async def update_master_data(
     item = await repo.get(db, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="master data not found")
-    item = await repo.update(db, item, payload)
+    # `type` isn't part of MasterDataUpdate (immutable) — only a `value`
+    # change can collide with another row of the same type. repo.update()
+    # writes payload.value as-is (unstripped, unlike create) — compare
+    # against that exact same value so this pre-check predicts what would
+    # actually be written.
+    if payload.value is not None and payload.value != item.value:
+        existing = await repo.get_by_type_value(db, item.type, payload.value)
+        if existing is not None and existing.id != item.id:
+            raise HTTPException(
+                status_code=409, detail=_duplicate_master_data_detail(existing, payload.value),
+            )
+    try:
+        item = await repo.update(db, item, payload)
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_MSG_DUPLICATE_ACTIVE.format(value=payload.value or item.value),
+        ) from exc
     return MasterDataRead.model_validate(item)
 
 

@@ -5,12 +5,53 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from pydantic import SkipValidation
+
 from app.schemas.base import CamelBaseModel
 
 
 class LoginRequest(CamelBaseModel):
     email: str
     password: str
+
+
+class AdminPasswordResetRequest(CamelBaseModel):
+    """Body of POST /users/{user_id}/reset-password (round 8-23A).
+
+    `new_password` is the ONLY field — this endpoint never touches email,
+    roles, supplier, approval, or active state. There is deliberately no
+    corresponding field on UserUpdate/PATCH: setting a password is account
+    takeover and gets its own endpoint, its own permission, and its own
+    audit action.
+
+    `SkipValidation[str]` with NO Field(min_length=…/max_length=…) is a
+    security requirement, not laziness. Pydantic v2 puts the offending
+    value in `ValidationError.errors()[i]["input"]`, and FastAPI's default
+    RequestValidationError handler serialises exactly that into the 422
+    body — so ANY pydantic-level constraint on this field would echo the
+    submitted password back to the caller (and into any proxy/access log
+    that records response bodies). Every check therefore runs by hand
+    inside the endpoint, which answers with a fixed message that never
+    contains the value, its length, or which rule it broke. Same pattern
+    and same reason as SupplierSearchRequest.contact_phone_digits.
+    """
+
+    new_password: SkipValidation[str]
+
+
+class AdminPasswordResetResult(CamelBaseModel):
+    """Status-only success response — never carries the password or hash.
+
+    `auth_version` is the target's NEW session generation: it is not a
+    secret (just a counter), and returning it is what lets the caller and
+    the tests prove the old sessions were actually invalidated rather than
+    taking "ok" on faith.
+    """
+
+    status: str = "ok"
+    user_id: UUID
+    auth_version: int
+    sessions_invalidated: bool = True
 
 
 class TokenResponse(CamelBaseModel):

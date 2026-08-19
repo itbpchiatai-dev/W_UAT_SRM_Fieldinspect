@@ -20,7 +20,7 @@ import {
 } from '../../../api/reports';
 import { listSuppliers } from '../../../api/suppliers';
 import { listPlotProvinces } from '../../../api/plots';
-import { listMasterData } from '../../../api/masterdata';
+import { listMasterData, masterDataQueryKey } from '../../../api/masterdata';
 import { computeCurrentExpectedYield, formatYieldQuantity } from '../../../lib/yield-planning';
 import { toNumberOrNull } from '../../../lib/numeric';
 import { CompactScores } from '../../../components/farmlog/CompactScores';
@@ -55,7 +55,7 @@ export function PlotStatusReport() {
   });
 
   const { data: crops = [] } = useQuery({
-    queryKey: ['masterdata', 'crop'],
+    queryKey: masterDataQueryKey('crop', null, true),
     queryFn: () => listMasterData({ type: 'crop', activeOnly: true }),
     staleTime: 5 * 60 * 1000,
   });

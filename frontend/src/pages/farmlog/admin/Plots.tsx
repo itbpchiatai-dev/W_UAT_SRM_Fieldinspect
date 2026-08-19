@@ -73,7 +73,7 @@ import {
   type PlotAccessPhoneFieldsValue,
 } from '../../../components/farmlog/PlotAccessPhoneFields';
 import { PlotAccessPhoneModal } from '../../../components/farmlog/PlotAccessPhoneModal';
-import { listMasterData } from '../../../api/masterdata';
+import { listMasterData, masterDataQueryKey } from '../../../api/masterdata';
 import { ActionMenu, type ActionMenuItem } from '../../../components/ActionMenu';
 import { toNumberOrNull } from '../../../lib/numeric';
 import { fetchAllPages } from '../../../lib/paginate';
@@ -822,12 +822,12 @@ export function Plots() {
   // — same source the Plot Status report's crop filter uses. Variety options
   // narrow to the chosen crop via the master-data parent link.
   const { data: cropOptions = [] } = useQuery({
-    queryKey: ['masterdata', 'crop', null],
+    queryKey: masterDataQueryKey('crop', null, true),
     queryFn: () => listMasterData({ type: 'crop', activeOnly: true }),
     staleTime: 5 * 60 * 1000,
   });
   const { data: varietyOptions = [] } = useQuery({
-    queryKey: ['masterdata', 'variety', filterCrop || null],
+    queryKey: masterDataQueryKey('variety', filterCrop || null, true),
     queryFn: () => listMasterData({
       type: 'variety',
       parent: filterCrop || undefined,

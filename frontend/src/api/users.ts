@@ -59,6 +59,46 @@ export async function deactivateUser(id: string): Promise<void> {
   await apiClient.post(`/api/v1/users/${id}/deactivate`, {});
 }
 
+/**
+ * Admin password reset (rounds 8-23A / 8-23A.1 backend).
+ *
+ * Status-only success shape — the backend deliberately never returns the
+ * password or its hash. `authVersion` is the target's new session
+ * generation; `sessionsInvalidated` is always true on success (bumping the
+ * generation kills every outstanding access AND refresh token for that
+ * user).
+ */
+export interface ResetUserPasswordResult {
+  status: string;
+  userId: string;
+  authVersion: number;
+  sessionsInvalidated: boolean;
+}
+
+/**
+ * POST the new password in the request BODY only.
+ *
+ * Never a query string / path segment: a password in a URL lands verbatim
+ * in nginx + Uvicorn access logs, browser history, and any Referer header.
+ * The caller must also keep it out of React Query keys and any storage —
+ * this module never caches, logs, or persists the value, and the promise
+ * it returns resolves to the status-only payload above.
+ *
+ * Requires `users.reset_password` and a target with authProvider 'local'
+ * (the backend enforces both; the UI mirrors them to avoid a pointless
+ * round-trip).
+ */
+export async function resetUserPassword(
+  userId: string,
+  newPassword: string,
+): Promise<ResetUserPasswordResult> {
+  const res = await apiClient.post<ResetUserPasswordResult>(
+    `/api/v1/users/${userId}/reset-password`,
+    { newPassword },
+  );
+  return res.data;
+}
+
 export async function bulkApproveUsers(userIds: string[]): Promise<{ updated: number }> {
   const res = await apiClient.post<{ updated: number }>('/api/v1/users/bulk-approve', { userIds });
   return res.data;

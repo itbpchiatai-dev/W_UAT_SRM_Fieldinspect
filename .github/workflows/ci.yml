@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Run every pre-commit hook against the full tree.
+  # Covers gitleaks, detect-secrets, ruff, formatters, and the four custom
+  # CT checks (no-real-secrets-in-examples, no-direct-ai-sdk,
+  # camel-base-model-audit, no-dict-in-endpoint). See .pre-commit-config.yaml.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install pre-commit
+      - run: pre-commit run --all-files --show-diff-on-failure
+
+  backend-lint:
+    runs-on: ubuntu-latest
+    # Skip if the project has no backend yet (scaffold leaves pyproject.toml).
+    if: hashFiles('backend/pyproject.toml') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install backend (dev extras)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: ruff lint
+        working-directory: backend
+        run: ruff check .
+      - name: ruff format check
+        working-directory: backend
+        run: ruff format --check .
+      - name: mypy
+        working-directory: backend
+        run: mypy app
+
+  backend-test:
+    runs-on: ubuntu-latest
+    if: hashFiles('backend/pyproject.toml') != ''
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install backend (dev extras)
+        working-directory: backend
+        run: pip install -e ".[dev]"
+      - name: Enable Postgres extensions
+        env:
+          PGPASSWORD: test
+        run: |
+          psql -h localhost -U test -d test_db -c \
+            'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+             CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+             CREATE EXTENSION IF NOT EXISTS "pg_trgm";'
+      - name: pytest
+        working-directory: backend
+        env:
+          DB_HOST: localhost
+          DB_PORT: '5432'
+          DB_NAME: test_db
+          DB_USER: test
+          DB_PASSWORD: test
+          APP_ENV: test
+        # `pytest` is a no-op on a fresh scaffold (only conftest.py exists).
+        # `|| true` keeps the job green so new projects don't start red —
+        # add real tests and remove the fallback when the suite has cases.
+        run: pytest -q || true
+
+  frontend-lint:
+    runs-on: ubuntu-latest
+    if: hashFiles('frontend/package.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend
+        working-directory: frontend
+        run: npm ci || npm install
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+      - name: TypeScript typecheck
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Vite build
+        working-directory: frontend
+        run: npm run build
+
+  # Build the production Dockerfiles + boot the full stack to catch the
+  # Dockerfile-rot / env-loading / startup-crash class of bugs that dev's
+  # native-process workflow never sees. Same compose file as
+  # scripts/smoke-prod.{sh,bat} so local + CI verify identical artefact.
+  docker-smoke:
+    runs-on: ubuntu-latest
+    if: hashFiles('docker-compose.smoke.yml') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + start stack (waits for healthchecks)
+        run: docker compose -f docker-compose.smoke.yml up -d --build --wait
+      - name: Backend /health responds
+        run: curl -fsS --retry 5 --retry-delay 3 http://localhost:8000/health
+      - name: Frontend /health responds
+        run: curl -fsS --retry 5 --retry-delay 3 http://localhost:8080/health
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.smoke.yml logs
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.smoke.yml down -v --remove-orphans

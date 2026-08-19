@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MasterData } from './MasterData';
-import type { MasterDataItem } from '../../../api/masterdata';
+import { masterDataQueryKey, type MasterDataItem } from '../../../api/masterdata';
 
 const listMasterDataMock = vi.fn();
 const createMasterDataMock = vi.fn();
@@ -287,5 +287,69 @@ describe('MasterData — round 8-15B: crop/variety import entry points', () => {
     fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
 
     await waitFor(() => expect(createMasterDataMock).toHaveBeenCalledOnce());
+  });
+});
+
+describe('MasterData — round 8-22A: query-key contract + duplicate-value error handling', () => {
+  it('shows inactive items even when the active-only selector cache is already populated under a different key', async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+    });
+    // Simulates MasterDataSelect/MasterDataButtons/Plots' crop filter having
+    // already cached the active-only crop list (no inactive rows) under
+    // THEIR key before this admin page (all statuses) mounts.
+    qc.setQueryData(masterDataQueryKey('crop', null, true), [masterDataItem({ value: 'ข้าวโพด' })]);
+    listMasterDataMock.mockResolvedValue([
+      masterDataItem({ id: 'md-1', value: 'ข้าวโพด', active: true }),
+      masterDataItem({ id: 'md-2', value: 'ทุเรียน', active: false }),
+    ]);
+
+    renderPage(qc);
+
+    // A distinct query key means the admin page's own (all-status) fetch
+    // runs — proving it never reused the active-only cache entry above,
+    // which would have hidden ทุเรียน.
+    await screen.findByText('ทุเรียน');
+    expect(screen.getByText('ข้าวโพด')).toBeTruthy();
+  });
+
+  it('shows the backend\'s specific duplicate-value message on a 409, not a generic axios message', async () => {
+    createMasterDataMock.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 409',
+      response: { status: 409, data: { detail: 'มี "ข้าวโพด" อยู่แล้วในระบบ' } },
+    });
+    renderPage();
+    await screen.findByText('ข้าวโพด');
+
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มตัวเลือก' }));
+    await screen.findByRole('heading', { name: 'เพิ่มตัวเลือก' });
+    const [valueInput] = screen.getAllByRole('textbox');
+    fireEvent.change(valueInput, { target: { value: 'ข้าวโพด' } });
+    fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
+
+    await screen.findByText('มี "ข้าวโพด" อยู่แล้วในระบบ');
+    expect(screen.queryByText('Request failed with status code 409')).toBeNull();
+  });
+
+  it('shows a distinct message for a duplicate-but-inactive value, suggesting reactivation', async () => {
+    createMasterDataMock.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: { detail: 'มี "ข้าวโพด" อยู่แล้วแต่ถูกปิดใช้งานอยู่ — กรุณาเปิดใช้งานรายการเดิมแทนการสร้างรายการใหม่' },
+      },
+    });
+    renderPage();
+    await screen.findByText('ข้าวโพด');
+
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มตัวเลือก' }));
+    await screen.findByRole('heading', { name: 'เพิ่มตัวเลือก' });
+    const [valueInput] = screen.getAllByRole('textbox');
+    fireEvent.change(valueInput, { target: { value: 'ข้าวโพด' } });
+    fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
+
+    await screen.findByText(/ปิดใช้งานอยู่.*เปิดใช้งานรายการเดิม/);
   });
 });

@@ -52,6 +52,31 @@ export type MasterDataUpdatePayload = Partial<{
   active: boolean;
 }>;
 
+/**
+ * Shared React Query key factory (round 8-22A). Before this, the Admin
+ * Master Data page (loads ALL statuses) and MasterDataSelect/
+ * MasterDataButtons/Plots' crop-variety filters (load activeOnly=true) both
+ * built their own literal `['masterdata', type, parent ?? null]` key — for
+ * the same type+parent (e.g. type='crop', parent=null), that's the EXACT
+ * SAME key backing two DIFFERENT queryFns. React Query caches by key, not
+ * by queryFn, so whichever query populated the cache first could be served
+ * to the other consumer instantly (and, if still within its staleTime,
+ * without even a background refetch) — e.g. an inactive crop the admin page
+ * just loaded briefly leaking into the Plots crop filter (which must never
+ * offer an inactive value for a new record — see MasterDataSelect's own
+ * "never re-select an inactive value" contract).
+ *
+ * `activeOnly` is now part of the key itself so an all-status query and an
+ * active-only query for the same type/parent are always DIFFERENT cache
+ * entries. Every masterdata consumer must build its queryKey through this
+ * function — never a hand-written literal — so the two can never collide
+ * again. `invalidateQueries({ queryKey: ['masterdata'] })` (used by every
+ * create/update/toggle/delete/import mutation) still matches every key this
+ * produces, since React Query invalidates by prefix by default.
+ */
+export const masterDataQueryKey = (type: string, parent?: string | null, activeOnly = false) =>
+  ['masterdata', type, parent ?? null, activeOnly] as const;
+
 export const listMasterData = (params: MasterDataListParams = {}) =>
   apiClient.get<MasterDataItem[]>('/api/v1/masterdata', { params }).then((r) => r.data);
 

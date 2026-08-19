@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import ARRAY, Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import ARRAY, Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +48,19 @@ class User(Base, UUIDMixin, TimestampMixin):
     approval_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     approval_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Round 8-23A — session generation counter. Every access/refresh token
+    # carries the value that was live when it was minted (claim
+    # `auth_version`); auth/dependencies.get_current_user and /auth/refresh
+    # compare that claim against this column and reject on ANY mismatch.
+    # Bumping it therefore invalidates every outstanding token for this user
+    # at once — which the per-jti `revoked_tokens` blocklist cannot do,
+    # because jtis are not recorded at mint time. Incremented under a row
+    # lock in the same transaction as password_hash (see
+    # api/v1/users.reset_user_password). A token with NO auth_version claim
+    # is read as 0, so pre-8-23A sessions keep working until the first bump.
+    auth_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     totp_secret: Mapped[str | None] = mapped_column(String(255))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     business_unit_ids: Mapped[list[str]] = mapped_column(

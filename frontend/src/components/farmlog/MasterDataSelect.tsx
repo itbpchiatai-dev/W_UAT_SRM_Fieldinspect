@@ -4,7 +4,7 @@
  * e.g. variety filtered by the chosen crop).
  */
 import { useQuery } from '@tanstack/react-query';
-import { listMasterData } from '../../api/masterdata';
+import { listMasterData, masterDataQueryKey } from '../../api/masterdata';
 
 const inputCls =
   'w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
@@ -20,7 +20,7 @@ interface Props {
 
 export function MasterDataSelect({ type, value, onChange, parent, disabled, placeholder }: Props) {
   const { data: items = [], isLoading } = useQuery({
-    queryKey: ['masterdata', type, parent ?? null],
+    queryKey: masterDataQueryKey(type, parent, true),
     queryFn: () => listMasterData({ type, parent: parent ?? undefined, activeOnly: true }),
   });
 

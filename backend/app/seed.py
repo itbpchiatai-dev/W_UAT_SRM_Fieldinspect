@@ -56,6 +56,12 @@ DEFAULT_PERMISSIONS: list[tuple[str, str, str, bool]] = [
     # users.update so admin's profile-edit power can't silently approve
     # accounts. Closes Deep-Audit HIGH-2.
     ("users.approve",               "อนุมัติผู้ใช้",             "users", False),
+    # users.reset_password (round 8-23A) — admin sets a new password on a
+    # LOCAL account. Deliberately NOT listed in any DEFAULT_ROLES entry:
+    # internal:super_admin is the `keys=None` role and picks up the whole
+    # catalog, so this key lands there and NOWHERE else. Setting someone's
+    # password is account takeover — users.update must never imply it.
+    ("users.reset_password",        "ตั้งรหัสผ่านใหม่ให้ผู้ใช้",   "users", False),
     ("roles.create",                "สร้าง Role",              "roles", False),
     ("roles.update",                "แก้ไข Role",              "roles", False),
     ("roles.delete",                "ลบ Role",                 "roles", False),

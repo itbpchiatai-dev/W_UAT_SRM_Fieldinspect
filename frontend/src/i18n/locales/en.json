@@ -104,7 +104,28 @@
       "approve": "Approve",
       "unapprove": "Un-approve",
       "approveAllVisible": "Approve all visible",
-      "confirmApproveAll": "Approve {{count}} visible user(s)?"
+      "confirmApproveAll": "Approve {{count}} visible user(s)?",
+      "saveError": "Could not save",
+      "resetPassword": {
+        "action": "Set new password",
+        "title": "Set new password",
+        "forUser": "For account {{email}}",
+        "newPassword": "New password",
+        "confirmPassword": "Confirm new password",
+        "show": "Show password",
+        "hide": "Hide password",
+        "submit": "Confirm",
+        "hint": "At least 12 characters, and at most 72 bytes when UTF-8 encoded (Thai counts as 3 bytes per character).",
+        "azureNotice": "This account signs in with Microsoft (Azure AD) — its password is managed in Microsoft and cannot be set from here.",
+        "success": "Password has been reset, and this user's existing sessions were revoked.",
+        "errors": {
+          "required": "Please enter a new password",
+          "mismatch": "The two passwords do not match",
+          "tooShort": "Password must be at least 12 characters",
+          "tooLong": "Password is too long — at most 72 bytes when UTF-8 encoded (Thai counts as 3 bytes per character)",
+          "failed": "Could not set the new password"
+        }
+      }
     },
     "roles": {
       "title": "Roles",

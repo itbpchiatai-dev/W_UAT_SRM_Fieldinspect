@@ -32,6 +32,7 @@ from app.auth.jwt_service import (
     decode_token,
     encode_access_token,
     encode_refresh_token,
+    token_auth_version,
 )
 from app.auth.password import verify_password
 from app.core.config import get_settings
@@ -175,8 +176,15 @@ async def login(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="account_not_approved")
 
-    access = encode_access_token(subject=str(user.id), auth_provider=user.auth_provider)
-    refresh = encode_refresh_token(subject=str(user.id), auth_provider=user.auth_provider)
+    # Round 8-23A — stamp the session generation live at mint time.
+    access = encode_access_token(
+        subject=str(user.id), auth_provider=user.auth_provider,
+        auth_version=user.auth_version or 0,
+    )
+    refresh = encode_refresh_token(
+        subject=str(user.id), auth_provider=user.auth_provider,
+        auth_version=user.auth_version or 0,
+    )
     _set_refresh_cookie(response, refresh)
 
     await audit.log(
@@ -274,6 +282,15 @@ async def refresh(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="User not found or inactive")
 
+    # Round 8-23A — session generation gate, fail-closed, same contract as
+    # auth/dependencies.get_current_user. Without this, an admin password
+    # reset would kill the target's ACCESS tokens but leave the 7-day
+    # refresh cookie able to mint brand-new ones.
+    claim_version = token_auth_version(claims)
+    if claim_version is None or claim_version != (refreshed_user.auth_version or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Session is no longer valid, please sign in again")
+
     # Revoke the old jti BEFORE minting the new one — even if the mint
     # blows up, the stolen old token stays unusable.
     old_exp = claims.get("exp")
@@ -283,9 +300,15 @@ async def refresh(
             reason="rotation",
         )
 
-    access = encode_access_token(subject=user_id, auth_provider=auth_provider)
+    access = encode_access_token(
+        subject=user_id, auth_provider=auth_provider,
+        auth_version=refreshed_user.auth_version or 0,
+    )
     # Rotate refresh token — defence in depth against token replay.
-    new_refresh = encode_refresh_token(subject=user_id, auth_provider=auth_provider)
+    new_refresh = encode_refresh_token(
+        subject=user_id, auth_provider=auth_provider,
+        auth_version=refreshed_user.auth_version or 0,
+    )
     _set_refresh_cookie(response, new_refresh)
     # Audit the refresh so a stolen-token replay storm shows up in the
     # Activity Logs page (action_type="login" so it falls in the Login
@@ -414,8 +437,18 @@ async def sso_callback(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="account_not_approved")
 
-    access = encode_access_token(subject=str(user.id), auth_provider=user.auth_provider)
-    refresh_tok = encode_refresh_token(subject=str(user.id), auth_provider=user.auth_provider)
+    # Round 8-23A — stamp the session generation live at mint time. Azure AD
+    # accounts can never be reset through the admin endpoint (local only),
+    # so this is 0 for them in practice; carrying the claim uniformly keeps
+    # ONE verification path for both providers.
+    access = encode_access_token(
+        subject=str(user.id), auth_provider=user.auth_provider,
+        auth_version=user.auth_version or 0,
+    )
+    refresh_tok = encode_refresh_token(
+        subject=str(user.id), auth_provider=user.auth_provider,
+        auth_version=user.auth_version or 0,
+    )
     _set_refresh_cookie(response, refresh_tok)
 
     audit = ActivityLogger(db)

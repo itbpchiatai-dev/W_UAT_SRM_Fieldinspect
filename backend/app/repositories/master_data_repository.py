@@ -34,6 +34,19 @@ async def list_items(
     return list(result.scalars().all())
 
 
+async def get_by_type_value(db: AsyncSession, type: str, value: str) -> MasterData | None:
+    """Exact (type, value) lookup — mirrors the DB's own
+    uq_master_data_type_value unique index (migration 0019), active or
+    inactive either way. Used by the create/update endpoints to give a
+    friendly, specific duplicate message BEFORE attempting the write (round
+    8-22A) — the unique index itself remains the actual guard against a
+    concurrent duplicate insert."""
+    result = await db.execute(
+        select(MasterData).where(MasterData.type == type, MasterData.value == value)
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_by_type_values(db: AsyncSession, type: str, values: set[str]) -> list[MasterData]:
     """Batch-fetch existing rows of `type` whose value is in `values` — ONE
     query regardless of row count (round 8-15A's crop/variety Excel import:

@@ -7,7 +7,7 @@ import { it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MasterDataSelect } from './MasterDataSelect';
-import type { MasterDataItem } from '../../api/masterdata';
+import { masterDataQueryKey, type MasterDataItem } from '../../api/masterdata';
 
 const listMasterDataMock = vi.fn();
 
@@ -23,8 +23,11 @@ function item(value: string, active = true): MasterDataItem {
   };
 }
 
-function renderSelect(value: string | null, onChange = vi.fn()) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderSelect(
+  value: string | null,
+  onChange = vi.fn(),
+  qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
   render(
     <QueryClientProvider client={qc}>
       <MasterDataSelect type="crop" value={value} onChange={onChange} />
@@ -73,4 +76,24 @@ it('an active current value renders with no legacy marker', async () => {
   renderSelect('พริก');
   await screen.findByRole('option', { name: 'พริก' });
   expect(screen.queryByText(/ปิดใช้งาน\/ค่าเดิม/)).toBeNull();
+});
+
+it('round 8-22A: never reuses the Admin (all-status) cache entry, even when it is already populated', async () => {
+  // Simulates the Admin Master Data page having already loaded 'crop'
+  // (all statuses, including an inactive one) under ITS key, seconds
+  // before this selector mounts elsewhere in the app.
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+  });
+  qc.setQueryData(masterDataQueryKey('crop', null, false), [item('พริก'), item('ทุเรียน', false)]);
+  // The active-only query itself always excludes it server-side.
+  listMasterDataMock.mockResolvedValue([item('พริก')]);
+
+  renderSelect(null, vi.fn(), qc);
+
+  await waitFor(() => expect(listMasterDataMock).toHaveBeenCalled());
+  // A distinct key means this query starts with no cached data of its own
+  // — it never even transiently shows the Admin page's inactive-included
+  // list before its own fetch resolves.
+  expect(screen.queryByRole('option', { name: 'ทุเรียน' })).toBeNull();
 });

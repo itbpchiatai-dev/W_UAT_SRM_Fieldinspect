@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.auth.jwt_service import decode_token
+from app.auth.jwt_service import decode_token, token_auth_version
 from app.db.models.role import Role
 from app.db.models.user import User
 from app.db.models.user_permission_override import UserPermissionOverride
@@ -83,6 +83,21 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="User not found or inactive")
+
+    # Round 8-23A — session generation gate, fail-closed. The claim is
+    # compared to the LIVE column with exact equality (never <=): a token
+    # from before an admin password reset, a token carrying a malformed
+    # claim (token_auth_version -> None), and a token somehow ahead of the
+    # row are all rejected. An ABSENT claim reads as 0, so pre-8-23A
+    # sessions keep working for users still at auth_version 0 and the
+    # rollout needs no mass re-login.
+    claim_version = token_auth_version(claims)
+    if claim_version is None or claim_version != (user.auth_version or 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session is no longer valid, please sign in again",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # Cache effective perms on the instance for downstream require_permission.
     setattr(user, "_effective_permissions", _compute_effective_permissions(user))

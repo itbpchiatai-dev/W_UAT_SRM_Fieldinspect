@@ -34,12 +34,19 @@ def upgrade() -> None:
             "upgrading."
         )
 
-    # 1. Create limited runtime role (no superuser, no BYPASSRLS). The
-    # password is bound as a query PARAMETER, never string-formatted/
-    # f-string-concatenated into the SQL text — so it can never break out of
-    # the PASSWORD literal regardless of its contents (quotes, backslashes,
-    # …), and is never visible in this file's own source or in any query log
-    # that only records the parameterized statement text. A DO $$ ... $$
+    # 1. Create limited runtime role (no superuser, no BYPASSRLS). Postgres's
+    # own grammar for CREATE/ALTER ROLE's PASSWORD clause only accepts a
+    # string literal (not a query bind parameter — `PASSWORD $1` is a syntax
+    # error on every Postgres version), so the password can't be bound the
+    # normal parameterized way here. Instead it is passed as an ordinary
+    # bind parameter to `SELECT quote_literal(:pw)` — Postgres itself then
+    # produces a correctly quoted/escaped SQL string literal for that exact
+    # value (handles embedded quotes, backslashes, everything; this is the
+    # standard, documented idiom Postgres itself uses for dynamic SQL, e.g.
+    # inside plpgsql functions) — so the raw password is still never
+    # string-formatted/f-string-concatenated by our own code, and never
+    # visible in this file's own source or in any query log that only
+    # records the parameterized SELECT's statement text. A DO $$ ... $$
     # block's body is a separate, opaque string to the outer SQL parser —
     # parameters bound on the outer statement cannot reach inside it — so the
     # exists-check is done as an ordinary (parameterizable) top-level
@@ -48,11 +55,13 @@ def upgrade() -> None:
     role_exists = bind.execute(
         sa.text("SELECT 1 FROM pg_roles WHERE rolname = 'srm_app'")
     ).scalar()
+    quoted_password = bind.execute(
+        sa.text("SELECT quote_literal(:pw)"), {"pw": app_password}
+    ).scalar()
     if role_exists:
-        stmt = sa.text("ALTER ROLE srm_app WITH PASSWORD :pw")
+        op.execute(f"ALTER ROLE srm_app WITH PASSWORD {quoted_password}")
     else:
-        stmt = sa.text("CREATE ROLE srm_app LOGIN PASSWORD :pw NOINHERIT")
-    bind.execute(stmt, {"pw": app_password})
+        op.execute(f"CREATE ROLE srm_app LOGIN PASSWORD {quoted_password} NOINHERIT")
 
     # 2. Grant schema access + DML on existing tables
     op.execute("GRANT USAGE ON SCHEMA public TO srm_app;")

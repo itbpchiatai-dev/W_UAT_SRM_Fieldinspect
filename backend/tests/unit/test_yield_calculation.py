@@ -239,6 +239,44 @@ def test_pct_is_quantized_to_one_decimal_place() -> None:
     assert result.yield_pct.as_tuple().exponent == -1
 
 
+# --- unit string is case/whitespace-insensitive (round 8-25B) -------------
+# The unit is free text on every write path (plot import stores the cell
+# verbatim; the cycle form is a plain text input), so "KG" is as likely as
+# "kg". Before this fix the all-lowercase _KG_FACTOR lookup missed it and the
+# whole cycle silently read as "no comparable target" — no error anywhere.
+# Found in UAT on a real imported cycle whose unit was "KG".
+
+@pytest.mark.parametrize("unit", ["KG", "Kg", "kG", " kg ", "\tKG\n"])
+def test_kg_unit_is_matched_regardless_of_case_or_surrounding_space(unit) -> None:
+    result = derive_yield(
+        yield_quantity_kg=Decimal("800"), client_yield_pct=None,
+        expected_yield_full=Decimal("1000"), expected_yield_unit=unit,
+    )
+    assert result.yield_target_kg_snapshot == Decimal("1000.00")
+    assert result.yield_pct == Decimal("80.0")
+
+
+@pytest.mark.parametrize("unit", ["G", " g", "ตัน ", " ตัน"])
+def test_other_weight_units_normalize_the_same_way(unit) -> None:
+    result = derive_yield(
+        yield_quantity_kg=Decimal("1"), client_yield_pct=None,
+        expected_yield_full=Decimal("1000"), expected_yield_unit=unit,
+    )
+    assert result.yield_target_kg_snapshot is not None
+
+
+@pytest.mark.parametrize("unit", ["ผล", "ลัง", " ผล ", "PIECES", "unknown_unit"])
+def test_normalizing_never_turns_a_non_weight_unit_into_a_comparable_one(unit) -> None:
+    """The fix must widen ONLY the case/whitespace dimension — a count or
+    container unit stays non-comparable however it is typed."""
+    result = derive_yield(
+        yield_quantity_kg=Decimal("123.45"), client_yield_pct=None,
+        expected_yield_full=Decimal("1000"), expected_yield_unit=unit,
+    )
+    assert result.yield_target_kg_snapshot is None
+    assert result.yield_pct is None
+
+
 # --- cross-check: the derived pct still composes correctly with the -------
 # --- pre-existing final-estimate snapshot logic (plot_cycle_repository) ---
 

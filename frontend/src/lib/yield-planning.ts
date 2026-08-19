@@ -122,6 +122,16 @@ export type FinalEstimateDisplay =
 
 const KG_FACTOR: Record<string, number> = { kg: 1, g: 0.001, 'ตัน': 1000 };
 
+/** Trim + lowercase before the KG_FACTOR lookup — the mirror of
+ * `_normalize_unit` in backend/app/services/yield_calculation.py (see that
+ * function's docstring for the UAT bug this fixes: a cycle whose unit was
+ * typed "KG" missed the all-lowercase dict and silently read as
+ * "no comparable target"). `toLowerCase()` matches Python's `.lower()`;
+ * Thai units have no case and round-trip unchanged. */
+function normalizeUnit(unit: string): string {
+  return unit.trim().toLowerCase();
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -142,7 +152,7 @@ export function targetToKg(
 ): number | null {
   const full = toNumberOrNull(expectedYieldFull);
   if (full == null || !expectedYieldUnit) return null;
-  const factor = KG_FACTOR[expectedYieldUnit];
+  const factor = KG_FACTOR[normalizeUnit(expectedYieldUnit)];
   if (factor == null) return null;
   const target = round2(full * factor);
   return target > 0 ? target : null;

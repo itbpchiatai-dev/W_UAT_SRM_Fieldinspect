@@ -274,8 +274,36 @@ def test_nginx_api_proxy_preserves_prefix(nginx_text: str):
     # proxy_pass with NO URI part after the authority is what makes nginx
     # forward the ORIGINAL request URI (including /api) untouched — a
     # trailing path/slash here would instead strip the /api prefix.
-    assert re.search(r"proxy_pass\s+http://backend:8000\s*;", block), (
+    assert re.search(r"proxy_pass\s+http://srm-fieldinspect-backend:8000\s*;", block), (
         "proxy_pass must have no URI component so /api is preserved"
+    )
+
+
+def test_nginx_api_proxy_targets_the_container_name_not_the_service_alias(
+    nginx_text: str,
+):
+    """Round 8-25C regression guard — `proxy_pass http://backend:8000` sent
+    ~half of every API call, Authorization header included, to a DIFFERENT
+    project's backend.
+
+    `proxy-net` is an external network shared by every app on the UAT host,
+    and Docker registers each container's compose SERVICE name as an alias on
+    it. A second project whose service was also named `backend` (uat-fdp)
+    therefore made the bare name resolve to two containers, and Docker DNS
+    round-robined between them — /api/v1/plots alternated 200 and a FastAPI
+    404 from the other app's router. The container name is unique host-wide,
+    so it must stay the target here.
+    """
+    block = _extract_block(nginx_text, r"location\s+/api/\s*")
+    # Comments stripped first: the directive's own comment quotes the broken
+    # `proxy_pass http://backend:8000` as the thing NOT to go back to, and
+    # matching that text would fail the test on the very explanation of it.
+    directives = "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert not re.search(r"proxy_pass\s+https?://backend[:/]", directives), (
+        "proxy_pass must not use the ambiguous compose service name `backend` "
+        "— it collides with other projects on the shared proxy-net network"
     )
 
 

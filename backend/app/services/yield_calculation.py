@@ -81,6 +81,28 @@ _KG_FACTOR: dict[str, Decimal] = {
 }
 
 
+def _normalize_unit(unit: str) -> str:
+    """Trim + lowercase before the _KG_FACTOR lookup.
+
+    The unit is free text: no allowlist survives on the write path (the plot
+    import stores whatever `expectedYieldUnit` cell it was given, capped at 20
+    chars, and the admin cycle form is a plain text input). A perfectly
+    reasonable "KG" or "Kg" therefore used to miss the all-lowercase dict and
+    fall through to "not comparable" — silently, with no error anywhere:
+    the target still displayed as typed on the plot page while every
+    percentage, yield_target_kg_snapshot, and the public inspection form's kg
+    input all behaved as if no target existed at all. Found in UAT with a real
+    imported cycle whose unit was "KG" (round 8-25B).
+
+    `.lower()`, not `.casefold()`: this function must stay byte-identical in
+    behaviour to frontend/src/lib/yield-planning.ts's `normalizeUnit`, and
+    JS `toLowerCase()` matches `.lower()` — `.casefold()` can diverge from it
+    on exotic input (e.g. German ß). Thai units are unaffected by either
+    (no case), so "ตัน" round-trips unchanged.
+    """
+    return unit.strip().lower()
+
+
 class YieldValidationError(ValueError):
     """Either the derived percentage exceeds MAX_STORABLE_YIELD_PCT
     (9999.9% — the column's own NUMERIC(5,1) capacity, round 8-8B.1), or the
@@ -118,7 +140,7 @@ def _target_kg(
     """
     if expected_yield_full is None or expected_yield_unit is None:
         return None
-    factor = _KG_FACTOR.get(expected_yield_unit)
+    factor = _KG_FACTOR.get(_normalize_unit(expected_yield_unit))
     if factor is None:
         return None
     target = (expected_yield_full * factor).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)

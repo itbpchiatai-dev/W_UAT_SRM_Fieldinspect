@@ -50,6 +50,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Round 8-25C — frontend/nginx.conf proxies /api/ to the CONTAINER name
+    # srm-fieldinspect-backend (the compose service name `backend` collides
+    # with other projects on the shared proxy-net; see that file's comment).
+    # nginx resolves a literal proxy_pass host at STARTUP, so without this
+    # alias the smoke frontend would fail to boot and take CI's docker-smoke
+    # job with it. A network alias, deliberately NOT `container_name`:
+    # container names are unique per HOST, so claiming it here would make
+    # `smoke-prod.sh` collide with an already-running dev/prodlike stack.
+    networks:
+      default:
+        aliases:
+          - srm-fieldinspect-backend
     ports:
       - "8000:8000"
     healthcheck:

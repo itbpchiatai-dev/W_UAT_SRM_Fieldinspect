@@ -247,6 +247,32 @@ describe('targetToKg', () => {
   it('accepts Decimal-serialized-as-string input, same as numbers', () => {
     expect(targetToKg('1000.00', 'kg')).toBe(1000);
   });
+
+  // Round 8-25B — the unit is free text on every write path, so "KG" is as
+  // likely as "kg". Before the fix the all-lowercase KG_FACTOR lookup missed
+  // it and the target silently read as non-comparable (no error, no target,
+  // no percentage) even though the plot page still displayed "150 KG".
+  // Mirrors backend test_yield_calculation.py's case/whitespace tests.
+  it.each(['KG', 'Kg', 'kG', ' kg ', '\tKG\n'])(
+    'matches the kg unit regardless of case/space: %j',
+    (unit) => {
+      expect(targetToKg(1000, unit)).toBe(1000);
+    },
+  );
+
+  it.each([' g', 'G', 'ตัน ', ' ตัน'])(
+    'normalizes the other weight units the same way: %j',
+    (unit) => {
+      expect(targetToKg(1000, unit)).not.toBeNull();
+    },
+  );
+
+  it.each(['ผล', 'ลัง', ' ผล ', 'PIECES', 'unknown_unit'])(
+    'never turns a non-weight unit into a comparable one: %j',
+    (unit) => {
+      expect(targetToKg(1000, unit)).toBeNull();
+    },
+  );
 });
 
 describe('quantityKgToPct', () => {

@@ -23,7 +23,18 @@ import { listPlotProvinces } from '../../../api/plots';
 import { listMasterData, masterDataQueryKey } from '../../../api/masterdata';
 import { computeCurrentExpectedYield, formatYieldQuantity } from '../../../lib/yield-planning';
 import { toNumberOrNull } from '../../../lib/numeric';
+import { fetchAllPages } from '../../../lib/paginate';
 import { CompactScores } from '../../../components/farmlog/CompactScores';
+
+// Round 8-25D — this report used to have NO ceiling at all (every matching
+// plot came back in one response). Same [100, 200, 500, 'ทั้งหมด'] contract
+// as the Plots admin page: 'all' pages through every match under the hood in
+// ALL_FETCH_CHUNK-sized windows (fetchAllPages) rather than one unbounded
+// request, so a large result still can't hang the page.
+const PAGE_SIZE_OPTIONS = [100, 200, 500, 'all'] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 100;
+const ALL_FETCH_CHUNK = 200;
 
 export function PlotStatusReport() {
   const [filterSupplier, setFilterSupplier] = useState('');
@@ -32,8 +43,12 @@ export function PlotStatusReport() {
   const [filterInspected, setFilterInspected] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
 
-  const params: PlotStatusParams = {
+  // Filters only — no limit/offset. Shared as-is with the export mutation
+  // below, which must always carry every filtered row.
+  const filterParams: PlotStatusParams = {
     supplierId: filterSupplier || undefined,
     province: filterProvince || undefined,
     crop: filterCrop || undefined,
@@ -61,12 +76,20 @@ export function PlotStatusReport() {
   });
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: ['report-plot-status', params],
-    queryFn: () => listPlotStatus(params),
+    queryKey: ['report-plot-status', page, pageSize, filterParams],
+    queryFn: () => {
+      if (pageSize === 'all') {
+        return fetchAllPages(
+          (offset, limit) => listPlotStatus({ ...filterParams, limit, offset }),
+          ALL_FETCH_CHUNK,
+        );
+      }
+      return listPlotStatus({ ...filterParams, limit: pageSize, offset: page * pageSize });
+    },
   });
 
   const exportM = useMutation({
-    mutationFn: () => downloadPlotStatusReport(params),
+    mutationFn: () => downloadPlotStatusReport(filterParams),
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -109,24 +132,24 @@ export function PlotStatusReport() {
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <select
           value={filterSupplier}
-          onChange={(e) => { setFilterSupplier(e.target.value); setFilterProvince(''); }}
+          onChange={(e) => { setPage(0); setFilterSupplier(e.target.value); setFilterProvince(''); }}
           className={selectClass}
         >
           <option value="">ทุก Supplier</option>
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
 
-        <select value={filterProvince} onChange={(e) => setFilterProvince(e.target.value)} className={selectClass}>
+        <select value={filterProvince} onChange={(e) => { setPage(0); setFilterProvince(e.target.value); }} className={selectClass}>
           <option value="">ทุกจังหวัด</option>
           {provinces.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
 
-        <select value={filterCrop} onChange={(e) => setFilterCrop(e.target.value)} className={selectClass}>
+        <select value={filterCrop} onChange={(e) => { setPage(0); setFilterCrop(e.target.value); }} className={selectClass}>
           <option value="">ทุกชนิดพืช</option>
           {crops.map((c) => <option key={c.id} value={c.value}>{c.value}</option>)}
         </select>
 
-        <select value={filterInspected} onChange={(e) => setFilterInspected(e.target.value)} className={selectClass}>
+        <select value={filterInspected} onChange={(e) => { setPage(0); setFilterInspected(e.target.value); }} className={selectClass}>
           <option value="">ทั้งหมด (ตรวจ/ยังไม่ตรวจ)</option>
           <option value="inspected">เฉพาะที่ตรวจแล้ว</option>
           <option value="not_inspected">เฉพาะที่ยังไม่ตรวจ</option>
@@ -135,14 +158,14 @@ export function PlotStatusReport() {
         <input
           type="date"
           value={filterDateFrom}
-          onChange={(e) => setFilterDateFrom(e.target.value)}
+          onChange={(e) => { setPage(0); setFilterDateFrom(e.target.value); }}
           title="ตรวจล่าสุด ตั้งแต่วันที่"
           className={selectClass}
         />
         <input
           type="date"
           value={filterDateTo}
-          onChange={(e) => setFilterDateTo(e.target.value)}
+          onChange={(e) => { setPage(0); setFilterDateTo(e.target.value); }}
           title="ตรวจล่าสุด ถึงวันที่"
           className={selectClass}
         />
@@ -250,9 +273,36 @@ export function PlotStatusReport() {
         )}
       </div>
 
-      {rows.length > 0 && (
-        <div className="mt-3 text-sm text-gray-500">รวม {rows.length} แปลง</div>
-      )}
+      <div className="mt-3 flex items-center justify-between text-sm text-gray-500">
+        <div className="flex items-center gap-2">
+          <label htmlFor="plot-status-page-size">แสดง</label>
+          <select
+            id="plot-status-page-size"
+            value={String(pageSize)}
+            onChange={(e) => {
+              setPage(0);
+              const v = e.target.value;
+              setPageSize(v === 'all' ? 'all' : (Number(v) as PageSize));
+            }}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {PAGE_SIZE_OPTIONS.map((opt) => (
+              <option key={opt} value={String(opt)}>
+                {opt === 'all' ? 'ทั้งหมด' : `${opt} แถว`}
+              </option>
+            ))}
+          </select>
+        </div>
+        {pageSize === 'all' ? (
+          <span>{rows.length} แปลง</span>
+        ) : (
+          <div className="flex items-center gap-4">
+            <button type="button" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="disabled:opacity-40">← ก่อนหน้า</button>
+            <span>หน้า {page + 1}</span>
+            <button type="button" disabled={rows.length < pageSize} onClick={() => setPage((p) => p + 1)} className="disabled:opacity-40">ถัดไป →</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

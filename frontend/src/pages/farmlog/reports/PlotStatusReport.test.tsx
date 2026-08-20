@@ -5,7 +5,7 @@
  * shows its crop and the computed current yield.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PlotStatusReport } from './PlotStatusReport';
@@ -88,5 +88,73 @@ describe('PlotStatusReport — active-cycle alignment (round 7.4)', () => {
 
     expect(await screen.findByText('รอเริ่มรอบปลูก')).toBeTruthy();
     expect(screen.queryByText('800 kg')).toBeNull();
+  });
+});
+
+// Round 8-25D — this report had NO ceiling at all before (every matching
+// plot came back in one response). Same [100, 200, 500, 'ทั้งหมด'] contract
+// as the Plots admin page test suite above.
+function hasListPlotStatusCallContaining(expected: Record<string, unknown>) {
+  return listPlotStatusMock.mock.calls.some(([params]) => (
+    Object.entries(expected).every(([key, value]) => (params as Record<string, unknown>)[key] === value)
+  ));
+}
+
+describe('PlotStatusReport — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {
+  it('defaults to fetching 100 rows', async () => {
+    listPlotStatusMock.mockResolvedValue([row()]);
+    renderReport();
+
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ limit: 100, offset: 0 })).toBe(true));
+    const selector = screen.getByLabelText('แสดง') as HTMLSelectElement;
+    expect(selector.value).toBe('100');
+  });
+
+  it('switches to 500 rows per page when selected', async () => {
+    listPlotStatusMock.mockResolvedValue([row()]);
+    renderReport();
+
+    await screen.findByText('SUP001-P001');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ limit: 500, offset: 0 })).toBe(true));
+  });
+
+  it('pages through everything (chunked) when "ทั้งหมด" is selected', async () => {
+    const firstChunk = Array.from({ length: 200 }, (_, i) => row({
+      plotId: `plot-${i}`, plotCode: `SUP001-P${i}`,
+    }));
+    listPlotStatusMock
+      .mockResolvedValueOnce([row()])   // default 100-row load on mount
+      .mockResolvedValueOnce(firstChunk) // "all": chunk 1 (full → keep going)
+      .mockResolvedValueOnce([row()]);   // "all": chunk 2 (short → stop)
+
+    renderReport();
+    await screen.findByText('SUP001-P001');
+
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: 'all' } });
+
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ limit: 200, offset: 200 })).toBe(true), {
+      timeout: 15000,
+    });
+    expect(screen.queryByText('ถัดไป →')).toBeNull();
+  }, 20000);
+
+  it('never sends a limit/offset to the export download', async () => {
+    listPlotStatusMock.mockResolvedValue([row()]);
+    const downloadMock = (await import('../../../api/reports')).downloadPlotStatusReport as unknown as ReturnType<typeof vi.fn>;
+    downloadMock.mockResolvedValue(new Blob(['xlsx']));
+    renderReport();
+    await screen.findByText('SUP001-P001');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ limit: 500 })).toBe(true));
+    await screen.findByText('SUP001-P001');
+
+    fireEvent.click(screen.getByText('ดาวน์โหลด Excel'));
+
+    await waitFor(() => expect(downloadMock).toHaveBeenCalled());
+    const exportParams = downloadMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(exportParams.limit).toBeUndefined();
+    expect(exportParams.offset).toBeUndefined();
   });
 });

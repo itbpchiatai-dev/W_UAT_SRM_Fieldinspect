@@ -41,6 +41,8 @@ async def plot_status_rows(
     inspected: str | None = None,
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[ReportPlotStatusRow]:
     """Rows for Report #1 "สถานะแปลง".
 
@@ -50,8 +52,12 @@ async def plot_status_rows(
     frontend shows "รอเริ่มรอบปลูก" instead of the last cycle's stale plan. The
     inspection-derived snapshot (stage/yield%/scores/last-inspection) stays from
     the plot's denormalized columns, kept in sync from the latest record
-    (sync_current_status_from_record). Only active plots are reported. No limit:
-    a report returns every matching row (hundreds), unlike the paginated list.
+    (sync_current_status_from_record). Only active plots are reported.
+
+    limit=None (round 8-25D's own default) is UNBOUNDED — the on-screen report
+    endpoint always passes a real limit (see the router); the export endpoint
+    deliberately never does, since a downloaded workbook must contain every
+    filtered row regardless of what's paged on screen.
     """
     stmt = (
         select(Plot, Supplier.code, Supplier.name)
@@ -77,6 +83,8 @@ async def plot_status_rows(
         stmt = stmt.where(cast(Plot.last_inspected_at, SADate) >= date_from)
     if date_to is not None:
         stmt = stmt.where(cast(Plot.last_inspected_at, SADate) <= date_to)
+    if limit is not None:
+        stmt = stmt.limit(limit).offset(offset)
 
     result = await db.execute(stmt)
     rows: list[ReportPlotStatusRow] = []
@@ -124,6 +132,8 @@ async def cycle_yield_rows(
     status: str = "closed",
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[ReportCycleYieldRow]:
     """Rows for Report #2 "ผลผลิตตามรอบปลูก" (round 8-2.8B).
 
@@ -143,6 +153,10 @@ async def cycle_yield_rows(
     date_to filter on closed_at (so active cycles, closed_at NULL, drop out of
     any date-bounded query). Ordered supplierCode ASC, plotCode ASC, cycleNo
     DESC (newest cycle first within a plot).
+
+    limit=None (round 8-25D's own default) is UNBOUNDED — same contract as
+    plot_status_rows above: the on-screen endpoint always passes a real limit,
+    the export endpoint never does.
     """
     stmt = (
         select(PlotCycle, Plot, Supplier.code, Supplier.name)
@@ -169,6 +183,8 @@ async def cycle_yield_rows(
         stmt = stmt.where(cast(PlotCycle.closed_at, SADate) >= date_from)
     if date_to is not None:
         stmt = stmt.where(cast(PlotCycle.closed_at, SADate) <= date_to)
+    if limit is not None:
+        stmt = stmt.limit(limit).offset(offset)
 
     result = await db.execute(stmt)
     rows: list[ReportCycleYieldRow] = []

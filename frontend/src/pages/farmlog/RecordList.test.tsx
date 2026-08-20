@@ -5,7 +5,7 @@
  * record's protocol remaps what each slot means).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RecordList } from './RecordList';
@@ -105,4 +105,51 @@ describe('RecordList — cycle badge (round 8.0.5)', () => {
     expect(await screen.findByText('SUP001-P001')).toBeTruthy();
     expect(screen.queryByText(/รอบที่/)).toBeNull();
   });
+});
+
+// Round 8-25D — this page used to be fixed at 30 rows/page with no way to
+// see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
+describe('RecordList — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {
+  function hasListRecordsCallContaining(expected: Record<string, unknown>) {
+    return listRecordsMock.mock.calls.some(([params]) => (
+      Object.entries(expected).every(([key, value]) => (params as Record<string, unknown>)[key] === value)
+    ));
+  }
+
+  it('defaults to fetching 100 rows', async () => {
+    listRecordsMock.mockResolvedValue([record()]);
+    renderList();
+
+    await waitFor(() => expect(hasListRecordsCallContaining({ limit: 100, offset: 0 })).toBe(true));
+    const selector = screen.getByLabelText('แสดง') as HTMLSelectElement;
+    expect(selector.value).toBe('100');
+  });
+
+  it('switches to 500 rows per page when selected', async () => {
+    listRecordsMock.mockResolvedValue([record()]);
+    renderList();
+
+    await screen.findByText('SUP001-P001');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+
+    await waitFor(() => expect(hasListRecordsCallContaining({ limit: 500, offset: 0 })).toBe(true));
+  });
+
+  it('pages through everything (chunked) when "ทั้งหมด" is selected', async () => {
+    const firstChunk = Array.from({ length: 200 }, (_, i) => record({ id: `rec-${i}` }));
+    listRecordsMock
+      .mockResolvedValueOnce([record()])  // default 100-row load on mount
+      .mockResolvedValueOnce(firstChunk)  // "all": chunk 1 (full → keep going)
+      .mockResolvedValueOnce([record()]); // "all": chunk 2 (short → stop)
+
+    renderList();
+    await screen.findByText('SUP001-P001');
+
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: 'all' } });
+
+    await waitFor(() => expect(hasListRecordsCallContaining({ limit: 200, offset: 200 })).toBe(true), {
+      timeout: 15000,
+    });
+    expect(screen.queryByText('ถัดไป →')).toBeNull();
+  }, 20000);
 });

@@ -670,24 +670,29 @@ describe('Suppliers — contact and status filters (round 8-20D)', () => {
 
   // --- pagination ------------------------------------------------------------
 
+  // Round 8-25D — the page-size selector's default is 100 (was a fixed 20),
+  // so "a full page" now means 100 rows, not 20.
   it('returns to the first page whenever filters are applied', async () => {
     searchSuppliersMock.mockResolvedValue(
-      Array.from({ length: 20 }, (_, i) => supplierSummary({ id: `s${i}`, code: `SUP${i}` })),
+      Array.from({ length: 100 }, (_, i) => supplierSummary({ id: `s${i}`, code: `SUP${i}` })),
     );
     await readyWith('SUP0');
 
+    // Rendering the full 100-row page is heavy; allow extra time so this
+    // doesn't flake under parallel suite load (it's fast in isolation) —
+    // same reasoning as Plots.test.tsx's own chunked-render test.
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป/ }));
-    await waitFor(() => expect(lastSearchBody().offset).toBe(20));
+    await waitFor(() => expect(lastSearchBody().offset).toBe(100), { timeout: 10000 });
 
     fireEvent.change(screen.getByLabelText(NAME_CODE), { target: { value: 'SUP' } });
     apply();
 
     await waitFor(() => expect(lastSearchBody().offset).toBe(0));
-  });
+  }, 15000);
 
   it('keeps the applied filters when paging', async () => {
     searchSuppliersMock.mockResolvedValue(
-      Array.from({ length: 20 }, (_, i) => supplierSummary({ id: `s${i}`, code: `SUP${i}` })),
+      Array.from({ length: 100 }, (_, i) => supplierSummary({ id: `s${i}`, code: `SUP${i}` })),
     );
     await readyWith('SUP0');
 
@@ -696,23 +701,28 @@ describe('Suppliers — contact and status filters (round 8-20D)', () => {
     fireEvent.change(screen.getByLabelText('สถานะ'), { target: { value: 'all' } });
     apply();
     await waitFor(() => expect(lastSearchBody().q).toBe('SUP'));
-    // "ถัดไป" is disabled while a page has fewer than PAGE_SIZE rows, which
-    // includes the moment the post-apply fetch is still in flight — wait for
-    // the filtered page to actually render before paging.
+    // "ถัดไป" is disabled while a page has fewer than the selected page
+    // size, which includes the moment the post-apply fetch is still in
+    // flight — wait for the filtered page to actually render before paging.
     await screen.findByText('SUP0');
+    // Rendering the full 100-row page is heavy; allow extra time so this
+    // doesn't flake under parallel suite load (it's fast in isolation) —
+    // same reasoning as Plots.test.tsx's own chunked-render test.
     await waitFor(() =>
-      expect((screen.getByRole('button', { name: /ถัดไป/ }) as HTMLButtonElement).disabled).toBe(false));
+      expect((screen.getByRole('button', { name: /ถัดไป/ }) as HTMLButtonElement).disabled).toBe(false),
+      { timeout: 10000 },
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป/ }));
 
     await waitFor(() => {
       const body = lastSearchBody();
-      expect(body.offset).toBe(20);
+      expect(body.offset).toBe(100);
       expect(body.q).toBe('SUP');
       expect(body.contactPhoneDigits).toBe('5552');
       expect(body.status).toBe('all');
     });
-  });
+  }, 15000);
 
   // --- layout ----------------------------------------------------------------
 
@@ -724,4 +734,51 @@ describe('Suppliers — contact and status filters (round 8-20D)', () => {
     const filterRow = screen.getByLabelText('สถานะ').closest('div.flex-col');
     expect(filterRow?.className).toContain('lg:flex-row');
   });
+});
+
+// Round 8-25D — this page used to be fixed at 20 rows/page with no way to
+// see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
+describe('Suppliers — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {
+  function hasSearchCallContaining(expected: Record<string, unknown>) {
+    return searchSuppliersMock.mock.calls.some(([body]) => (
+      Object.entries(expected).every(([key, value]) => (body as Record<string, unknown>)[key] === value)
+    ));
+  }
+
+  it('defaults to fetching 100 rows', async () => {
+    searchSuppliersMock.mockResolvedValue([supplierSummary()]);
+    renderPage();
+
+    await waitFor(() => expect(hasSearchCallContaining({ limit: 100, offset: 0 })).toBe(true));
+    const selector = screen.getByLabelText('แสดง') as HTMLSelectElement;
+    expect(selector.value).toBe('100');
+  });
+
+  it('switches to 500 rows per page when selected', async () => {
+    searchSuppliersMock.mockResolvedValue([supplierSummary()]);
+    renderPage();
+
+    await screen.findByText('SUP001');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+
+    await waitFor(() => expect(hasSearchCallContaining({ limit: 500, offset: 0 })).toBe(true));
+  });
+
+  it('pages through everything (chunked) when "ทั้งหมด" is selected', async () => {
+    const firstChunk = Array.from({ length: 200 }, (_, i) => supplierSummary({ id: `s${i}`, code: `SUP${i}` }));
+    searchSuppliersMock
+      .mockResolvedValueOnce([supplierSummary()]) // default 100-row load on mount
+      .mockResolvedValueOnce(firstChunk)           // "all": chunk 1 (full → keep going)
+      .mockResolvedValueOnce([supplierSummary()]); // "all": chunk 2 (short → stop)
+
+    renderPage();
+    await screen.findByText('SUP001');
+
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: 'all' } });
+
+    await waitFor(() => expect(hasSearchCallContaining({ limit: 200, offset: 200 })).toBe(true), {
+      timeout: 15000,
+    });
+    expect(screen.queryByText('ถัดไป →')).toBeNull();
+  }, 20000);
 });

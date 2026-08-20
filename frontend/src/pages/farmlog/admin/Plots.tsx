@@ -490,7 +490,9 @@ function DownloadTemplateMenu({
 
 // Rows-per-page options for the Plots list. "all" fetches every matching
 // plot across pages (via fetchAllPages) rather than a single window.
-const PAGE_SIZE_OPTIONS = [100, 200, 'all'] as const;
+// Round 8-25D — added 500 so this stays the SAME [100, 200, 500, 'ทั้งหมด']
+// contract now used consistently across Suppliers/RecordList/both reports.
+const PAGE_SIZE_OPTIONS = [100, 200, 500, 'all'] as const;
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 const DEFAULT_PAGE_SIZE: PageSize = 100;
 // Per-request cap when fetching "all" — paged through under the hood.

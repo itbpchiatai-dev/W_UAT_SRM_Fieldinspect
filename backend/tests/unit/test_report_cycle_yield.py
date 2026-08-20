@@ -152,6 +152,28 @@ async def test_repo_maps_final_fields_verbatim_and_keeps_inactive_plot() -> None
     assert r.supplier_lot_no == cycle.supplier_lot_no == "SUP-OWN-9"
 
 
+async def test_repo_limit_none_default_stays_unbounded() -> None:
+    """Round 8-25D — the export endpoint relies on this default: no `limit`
+    argument at all must never add a SQL LIMIT/OFFSET clause."""
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_result_all([]))
+    await repo.cycle_yield_rows(db)
+    stmt = db.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "LIMIT" not in compiled
+    assert "OFFSET" not in compiled
+
+
+async def test_repo_explicit_limit_and_offset_reach_the_query() -> None:
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=_result_all([]))
+    await repo.cycle_yield_rows(db, limit=500, offset=1000)
+    stmt = db.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "LIMIT 500" in compiled
+    assert "OFFSET 1000" in compiled
+
+
 async def test_repo_supplier_lot_no_is_null_safe_for_older_cycles() -> None:
     """A pre-8-12A cycle has no supplier_lot_no at all — must map to None,
     never crash, never fall back to lot_no."""
@@ -438,6 +460,24 @@ async def test_endpoint_passes_all_filters_to_repository() -> None:
     assert captured["status"] == "harvested"
     assert captured["date_from"] == datetime.date(2026, 6, 1)
     assert captured["date_to"] == datetime.date(2026, 6, 30)
+    # Round 8-25D — the on-screen endpoint always has a real ceiling, unlike
+    # the export endpoint (see test_export_never_passes_a_limit below).
+    assert captured["limit"] == 100
+    assert captured["offset"] == 0
+
+
+async def test_endpoint_passes_through_a_caller_supplied_limit_and_offset() -> None:
+    captured: dict = {}
+
+    async def fake_rows(db, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    with patch(f"{_MODULE}.repo.cycle_yield_rows", AsyncMock(side_effect=fake_rows)):
+        await cycle_yield_report(db=object(), limit=500, offset=1000)
+
+    assert captured["limit"] == 500
+    assert captured["offset"] == 1000
 
 
 async def test_endpoint_default_status_is_closed() -> None:
@@ -481,6 +521,22 @@ async def test_export_uses_same_repo_and_returns_xlsx() -> None:
     parts = _unzip(resp.body)
     assert 'name="cycle-yield"' in parts["xl/workbook.xml"]
     assert "SUP001" in parts["xl/worksheets/sheet1.xml"]
+
+
+async def test_export_never_passes_a_limit() -> None:
+    """Round 8-25D regression guard — a downloaded workbook must contain
+    every filtered row regardless of what's paged on screen."""
+    captured: dict = {}
+
+    async def fake_rows(db, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    with patch(f"{_MODULE}.repo.cycle_yield_rows", AsyncMock(side_effect=fake_rows)):
+        await export_cycle_yield_report(db=object(), status="closed")
+
+    assert "limit" not in captured
+    assert "offset" not in captured
 
 
 async def test_export_also_validates_status_and_dates() -> None:

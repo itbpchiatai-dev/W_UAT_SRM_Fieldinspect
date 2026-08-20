@@ -24,6 +24,15 @@ import { listSuppliers } from '../../../api/suppliers';
 import { listMasterData, masterDataQueryKey } from '../../../api/masterdata';
 import { describeFinalEstimate, formatYieldQuantity } from '../../../lib/yield-planning';
 import { useHasPermission } from '../../../hooks/useHasPermission';
+import { fetchAllPages } from '../../../lib/paginate';
+
+// Round 8-25D — this report used to have NO ceiling at all (every matching
+// cycle came back in one response). Same [100, 200, 500, 'ทั้งหมด'] contract
+// as the Plots admin page and the sibling PlotStatusReport.
+const PAGE_SIZE_OPTIONS = [100, 200, 500, 'all'] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 100;
+const ALL_FETCH_CHUNK = 200;
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'closed', label: 'รอบที่ปิดแล้ว' },
@@ -63,10 +72,14 @@ export function CycleYieldReport() {
   const [filterStatus, setFilterStatus] = useState('closed');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
 
   const canReadRecords = useHasPermission('records.read');
 
-  const params: CycleYieldParams = {
+  // Filters only — no limit/offset. Shared as-is with the export mutation
+  // below, which must always carry every filtered row.
+  const filterParams: CycleYieldParams = {
     supplierId: filterSupplier || undefined,
     crop: filterCrop || undefined,
     status: filterStatus || undefined,
@@ -87,12 +100,20 @@ export function CycleYieldReport() {
   });
 
   const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['report-cycle-yield', params],
-    queryFn: () => listCycleYieldReport(params),
+    queryKey: ['report-cycle-yield', page, pageSize, filterParams],
+    queryFn: () => {
+      if (pageSize === 'all') {
+        return fetchAllPages(
+          (offset, limit) => listCycleYieldReport({ ...filterParams, limit, offset }),
+          ALL_FETCH_CHUNK,
+        );
+      }
+      return listCycleYieldReport({ ...filterParams, limit: pageSize, offset: page * pageSize });
+    },
   });
 
   const exportM = useMutation({
-    mutationFn: () => downloadCycleYieldReport(params),
+    mutationFn: () => downloadCycleYieldReport(filterParams),
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -134,7 +155,7 @@ export function CycleYieldReport() {
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <select
           value={filterSupplier}
-          onChange={(e) => setFilterSupplier(e.target.value)}
+          onChange={(e) => { setPage(0); setFilterSupplier(e.target.value); }}
           aria-label="Supplier"
           className={selectClass}
         >
@@ -142,19 +163,19 @@ export function CycleYieldReport() {
           {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
 
-        <select value={filterCrop} onChange={(e) => setFilterCrop(e.target.value)} aria-label="ชนิดพืช" className={selectClass}>
+        <select value={filterCrop} onChange={(e) => { setPage(0); setFilterCrop(e.target.value); }} aria-label="ชนิดพืช" className={selectClass}>
           <option value="">ทุกชนิดพืช</option>
           {crops.map((c) => <option key={c.id} value={c.value}>{c.value}</option>)}
         </select>
 
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} aria-label="สถานะรอบ" className={selectClass}>
+        <select value={filterStatus} onChange={(e) => { setPage(0); setFilterStatus(e.target.value); }} aria-label="สถานะรอบ" className={selectClass}>
           {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
 
         <input
           type="date"
           value={filterDateFrom}
-          onChange={(e) => setFilterDateFrom(e.target.value)}
+          onChange={(e) => { setPage(0); setFilterDateFrom(e.target.value); }}
           title="วันที่ปิดรอบ ตั้งแต่วันที่"
           aria-label="วันที่ปิดรอบ ตั้งแต่"
           className={selectClass}
@@ -162,7 +183,7 @@ export function CycleYieldReport() {
         <input
           type="date"
           value={filterDateTo}
-          onChange={(e) => setFilterDateTo(e.target.value)}
+          onChange={(e) => { setPage(0); setFilterDateTo(e.target.value); }}
           title="วันที่ปิดรอบ ถึงวันที่"
           aria-label="วันที่ปิดรอบ ถึง"
           className={selectClass}
@@ -341,9 +362,36 @@ export function CycleYieldReport() {
         )}
       </div>
 
-      {rows.length > 0 && (
-        <div className="mt-3 text-sm text-gray-500">รวม {rows.length} รอบปลูก</div>
-      )}
+      <div className="mt-3 flex items-center justify-between text-sm text-gray-500">
+        <div className="flex items-center gap-2">
+          <label htmlFor="cycle-yield-page-size">แสดง</label>
+          <select
+            id="cycle-yield-page-size"
+            value={String(pageSize)}
+            onChange={(e) => {
+              setPage(0);
+              const v = e.target.value;
+              setPageSize(v === 'all' ? 'all' : (Number(v) as PageSize));
+            }}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {PAGE_SIZE_OPTIONS.map((opt) => (
+              <option key={opt} value={String(opt)}>
+                {opt === 'all' ? 'ทั้งหมด' : `${opt} แถว`}
+              </option>
+            ))}
+          </select>
+        </div>
+        {pageSize === 'all' ? (
+          <span>{rows.length} รอบปลูก</span>
+        ) : (
+          <div className="flex items-center gap-4">
+            <button type="button" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="disabled:opacity-40">← ก่อนหน้า</button>
+            <span>หน้า {page + 1}</span>
+            <button type="button" disabled={rows.length < pageSize} onClick={() => setPage((p) => p + 1)} className="disabled:opacity-40">ถัดไป →</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

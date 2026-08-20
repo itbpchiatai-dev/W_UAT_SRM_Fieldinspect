@@ -1541,7 +1541,7 @@ describe('Plots list — "รอบปลูกปัจจุบัน" filter 
   });
 });
 
-describe('Plots list — rows-per-page selector (100 / 200 / ทั้งหมด)', () => {
+describe('Plots list — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {
   function onePlot() {
     return [
       {
@@ -1570,6 +1570,16 @@ describe('Plots list — rows-per-page selector (100 / 200 / ทั้งหม�
     fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '200' } });
 
     await waitFor(() => expect(hasListPlotsCallContaining({ limit: 200, offset: 0 })).toBe(true));
+  });
+
+  it('switches to 500 rows per page when selected (round 8-25D)', async () => {
+    listPlotsMock.mockResolvedValue(onePlot());
+    renderPlotsPage();
+
+    await screen.findByText('SUP001-P001');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+
+    await waitFor(() => expect(hasListPlotsCallContaining({ limit: 500, offset: 0 })).toBe(true));
   });
 
   it('pages through everything (chunked) when "ทั้งหมด" is selected', async () => {

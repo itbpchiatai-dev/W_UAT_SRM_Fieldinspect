@@ -162,6 +162,25 @@ async def test_endpoint_passes_all_filters_to_repository() -> None:
     assert captured["inspected"] == "inspected"
     assert captured["date_from"] == datetime.date(2026, 6, 1)
     assert captured["date_to"] == datetime.date(2026, 6, 30)
+    # Round 8-25D — the on-screen endpoint always has a real ceiling, unlike
+    # the export endpoint below.
+    assert captured["limit"] == 100
+    assert captured["offset"] == 0
+
+
+@pytest.mark.anyio
+async def test_endpoint_passes_through_a_caller_supplied_limit_and_offset() -> None:
+    captured: dict = {}
+
+    async def fake_rows(db, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    with patch(f"{_MODULE}.repo.plot_status_rows", AsyncMock(side_effect=fake_rows)):
+        await plot_status_report(db=object(), limit=500, offset=1000)
+
+    assert captured["limit"] == 500
+    assert captured["offset"] == 1000
 
 
 @pytest.mark.anyio
@@ -177,3 +196,22 @@ async def test_export_endpoint_returns_xlsx_from_same_repo() -> None:
     parts = _unzip(resp.body)
     assert 'name="plot-status"' in parts["xl/workbook.xml"]
     assert "SUP001" in parts["xl/worksheets/sheet1.xml"]
+
+
+@pytest.mark.anyio
+async def test_export_endpoint_never_passes_a_limit() -> None:
+    """Round 8-25D regression guard — a downloaded workbook must contain
+    every filtered row regardless of what's paged on screen. If this
+    endpoint ever grows a `limit` parameter of its own, this test forces a
+    deliberate decision about whether that's still true."""
+    captured: dict = {}
+
+    async def fake_rows(db, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    with patch(f"{_MODULE}.repo.plot_status_rows", AsyncMock(side_effect=fake_rows)):
+        await export_plot_status_report(db=object())
+
+    assert "limit" not in captured
+    assert "offset" not in captured

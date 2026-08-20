@@ -80,6 +80,28 @@ async def test_active_cycle_sources_identity_and_plan() -> None:
 
 
 @pytest.mark.anyio
+async def test_limit_none_default_stays_unbounded() -> None:
+    """Round 8-25D — the export endpoint relies on this default: no `limit`
+    argument at all must never add a SQL LIMIT/OFFSET clause."""
+    db = _mock_db([])
+    await plot_status_rows(db)
+    stmt = db.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "LIMIT" not in compiled
+    assert "OFFSET" not in compiled
+
+
+@pytest.mark.anyio
+async def test_explicit_limit_and_offset_reach_the_query() -> None:
+    db = _mock_db([])
+    await plot_status_rows(db, limit=500, offset=1000)
+    stmt = db.execute.await_args.args[0]
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "LIMIT 500" in compiled
+    assert "OFFSET 1000" in compiled
+
+
+@pytest.mark.anyio
 async def test_no_active_cycle_nulls_identity_and_plan() -> None:
     # A plot between cycles: the mirror was cleared on close, so identity/plan
     # report null and the frontend shows "รอเริ่มรอบปลูก" off active_cycle_id.

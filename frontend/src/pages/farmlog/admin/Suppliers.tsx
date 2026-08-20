@@ -28,8 +28,14 @@ import {
 import { SupplierImportModal } from '../../../components/farmlog/SupplierImportModal';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import { useHasPermission } from '../../../hooks/useHasPermission';
+import { fetchAllPages } from '../../../lib/paginate';
 
-const PAGE_SIZE = 20;
+// Round 8-25D — this page used to be fixed at 20 rows/page with no way to
+// see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
+const PAGE_SIZE_OPTIONS = [100, 200, 500, 'all'] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 100;
+const ALL_FETCH_CHUNK = 200;
 
 // Round 8-20D — contact-number fragment bounds. The lower bound keeps a 1-3
 // digit fragment (which would match a large share of every number in scope)
@@ -61,6 +67,7 @@ type SupplierFormValues = z.infer<typeof supplierSchema>;
 export function Suppliers() {
   const qc = useQueryClient();
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
   // Round 8-20D — DRAFT (what is typed) vs APPLIED (what the query uses).
   // Nothing is queried until applyFilters runs, so a half-typed value never
   // fires a request. The pre-8-20D page applied `q` on every keystroke; the
@@ -102,15 +109,22 @@ export function Suppliers() {
     // Query devtools and any cache inspection, so it must never carry the
     // number or a hash of it. The nonce also guarantees that re-applying the
     // SAME filters refetches instead of serving a stale cached page.
-    queryKey: ['suppliers', page, q, appliedContactName, appliedStatus, searchNonce],
-    queryFn: () => searchSuppliers({
-      limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
-      q: q || undefined,
-      contactName: appliedContactName || undefined,
-      contactPhoneDigits: appliedPhoneDigits || undefined,
-      status: appliedStatus,
-    }),
+    queryKey: ['suppliers', page, pageSize, q, appliedContactName, appliedStatus, searchNonce],
+    queryFn: () => {
+      const filters = {
+        q: q || undefined,
+        contactName: appliedContactName || undefined,
+        contactPhoneDigits: appliedPhoneDigits || undefined,
+        status: appliedStatus,
+      };
+      if (pageSize === 'all') {
+        return fetchAllPages(
+          (offset, limit) => searchSuppliers({ ...filters, limit, offset }),
+          ALL_FETCH_CHUNK,
+        );
+      }
+      return searchSuppliers({ ...filters, limit: pageSize, offset: page * pageSize });
+    },
   });
 
   const hasActiveFilters =
@@ -414,23 +428,49 @@ export function Suppliers() {
         )}
       </section>
 
-      <div className="mt-3 flex justify-between text-sm text-muted-foreground">
-        <button
-          type="button"
-          disabled={page === 0}
-          onClick={() => setPage((p) => Math.max(0, p - 1))}
-          className="disabled:opacity-40"
-        >
-          ← ก่อนหน้า
-        </button>
-        <button
-          type="button"
-          disabled={suppliers.length < PAGE_SIZE}
-          onClick={() => setPage((p) => p + 1)}
-          className="disabled:opacity-40"
-        >
-          ถัดไป →
-        </button>
+      <div className="mt-3 flex items-center justify-between text-sm text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <label htmlFor="suppliers-page-size">แสดง</label>
+          <select
+            id="suppliers-page-size"
+            value={String(pageSize)}
+            onChange={(e) => {
+              setPage(0);
+              const v = e.target.value;
+              setPageSize(v === 'all' ? 'all' : (Number(v) as PageSize));
+            }}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {PAGE_SIZE_OPTIONS.map((opt) => (
+              <option key={opt} value={String(opt)}>
+                {opt === 'all' ? 'ทั้งหมด' : `${opt} แถว`}
+              </option>
+            ))}
+          </select>
+        </div>
+        {pageSize === 'all' ? (
+          <span>{suppliers.length} suppliers</span>
+        ) : (
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              className="disabled:opacity-40"
+            >
+              ← ก่อนหน้า
+            </button>
+            <span>หน้า {page + 1}</span>
+            <button
+              type="button"
+              disabled={suppliers.length < pageSize}
+              onClick={() => setPage((p) => p + 1)}
+              className="disabled:opacity-40"
+            >
+              ถัดไป →
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Round 8-20B — a sibling of the edit modal, never nested inside it

@@ -50,6 +50,12 @@ async def plot_status_report(
     inspected: str | None = None,
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    # Round 8-25D — the on-screen table used to have no ceiling at all (every
+    # matching plot came back in one response); the export endpoint below
+    # still does, on purpose, since a downloaded workbook must always contain
+    # every filtered row regardless of what's paged on screen.
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[ReportPlotStatusRow]:
     return await repo.plot_status_rows(
         db,
@@ -59,6 +65,8 @@ async def plot_status_report(
         inspected=inspected,
         date_from=date_from,
         date_to=date_to,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -188,6 +196,10 @@ async def cycle_yield_report(
     status: str = "closed",
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    # Round 8-25D — see plot_status_report's comment: the export endpoint
+    # below deliberately never passes a limit.
+    limit: int = 100,
+    offset: int = 0,
 ) -> list[ReportCycleYieldRow]:
     _validate_cycle_yield_status(status)
     _validate_date_range(date_from, date_to)
@@ -198,6 +210,8 @@ async def cycle_yield_report(
         status=status,
         date_from=date_from,
         date_to=date_to,
+        limit=limit,
+        offset=offset,
     )
 
 

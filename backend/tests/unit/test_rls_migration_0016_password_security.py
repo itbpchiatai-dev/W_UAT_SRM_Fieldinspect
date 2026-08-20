@@ -3,15 +3,27 @@ role creation). Source inspection (the local backend/alembic package shadows
 the installed alembic, so the module can't be imported standalone — same
 approach as test_rls_uuid_guard_migration.py / test_plot_cycles_rls_migration.py).
 
-Before this fix, `upgrade()` did:
+Before the FIRST fix, `upgrade()` did:
     app_password = os.environ.get("DB_APP_PASSWORD", "srm_app_dev_2026")
     op.execute(f\"\"\"...CREATE ROLE srm_app LOGIN PASSWORD '{app_password}'...\"\"\")
 
 — a hardcoded fallback password (committed to git history, identical on
 every fresh deploy that forgot to set DB_APP_PASSWORD) f-string-concatenated
-straight into a DDL string. This file locks in the fix: fail-fast on a
-missing/blank env var, and the password bound as a query parameter, never
-string-formatted into SQL.
+straight into a DDL string. That fix moved to a `:pw` SQLAlchemy bind
+parameter on the CREATE/ALTER ROLE statement itself.
+
+A SECOND fix (found deploying to a real UAT server — `bind.execute(stmt,
+{"pw": app_password})` against `CREATE ROLE srm_app LOGIN PASSWORD :pw`)
+discovered that bind parameter never actually worked on real Postgres:
+`PASSWORD $1` is a syntax error on every version — Postgres' own grammar for
+CREATE/ALTER ROLE's PASSWORD clause only accepts a string literal, never a
+bind parameter, in that position. The current code instead passes
+`app_password` as an ordinary bind parameter to `SELECT quote_literal(:pw)`
+and only f-string-interpolates Postgres' OWN safely-quoted/escaped output
+(`quoted_password`) into the CREATE/ALTER ROLE text — so the raw secret still
+never round-trips through Python string formatting; the security PROPERTY
+these tests protect (`app_password` never directly spliced into SQL text) is
+unchanged, only the mechanism achieving it.
 """
 from __future__ import annotations
 
@@ -77,29 +89,45 @@ def test_upgrade_fails_fast_on_blank_password() -> None:
 
 
 def test_password_never_f_string_or_percent_formatted_into_sql() -> None:
+    """The RAW secret (`app_password`) must never itself be spliced into SQL
+    via str formatting — `quoted_password` (Postgres' own escaped output of
+    `quote_literal()`, never the raw value) legitimately IS f-string-
+    interpolated into the CREATE/ALTER ROLE text; that's the point of the
+    second fix (see module docstring) and is exactly as safe as a bind
+    parameter, since Postgres itself produced the escaping."""
     up = _upgrade()
-    # The exact vulnerable pattern this fix removes: a literal password
-    # spliced into a quoted SQL string via str formatting.
-    assert "PASSWORD '{" not in up
+    # The exact vulnerable pattern the first fix removed: the raw password
+    # variable spliced into a quoted SQL string via str formatting.
+    assert "PASSWORD '{app_password}" not in up
     assert "PASSWORD %s" not in up
     assert "PASSWORD %" not in up
-    # No f-string is used to build any CREATE/ALTER ROLE statement.
+    assert "{app_password}" not in up
+    # f-strings ARE used to build the CREATE/ALTER ROLE statements (the
+    # second fix) — but only ever with quoted_password, never app_password.
     for line in up.splitlines():
-        if "ROLE" in line and "PASSWORD" in line:
-            assert not re.search(r'f["\']', line), f"f-string used to build a ROLE/PASSWORD statement: {line!r}"
+        if "ROLE" in line and "PASSWORD" in line and re.search(r'f["\']', line):
+            assert "app_password" not in line, f"raw app_password spliced into a ROLE/PASSWORD f-string: {line!r}"
 
 
 def test_password_bound_as_query_parameter() -> None:
+    """`app_password` (the raw secret) is bound as an ordinary query
+    parameter to `SELECT quote_literal(:pw)` — never spliced into SQL text
+    itself, anywhere. Only quote_literal()'s safely-escaped RETURN VALUE
+    (`quoted_password`) is used to build the CREATE/ALTER ROLE statements —
+    see the module docstring for why a `:pw` bind parameter can't target the
+    ROLE statement's PASSWORD clause directly."""
     up = _upgrade()
-    # Both branches use a bind placeholder for the password — never the
-    # Python variable spliced directly into the SQL text.
-    assert "CREATE ROLE srm_app LOGIN PASSWORD :pw NOINHERIT" in up
-    assert "ALTER ROLE srm_app WITH PASSWORD :pw" in up
-    # The variable is only ever passed as an execute() parameter value.
-    assert 'bind.execute(stmt, {"pw": app_password})' in up
-    # app_password itself never appears inside a sa.text(...) call.
+    assert 'sa.text("SELECT quote_literal(:pw)"), {"pw": app_password}' in up
+    assert "CREATE ROLE srm_app LOGIN PASSWORD {quoted_password} NOINHERIT" in up
+    assert "ALTER ROLE srm_app WITH PASSWORD {quoted_password}" in up
+    # app_password itself never appears inside ANY sa.text(...) call's own
+    # literal SQL text — only as a parameter dict value passed alongside one.
     for m in re.finditer(r"sa\.text\((.*?)\)", up, re.DOTALL):
         assert "app_password" not in m.group(1)
+    # And never inside the plain-string CREATE/ALTER ROLE statements either.
+    for line in up.splitlines():
+        if "ROLE" in line and "PASSWORD" in line:
+            assert "app_password" not in line
 
 
 def test_no_do_block_wrapping_role_creation() -> None:

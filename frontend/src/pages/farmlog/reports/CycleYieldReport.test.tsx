@@ -424,3 +424,68 @@ describe('CycleYieldReport — Yield >150% display (round 8-8C)', () => {
     expect(screen.getByText('5,000 kg')).toBeTruthy();
   });
 });
+
+// Round 8-25D — this report had NO ceiling at all before (every matching
+// cycle came back in one response). Same [100, 200, 500, 'ทั้งหมด'] contract
+// as the Plots admin page and the sibling PlotStatusReport.
+function hasListCallContaining(expected: Record<string, unknown>) {
+  return listMock.mock.calls.some(([params]) => (
+    Object.entries(expected).every(([key, value]) => (params as Record<string, unknown>)[key] === value)
+  ));
+}
+
+describe('CycleYieldReport — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {
+  it('defaults to fetching 100 rows', async () => {
+    listMock.mockResolvedValue([row()]);
+    renderReport();
+
+    await waitFor(() => expect(hasListCallContaining({ limit: 100, offset: 0 })).toBe(true));
+    const selector = screen.getByLabelText('แสดง') as HTMLSelectElement;
+    expect(selector.value).toBe('100');
+  });
+
+  it('switches to 500 rows per page when selected', async () => {
+    listMock.mockResolvedValue([row()]);
+    renderReport();
+
+    await screen.findByText('ผลผลิตประมาณการสุดท้าย');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+
+    await waitFor(() => expect(hasListCallContaining({ limit: 500, offset: 0 })).toBe(true));
+  });
+
+  it('pages through everything (chunked) when "ทั้งหมด" is selected', async () => {
+    const firstChunk = Array.from({ length: 200 }, (_, i) => row({ cycleId: `cycle-${i}` }));
+    listMock
+      .mockResolvedValueOnce([row()])    // default 100-row load on mount
+      .mockResolvedValueOnce(firstChunk) // "all": chunk 1 (full → keep going)
+      .mockResolvedValueOnce([row()]);   // "all": chunk 2 (short → stop)
+
+    renderReport();
+    await screen.findByText('ผลผลิตประมาณการสุดท้าย');
+
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: 'all' } });
+
+    await waitFor(() => expect(hasListCallContaining({ limit: 200, offset: 200 })).toBe(true), {
+      timeout: 15000,
+    });
+    expect(screen.queryByText('ถัดไป →')).toBeNull();
+  }, 20000);
+
+  it('never sends a limit/offset to the export download', async () => {
+    listMock.mockResolvedValue([row()]);
+    downloadMock.mockResolvedValue(new Blob(['x']));
+    renderReport();
+    await screen.findByText('ผลผลิตประมาณการสุดท้าย');
+    fireEvent.change(screen.getByLabelText('แสดง'), { target: { value: '500' } });
+    await waitFor(() => expect(hasListCallContaining({ limit: 500 })).toBe(true));
+    await screen.findByText('ผลผลิตประมาณการสุดท้าย');
+
+    fireEvent.click(screen.getByRole('button', { name: /ดาวน์โหลด Excel/ }));
+
+    await waitFor(() => expect(downloadMock).toHaveBeenCalled());
+    const exportParams = downloadMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(exportParams.limit).toBeUndefined();
+    expect(exportParams.offset).toBeUndefined();
+  });
+});

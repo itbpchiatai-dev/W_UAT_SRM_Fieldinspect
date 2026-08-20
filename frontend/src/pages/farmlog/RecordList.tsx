@@ -13,8 +13,14 @@ import { CompactScores } from '../../components/farmlog/CompactScores';
 import { recordCycleDisplayName } from '../../lib/plot-cycle';
 import { formatYieldQuantity } from '../../lib/yield-planning';
 import { toNumberOrNull } from '../../lib/numeric';
+import { fetchAllPages } from '../../lib/paginate';
 
-const PAGE_SIZE = 30;
+// Round 8-25D — this page used to be fixed at 30 rows/page with no way to
+// see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
+const PAGE_SIZE_OPTIONS = [100, 200, 500, 'all'] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 100;
+const ALL_FETCH_CHUNK = 200;
 
 /** Round 8-8C — a kg-first record (yieldQuantityKg present) shows the kg
  * amount as the primary value with the percent as secondary text below (same
@@ -43,6 +49,7 @@ function YieldCell({ record }: { record: RecordSummary }) {
 export function RecordList() {
   const qc = useQueryClient();
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterPlot, setFilterPlot] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -68,16 +75,23 @@ export function RecordList() {
   });
 
   const { data: records = [], isLoading } = useQuery({
-    queryKey: ['records', page, filterSupplier, filterPlot, filterDateFrom, filterDateTo],
-    queryFn: () => listRecords({
-      supplierId: filterSupplier || undefined,
-      plotId: filterPlot || undefined,
-      dateFrom: filterDateFrom || undefined,
-      dateTo: filterDateTo || undefined,
-      activeOnly: true,
-      limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
-    }),
+    queryKey: ['records', page, pageSize, filterSupplier, filterPlot, filterDateFrom, filterDateTo],
+    queryFn: () => {
+      const filters = {
+        supplierId: filterSupplier || undefined,
+        plotId: filterPlot || undefined,
+        dateFrom: filterDateFrom || undefined,
+        dateTo: filterDateTo || undefined,
+        activeOnly: true,
+      };
+      if (pageSize === 'all') {
+        return fetchAllPages(
+          (offset, limit) => listRecords({ ...filters, limit, offset }),
+          ALL_FETCH_CHUNK,
+        );
+      }
+      return listRecords({ ...filters, limit: pageSize, offset: page * pageSize });
+    },
   });
 
   const deactivateM = useMutation({
@@ -229,25 +243,48 @@ export function RecordList() {
       </div>
 
       {/* Pagination */}
-      {records.length > 0 && (
-        <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
-          <button
-            onClick={() => setPage(p => Math.max(0, p - 1))}
-            disabled={page === 0}
-            className="rounded border px-3 py-1.5 disabled:opacity-40 hover:bg-gray-50"
+      <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
+        <div className="flex items-center gap-2">
+          <label htmlFor="records-page-size">แสดง</label>
+          <select
+            id="records-page-size"
+            value={String(pageSize)}
+            onChange={(e) => {
+              setPage(0);
+              const v = e.target.value;
+              setPageSize(v === 'all' ? 'all' : (Number(v) as PageSize));
+            }}
+            className="rounded-md border border-gray-300 px-2 py-1 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
           >
-            ← ก่อนหน้า
-          </button>
-          <span>หน้า {page + 1}</span>
-          <button
-            onClick={() => setPage(p => p + 1)}
-            disabled={records.length < PAGE_SIZE}
-            className="rounded border px-3 py-1.5 disabled:opacity-40 hover:bg-gray-50"
-          >
-            ถัดไป →
-          </button>
+            {PAGE_SIZE_OPTIONS.map((opt) => (
+              <option key={opt} value={String(opt)}>
+                {opt === 'all' ? 'ทั้งหมด' : `${opt} แถว`}
+              </option>
+            ))}
+          </select>
         </div>
-      )}
+        {pageSize === 'all' ? (
+          <span>{records.length} บันทึก</span>
+        ) : (
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="rounded border px-3 py-1.5 disabled:opacity-40 hover:bg-gray-50"
+            >
+              ← ก่อนหน้า
+            </button>
+            <span>หน้า {page + 1}</span>
+            <button
+              onClick={() => setPage(p => p + 1)}
+              disabled={records.length < pageSize}
+              className="rounded border px-3 py-1.5 disabled:opacity-40 hover:bg-gray-50"
+            >
+              ถัดไป →
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

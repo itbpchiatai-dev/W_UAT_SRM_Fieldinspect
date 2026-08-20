@@ -49,6 +49,12 @@ export interface PlotStatusParams {
   /** ISO date YYYY-MM-DD — filters on last_inspected_at. */
   dateFrom?: string;
   dateTo?: string;
+  // Round 8-25D — the on-screen table used to have no ceiling at all (every
+  // matching plot came back in one response). Omit both for the backend's
+  // own default (100). Never sent by downloadPlotStatusReport below — an
+  // export must always contain every filtered row.
+  limit?: number;
+  offset?: number;
 }
 
 /** camelCase → snake_case for FastAPI query params (see activityLogs.ts). */
@@ -60,6 +66,8 @@ function toSnake(params: PlotStatusParams): Record<string, unknown> {
     inspected: params.inspected || undefined,
     date_from: params.dateFrom || undefined,
     date_to: params.dateTo || undefined,
+    limit: params.limit,
+    offset: params.offset,
   };
 }
 
@@ -71,8 +79,12 @@ export async function listPlotStatus(params: PlotStatusParams = {}): Promise<Plo
 }
 
 export async function downloadPlotStatusReport(params: PlotStatusParams = {}): Promise<Blob> {
+  // limit/offset stripped even if a caller passes its on-screen pageSize
+  // state through by mistake — an exported workbook must always contain
+  // every filtered row, never just the current page.
+  const { limit: _limit, offset: _offset, ...exportParams } = params;
   const res = await apiClient.get<Blob>('/api/v1/reports/plot-status/export', {
-    params: toSnake(params),
+    params: toSnake(exportParams),
     responseType: 'blob',
   });
   return res.data;
@@ -138,6 +150,11 @@ export interface CycleYieldParams {
   /** ISO date YYYY-MM-DD — filters on closedAt. */
   dateFrom?: string;
   dateTo?: string;
+  // Round 8-25D — see PlotStatusParams above for the same contract: omit
+  // both for the backend's own default (100); never sent by
+  // downloadCycleYieldReport below.
+  limit?: number;
+  offset?: number;
 }
 
 function cycleYieldToSnake(params: CycleYieldParams): Record<string, unknown> {
@@ -147,6 +164,8 @@ function cycleYieldToSnake(params: CycleYieldParams): Record<string, unknown> {
     status: params.status || undefined,
     date_from: params.dateFrom || undefined,
     date_to: params.dateTo || undefined,
+    limit: params.limit,
+    offset: params.offset,
   };
 }
 
@@ -158,8 +177,11 @@ export async function listCycleYieldReport(params: CycleYieldParams = {}): Promi
 }
 
 export async function downloadCycleYieldReport(params: CycleYieldParams = {}): Promise<Blob> {
+  // limit/offset stripped even if a caller passes its on-screen pageSize
+  // state through by mistake — see downloadPlotStatusReport's comment.
+  const { limit: _limit, offset: _offset, ...exportParams } = params;
   const res = await apiClient.get<Blob>('/api/v1/reports/cycle-yield/export', {
-    params: cycleYieldToSnake(params),
+    params: cycleYieldToSnake(exportParams),
     responseType: 'blob',
   });
   return res.data;

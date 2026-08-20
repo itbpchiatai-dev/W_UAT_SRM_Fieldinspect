@@ -117,41 +117,67 @@ export function RecordList() {
         )}
       </header>
 
-      {/* Filters */}
+      {/* Filters — round 8-25E: each control now has a visible label. Before
+          this, all four relied on title/aria-label alone (tooltip/screen-
+          reader only) — the two date inputs in particular were unreadable
+          side by side with nothing but the browser's own "mm/dd/yyyy"
+          placeholder, no visible cue for which one was "from" vs "to". */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <select
-          value={filterSupplier}
-          onChange={e => { setFilterSupplier(e.target.value); setFilterPlot(''); setPage(0); }}
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-        >
-          <option value="">ทุก Supplier</option>
-          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+        <div>
+          <label htmlFor="record-filter-supplier" className="mb-1 block text-xs font-medium text-gray-500">
+            ชื่อ Supplier
+          </label>
+          <select
+            id="record-filter-supplier"
+            value={filterSupplier}
+            onChange={e => { setFilterSupplier(e.target.value); setFilterPlot(''); setPage(0); }}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+          >
+            <option value="">ทุก Supplier</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
 
-        <select
-          value={filterPlot}
-          onChange={e => { setFilterPlot(e.target.value); setPage(0); }}
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-        >
-          <option value="">ทุกแปลง</option>
-          {plots.map(p => <option key={p.id} value={p.id}>{p.plotCode} — {p.name}</option>)}
-        </select>
+        <div>
+          <label htmlFor="record-filter-plot" className="mb-1 block text-xs font-medium text-gray-500">
+            แปลงที่ต้องการตรวจ
+          </label>
+          <select
+            id="record-filter-plot"
+            value={filterPlot}
+            onChange={e => { setFilterPlot(e.target.value); setPage(0); }}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+          >
+            <option value="">ทุกแปลง</option>
+            {plots.map(p => <option key={p.id} value={p.id}>{p.plotCode} — {p.name}</option>)}
+          </select>
+        </div>
 
-        <input
-          type="date"
-          value={filterDateFrom}
-          onChange={e => { setFilterDateFrom(e.target.value); setPage(0); }}
-          placeholder="วันเริ่มต้น"
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-        />
+        <div>
+          <label htmlFor="record-filter-date-from" className="mb-1 block text-xs font-medium text-gray-500">
+            จากวันที่
+          </label>
+          <input
+            id="record-filter-date-from"
+            type="date"
+            value={filterDateFrom}
+            onChange={e => { setFilterDateFrom(e.target.value); setPage(0); }}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+          />
+        </div>
 
-        <input
-          type="date"
-          value={filterDateTo}
-          onChange={e => { setFilterDateTo(e.target.value); setPage(0); }}
-          placeholder="วันสิ้นสุด"
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-        />
+        <div>
+          <label htmlFor="record-filter-date-to" className="mb-1 block text-xs font-medium text-gray-500">
+            ถึงวันที่
+          </label>
+          <input
+            id="record-filter-date-to"
+            type="date"
+            value={filterDateTo}
+            onChange={e => { setFilterDateTo(e.target.value); setPage(0); }}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+          />
+        </div>
       </div>
 
       {/* Table */}

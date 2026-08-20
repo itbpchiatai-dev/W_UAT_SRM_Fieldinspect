@@ -107,6 +107,25 @@ describe('RecordList — cycle badge (round 8.0.5)', () => {
   });
 });
 
+// Round 8-25E — all four filters used to rely on title/aria-label alone
+// (tooltip/screen-reader only, nothing visible on screen); the two date
+// inputs side by side had no visible cue for which was "from" vs "to".
+describe('RecordList — visible filter labels (round 8-25E)', () => {
+  it('shows a visible label above each of the four filters', async () => {
+    listRecordsMock.mockResolvedValue([record()]);
+    renderList();
+    await screen.findByText('SUP001-P001');
+
+    // getByLabelText only resolves via a REAL <label htmlFor>/aria-label
+    // association, so this fails if a label is missing or disconnected —
+    // it doesn't just check the text exists somewhere on the page.
+    expect(screen.getByLabelText('ชื่อ Supplier')).toBeTruthy();
+    expect(screen.getByLabelText('แปลงที่ต้องการตรวจ')).toBeTruthy();
+    expect(screen.getByLabelText('จากวันที่')).toBeTruthy();
+    expect(screen.getByLabelText('ถึงวันที่')).toBeTruthy();
+  });
+});
+
 // Round 8-25D — this page used to be fixed at 30 rows/page with no way to
 // see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
 describe('RecordList — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {

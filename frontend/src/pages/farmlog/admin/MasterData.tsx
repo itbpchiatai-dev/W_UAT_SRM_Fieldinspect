@@ -24,6 +24,7 @@ import {
   updateMasterData,
   type MasterDataItem,
 } from '../../../api/masterdata';
+import { ActionMenu } from '../../../components/ActionMenu';
 import { MasterDataCropVarietyImportModal } from '../../../components/farmlog/MasterDataCropVarietyImportModal';
 import { MasterDataSelect } from '../../../components/farmlog/MasterDataSelect';
 import { useHasPermission } from '../../../hooks/useHasPermission';
@@ -167,20 +168,23 @@ export function MasterData() {
                     )}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <div className="flex justify-end gap-1">
-                      {canUpdate && (
-                        <button type="button" onClick={() => { setCreating(false); setEditing(m); }}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" title="แก้ไข">
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                      {canDelete && (
-                        <button type="button" onClick={() => { if (confirm(`ลบ "${m.value}" ?`)) deleteM.mutate(m.id); }}
-                          disabled={deleteM.isPending}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50" title="ลบ">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
+                    <div className="flex justify-end">
+                      {/* Round 8-25F — one ActionMenu trigger, matching the
+                          Plots, Suppliers and RecordList tables. */}
+                      <ActionMenu
+                        ariaLabel={`ตัวเลือกเพิ่มเติมสำหรับ ${m.value}`}
+                        items={[
+                          ...(canUpdate ? [{
+                            key: 'edit', label: 'แก้ไข', icon: Pencil,
+                            onClick: () => { setCreating(false); setEditing(m); },
+                          }] : []),
+                          ...(canDelete ? [{
+                            key: 'delete', label: 'ลบ', icon: Trash2, danger: true,
+                            disabled: deleteM.isPending,
+                            onClick: () => { if (confirm(`ลบ "${m.value}" ?`)) deleteM.mutate(m.id); },
+                          }] : []),
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

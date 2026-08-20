@@ -174,7 +174,9 @@ describe('MasterData — rounds 8-14E/8-14E.1: tab selection + CRUD regression',
     renderPage();
     await screen.findByText('ข้าวโพด');
 
-    fireEvent.click(screen.getByTitle('ลบ'));
+    // Round 8-25F — the row's actions live behind one ActionMenu trigger now.
+    fireEvent.click(screen.getByTitle('ตัวเลือกเพิ่มเติมสำหรับ ข้าวโพด'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ลบ' }));
 
     await waitFor(() => expect(deleteMasterDataMock).toHaveBeenCalledWith('md-1'));
   });
@@ -185,8 +187,11 @@ describe('MasterData — rounds 8-14E/8-14E.1: tab selection + CRUD regression',
     await screen.findByText('ข้าวโพด');
 
     expect(screen.queryByRole('button', { name: 'เพิ่มตัวเลือก' })).toBeNull();
-    expect(screen.queryByTitle('แก้ไข')).toBeNull();
-    expect(screen.queryByTitle('ลบ')).toBeNull();
+    // With neither permission the items list is empty, so ActionMenu renders
+    // nothing at all — no trigger to open, not merely an empty menu.
+    expect(screen.queryByTitle('ตัวเลือกเพิ่มเติมสำหรับ ข้าวโพด')).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'แก้ไข' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'ลบ' })).toBeNull();
   });
 });
 

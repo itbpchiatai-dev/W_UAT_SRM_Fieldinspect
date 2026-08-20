@@ -25,6 +25,7 @@ import {
   type SupplierStatusFilter,
   type SupplierSummary,
 } from '../../../api/suppliers';
+import { ActionMenu } from '../../../components/ActionMenu';
 import { SupplierImportModal } from '../../../components/farmlog/SupplierImportModal';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import { useHasPermission } from '../../../hooks/useHasPermission';
@@ -395,30 +396,29 @@ export function Suppliers() {
                     )}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <div className="flex justify-end gap-1">
-                      {canUpdate && (
-                        <button
-                          type="button"
-                          onClick={() => { setCreating(false); setEditingId(s.id); }}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                          title="แก้ไข"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                      {canDelete && s.isActive && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (confirm(`ปิดการใช้งาน "${s.name}" ?`)) deactivateM.mutate(s.id);
-                          }}
-                          disabled={deactivateM.isPending}
-                          className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                          title="ปิดการใช้งาน"
-                        >
-                          <PowerOff className="h-4 w-4" />
-                        </button>
-                      )}
+                    <div className="flex justify-end">
+                      {/* Round 8-25F — the same one-trigger ActionMenu the Plots
+                          admin table uses (round 20), so the two tables' จัดการ
+                          columns behave identically. ActionMenu renders nothing
+                          when items is empty, so a viewer with neither
+                          suppliers.update nor suppliers.delete sees no trigger
+                          at all rather than an empty menu. */}
+                      <ActionMenu
+                        ariaLabel={`ตัวเลือกเพิ่มเติมสำหรับ Supplier ${s.code}`}
+                        items={[
+                          ...(canUpdate ? [{
+                            key: 'edit', label: 'แก้ไข', icon: Pencil,
+                            onClick: () => { setCreating(false); setEditingId(s.id); },
+                          }] : []),
+                          ...(canDelete && s.isActive ? [{
+                            key: 'deactivate', label: 'ปิดการใช้งาน', icon: PowerOff, danger: true,
+                            disabled: deactivateM.isPending,
+                            onClick: () => {
+                              if (confirm(`ปิดการใช้งาน "${s.name}" ?`)) deactivateM.mutate(s.id);
+                            },
+                          }] : []),
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

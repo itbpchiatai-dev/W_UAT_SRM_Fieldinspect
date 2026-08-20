@@ -100,6 +100,14 @@ beforeEach(() => {
   searchSuppliersMock.mockResolvedValue([supplierSummary()]);
 });
 
+/** Round 8-25F — a row's แก้ไข/ปิดการใช้งาน actions live behind one
+ * ActionMenu trigger now (matching the Plots admin table) instead of two
+ * standalone icon buttons; open it by its per-row title before looking for
+ * an action by name. */
+async function openRowMenu(code = 'SUP001') {
+  fireEvent.click(await screen.findByTitle(`ตัวเลือกเพิ่มเติมสำหรับ Supplier ${code}`));
+}
+
 describe('Suppliers — inspection-code retirement (round 8-3G)', () => {
   it('does not render an inspection-code table column', async () => {
     renderPage();
@@ -125,7 +133,8 @@ describe('Suppliers — inspection-code retirement (round 8-3G)', () => {
     renderPage();
     await screen.findByText('SUP001');
 
-    fireEvent.click(screen.getByTitle('แก้ไข'));
+    await openRowMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'แก้ไข' }));
     await screen.findByText('แก้ไข Supplier');
     await waitFor(() => expect(getSupplierMock).toHaveBeenCalledWith('sup-1'));
 
@@ -155,7 +164,8 @@ describe('Suppliers — inspection-code retirement (round 8-3G)', () => {
     renderPage();
     await screen.findByText('SUP001');
 
-    fireEvent.click(screen.getByTitle('แก้ไข'));
+    await openRowMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'แก้ไข' }));
     await screen.findByText('แก้ไข Supplier');
     await waitFor(() => expect(getSupplierMock).toHaveBeenCalledWith('sup-1'));
 
@@ -172,7 +182,8 @@ describe('Suppliers — status/deactivate unaffected (round 8-3G do-not-touch)',
     renderPage();
     await screen.findByText('SUP001');
 
-    expect(screen.getByTitle('ปิดการใช้งาน')).toBeTruthy();
+    await openRowMenu();
+    expect(screen.getByRole('menuitem', { name: 'ปิดการใช้งาน' })).toBeTruthy();
   });
 
   it('hides the ปิดการใช้งาน action for an already-inactive supplier', async () => {
@@ -180,7 +191,11 @@ describe('Suppliers — status/deactivate unaffected (round 8-3G do-not-touch)',
     renderPage();
     await screen.findByText('SUP001');
 
-    expect(screen.queryByTitle('ปิดการใช้งาน')).toBeNull();
+    // The trigger still renders (แก้ไข remains available) — only the
+    // deactivate ITEM is gone, so open the menu before asserting absence.
+    await openRowMenu();
+    expect(screen.queryByRole('menuitem', { name: 'ปิดการใช้งาน' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'แก้ไข' })).toBeTruthy();
     expect(screen.getByText('ปิดแล้ว')).toBeTruthy();
   });
 
@@ -190,7 +205,8 @@ describe('Suppliers — status/deactivate unaffected (round 8-3G do-not-touch)',
     renderPage();
     await screen.findByText('SUP001');
 
-    fireEvent.click(screen.getByTitle('ปิดการใช้งาน'));
+    await openRowMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ปิดการใช้งาน' }));
 
     await waitFor(() => expect(deactivateSupplierMock).toHaveBeenCalledWith('sup-1'));
   });
@@ -200,7 +216,8 @@ describe('Suppliers — status/deactivate unaffected (round 8-3G do-not-touch)',
     renderPage();
     await screen.findByText('SUP001');
 
-    fireEvent.click(screen.getByTitle('ปิดการใช้งาน'));
+    await openRowMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ปิดการใช้งาน' }));
 
     expect(deactivateSupplierMock).not.toHaveBeenCalled();
   });
@@ -211,8 +228,11 @@ describe('Suppliers — status/deactivate unaffected (round 8-3G do-not-touch)',
     await screen.findByText('SUP001');
 
     expect(screen.queryByRole('button', { name: /เพิ่ม Supplier/ })).toBeNull();
-    expect(screen.queryByTitle('แก้ไข')).toBeNull();
-    expect(screen.queryByTitle('ปิดการใช้งาน')).toBeNull();
+    // With neither permission the items list is empty, so ActionMenu renders
+    // nothing at all — no trigger to open, not merely an empty menu.
+    expect(screen.queryByTitle('ตัวเลือกเพิ่มเติมสำหรับ Supplier SUP001')).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'แก้ไข' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'ปิดการใช้งาน' })).toBeNull();
   });
 });
 
@@ -239,7 +259,8 @@ describe('Suppliers — create/edit still work (round 8-3G regression)', () => {
     renderPage();
     await screen.findByText('SUP001');
 
-    fireEvent.click(screen.getByTitle('แก้ไข'));
+    await openRowMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'แก้ไข' }));
     await screen.findByText('แก้ไข Supplier');
 
     expect(await screen.findByDisplayValue('Supplier One Co.')).toBeTruthy();

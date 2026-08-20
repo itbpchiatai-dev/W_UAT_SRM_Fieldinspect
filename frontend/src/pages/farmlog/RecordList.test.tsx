@@ -126,6 +126,42 @@ describe('RecordList — visible filter labels (round 8-25E)', () => {
   });
 });
 
+// Round 8-25F — the row's two icon buttons (preview Link + deactivate) became
+// one ActionMenu under a real "จัดการ" header, matching Plots/Suppliers.
+describe('RecordList — จัดการ ActionMenu (round 8-25F)', () => {
+  it('labels the actions column "จัดการ"', async () => {
+    listRecordsMock.mockResolvedValue([record()]);
+    renderList();
+    await screen.findByText('SUP001-P001');
+
+    expect(screen.getByRole('columnheader', { name: 'จัดการ' })).toBeTruthy();
+  });
+
+  it('hides the row actions behind one trigger, not loose icon buttons', async () => {
+    listRecordsMock.mockResolvedValue([record()]);
+    renderList();
+    await screen.findByText('SUP001-P001');
+
+    // Closed by default — neither action is reachable until the menu opens.
+    expect(screen.queryByRole('menuitem', { name: 'ดูรายละเอียด' })).toBeNull();
+
+    fireEvent.click(screen.getByTitle('ตัวเลือกเพิ่มเติมสำหรับบันทึก SUP001-P001'));
+
+    expect(screen.getByRole('menuitem', { name: 'ดูรายละเอียด' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'ปิดบันทึก' })).toBeTruthy();
+  });
+
+  it('keeps a real link on the plot code so preview survives ctrl/middle-click', async () => {
+    listRecordsMock.mockResolvedValue([record()]);
+    renderList();
+
+    // A menu item is a <button> — it cannot be opened in a new tab. The row
+    // therefore still carries the preview target as an <a href>.
+    const link = await screen.findByRole('link', { name: 'SUP001-P001' });
+    expect(link.getAttribute('href')).toBe('/farmlog/records/rec-1/preview');
+  });
+});
+
 // Round 8-25D — this page used to be fixed at 30 rows/page with no way to
 // see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
 describe('RecordList — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {

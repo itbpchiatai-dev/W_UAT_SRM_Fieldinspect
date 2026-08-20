@@ -2,7 +2,7 @@
  * RecordList — FarmLog field inspection records list with scope-aware filtering.
  */
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ClipboardList, Plus, PowerOff, FileText } from 'lucide-react';
 import { listRecords, deactivateRecord, type RecordSummary } from '../../api/records';
@@ -14,6 +14,7 @@ import { recordCycleDisplayName } from '../../lib/plot-cycle';
 import { formatYieldQuantity } from '../../lib/yield-planning';
 import { toNumberOrNull } from '../../lib/numeric';
 import { fetchAllPages } from '../../lib/paginate';
+import { ActionMenu } from '../../components/ActionMenu';
 
 // Round 8-25D — this page used to be fixed at 30 rows/page with no way to
 // see more. Same [100, 200, 500, 'ทั้งหมด'] contract as the Plots admin page.
@@ -55,6 +56,7 @@ export function RecordList() {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
 
+  const navigate = useNavigate();
   const canCreate = useHasPermission('records.create');
   const canDelete = useHasPermission('records.delete');
 
@@ -198,8 +200,13 @@ export function RecordList() {
                     so fixed per-slot column labels would mislead across a
                     mixed-stage list. The labelled breakdown is in the
                     preview/detail (snapshot-driven). */}
-                {['วันที่', 'Supplier / แปลง', 'พืช/ระยะ', 'Yield', 'คะแนนตรวจ (4 หัวข้อ)', 'สถานะ', ''].map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                {['วันที่', 'Supplier / แปลง', 'พืช/ระยะ', 'Yield', 'คะแนนตรวจ (4 หัวข้อ)', 'สถานะ', 'จัดการ'].map(h => (
+                  <th
+                    key={h}
+                    className={`px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-500 ${
+                      h === 'จัดการ' ? 'text-right' : 'text-left'
+                    }`}
+                  >
                     {h}
                   </th>
                 ))}
@@ -221,7 +228,17 @@ export function RecordList() {
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">
                     {r.supplierName && <div className="text-xs text-gray-400">{r.supplierName}</div>}
-                    <div className="font-medium">{r.plotCode || r.plotId}</div>
+                    {/* Round 8-25F — "ดูรายละเอียด" moved into the ActionMenu,
+                        so the row keeps ONE real <Link> here (same shape as the
+                        Plots table): a menu item is a <button> and can't be
+                        ctrl/middle-clicked or focused as a link, which the
+                        preview icon-Link this replaced could. */}
+                    <Link
+                      to={`/farmlog/records/${r.id}/preview`}
+                      className="font-medium text-gray-900 hover:text-indigo-600 hover:underline"
+                    >
+                      {r.plotCode || r.plotId}
+                    </Link>
                     {r.plotName && r.plotName !== r.plotCode && (
                       <div className="text-xs text-gray-400">{r.plotName}</div>
                     )}
@@ -242,23 +259,25 @@ export function RecordList() {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right text-sm">
-                    <div className="flex items-center justify-end gap-2">
-                      <Link
-                        to={`/farmlog/records/${r.id}/preview`}
-                        className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                        title="One Page Preview"
-                      >
-                        <FileText className="h-4 w-4" />
-                      </Link>
-                      {canDelete && r.isActive && (
-                        <button
-                          onClick={() => { if (confirm('ปิดบันทึกนี้?')) deactivateM.mutate(r.id); }}
-                          className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600"
-                          title="ปิด"
-                        >
-                          <PowerOff className="h-4 w-4" />
-                        </button>
-                      )}
+                    <div className="flex items-center justify-end">
+                      {/* Round 8-25F — one ActionMenu trigger, matching the
+                          Plots and Suppliers admin tables. */}
+                      <ActionMenu
+                        ariaLabel={`ตัวเลือกเพิ่มเติมสำหรับบันทึก ${r.plotCode || r.plotId}`}
+                        items={[
+                          {
+                            key: 'preview', label: 'ดูรายละเอียด', icon: FileText,
+                            onClick: () => navigate(`/farmlog/records/${r.id}/preview`),
+                          },
+                          ...(canDelete && r.isActive ? [{
+                            key: 'deactivate', label: 'ปิดบันทึก', icon: PowerOff, danger: true,
+                            disabled: deactivateM.isPending,
+                            onClick: () => {
+                              if (confirm('ปิดบันทึกนี้?')) deactivateM.mutate(r.id);
+                            },
+                          }] : []),
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

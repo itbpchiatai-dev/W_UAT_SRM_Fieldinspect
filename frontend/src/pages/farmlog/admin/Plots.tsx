@@ -1318,7 +1318,11 @@ export function Plots() {
             (ค้นทั้งเบอร์หลักและเบอร์เสริม){q ? ` และตรงกับ "${q}"` : ''}
           </p>
         )}
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+        {/* Round 8-25G — 6 filters (Supplier + สถานะ + จังหวัด + ชนิดพืช +
+            พันธุ์ + รอบปลูก) at their min-widths add up to 1200px+; without
+            flex-wrap they overflowed the card sideways on narrower screens
+            instead of dropping to a second line. */}
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <SupplierFilterCombobox
             suppliers={suppliers}
             value={filterSupplier}

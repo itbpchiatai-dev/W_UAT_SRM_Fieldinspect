@@ -25,6 +25,7 @@ import {
   type RoleCreatePayload,
 } from '../../api/roles';
 import { groupByCategory, listPermissions } from '../../api/permissions';
+import { ActionMenu } from '../../components/ActionMenu';
 import type { Permission, RoleDetail, RoleSummary } from '../../types/auth';
 
 const roleSchema = z
@@ -113,29 +114,28 @@ export function Roles() {
                     ) : null}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <div className="flex justify-end gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(r.id)}
-                        className="rounded-md p-1.5 text-foreground hover:bg-secondary"
-                        aria-label={t('common.edit')}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (r.isSystem || (r.usersCount ?? 0) > 0) return;
-                          if (confirm(t('settings.roles.confirmDelete', { name: r.name }))) {
-                            deleteM.mutate(r.id);
-                          }
-                        }}
-                        disabled={r.isSystem || (r.usersCount ?? 0) > 0}
-                        className="rounded-md p-1.5 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
-                        aria-label={t('common.delete')}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                    {/* Round 8-25H — one ActionMenu trigger, matching Users
+                        and the farmlog admin tables. */}
+                    <div className="flex justify-end">
+                      <ActionMenu
+                        ariaLabel={`${t('common.actions')}: ${r.name}`}
+                        items={[
+                          {
+                            key: 'edit', label: t('common.edit'), icon: Pencil,
+                            onClick: () => setEditingId(r.id),
+                          },
+                          {
+                            key: 'delete', label: t('common.delete'), icon: Trash2, danger: true,
+                            disabled: r.isSystem || (r.usersCount ?? 0) > 0,
+                            onClick: () => {
+                              if (r.isSystem || (r.usersCount ?? 0) > 0) return;
+                              if (confirm(t('settings.roles.confirmDelete', { name: r.name }))) {
+                                deleteM.mutate(r.id);
+                              }
+                            },
+                          },
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

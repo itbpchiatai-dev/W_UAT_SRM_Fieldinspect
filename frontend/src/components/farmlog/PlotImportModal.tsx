@@ -669,7 +669,7 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
           <p className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span>
-              ไฟล์ Excel อาจมีรหัสยืนยันแปลง กรุณาจำกัดผู้เข้าถึงไฟล์และลบไฟล์เมื่อใช้งานเสร็จ
+              ไฟล์ Excel อาจมีรหัส Supplier ตรวจแปลง กรุณาจำกัดผู้เข้าถึงไฟล์และลบไฟล์เมื่อใช้งานเสร็จ
             </span>
           </p>
 
@@ -797,7 +797,7 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                 <table className="min-w-full divide-y divide-border text-sm">
                   <thead className="sticky top-0 bg-muted/60">
                     <tr>
-                      {['Excel Row', 'การกระทำ', 'Supplier', 'แปลง', 'เบอร์', 'ชื่อรอบปลูก', 'รหัสยืนยันแปลง', 'สถานะ', 'ข้อความ'].map((h) => (
+                      {['Excel Row', 'การกระทำ', 'Supplier', 'แปลง', 'เบอร์', 'ชื่อรอบปลูก', 'รหัส Supplier ตรวจแปลง', 'สถานะ', 'ข้อความ'].map((h) => (
                         <th key={h} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-muted-foreground">{h}</th>
                       ))}
                     </tr>

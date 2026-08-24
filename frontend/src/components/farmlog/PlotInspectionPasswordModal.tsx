@@ -47,13 +47,13 @@ const ASCII_DIGITS = /^[0-9]*$/;
  * rejected by the backend, which is what actually protects the plot.
  */
 export function validatePlotInspectionPin(pin: string): string | null {
-  if (pin.length === 0) return 'กรุณากรอกรหัสยืนยันแปลง';
+  if (pin.length === 0) return 'กรุณากรอกรหัส Supplier ตรวจแปลง';
   if (
     !ASCII_DIGITS.test(pin)
     || pin.length < PLOT_INSPECTION_PIN_MIN_LENGTH
     || pin.length > PLOT_INSPECTION_PIN_MAX_LENGTH
   ) {
-    return 'รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก';
+    return 'รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก';
   }
   return null;
 }
@@ -66,10 +66,10 @@ export function describeInspectionCredentialError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 422) {
-      return 'รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก';
+      return 'รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก';
     }
     if (status === 503) {
-      return 'ระบบยังไม่พร้อมตั้งรหัสยืนยันแปลง กรุณาติดต่อผู้ดูแลระบบ';
+      return 'ระบบยังไม่พร้อมตั้งรหัส Supplier ตรวจแปลง กรุณาติดต่อผู้ดูแลระบบ';
     }
     if (status === 409) {
       return 'มีผู้ใช้อื่นเปลี่ยนข้อมูลแปลงนี้ กรุณาลองใหม่อีกครั้ง';
@@ -78,7 +78,7 @@ export function describeInspectionCredentialError(error: unknown): string {
       return 'ไม่พบแปลงนี้ หรือคุณไม่มีสิทธิ์จัดการแปลง';
     }
   }
-  return 'ตั้งรหัสยืนยันแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
+  return 'ตั้งรหัส Supplier ตรวจแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
 }
 
 /** Keeps only ASCII digits and caps the length at the policy maximum — so a
@@ -201,14 +201,14 @@ export function PlotInspectionPasswordModal({
       return;
     }
     if (pin !== confirmPin) {
-      setClientError('รหัสยืนยันแปลงทั้งสองช่องไม่ตรงกัน');
+      setClientError('รหัส Supplier ตรวจแปลงทั้งสองช่องไม่ตรงกัน');
       return;
     }
     setClientError(null);
     saveM.mutate(pin);
   }
 
-  const title = configured ? 'เปลี่ยนรหัสยืนยันแปลง' : 'ตั้งรหัสยืนยันแปลง';
+  const title = configured ? 'เปลี่ยนรหัส Supplier ตรวจแปลง' : 'ตั้งรหัส Supplier ตรวจแปลง';
   const submitLabel = configured ? 'ยืนยันเปลี่ยนรหัส' : 'ยืนยันตั้งรหัส';
   const readOnly = !canUpdate;
   const errorMessage = clientError
@@ -257,13 +257,13 @@ export function PlotInspectionPasswordModal({
 
           {readOnly ? (
             <p className="rounded-md bg-secondary px-3 py-2 text-xs text-muted-foreground">
-              คุณไม่มีสิทธิ์ตั้งหรือเปลี่ยนรหัสยืนยันแปลงนี้ (แสดงผลอย่างเดียว)
+              คุณไม่มีสิทธิ์ตั้งหรือเปลี่ยนรหัส Supplier ตรวจแปลงนี้ (แสดงผลอย่างเดียว)
             </p>
           ) : (
             <>
               <PinField
                 id={`${fieldId}-pin`}
-                label="รหัสยืนยันแปลง"
+                label="รหัส Supplier ตรวจแปลง"
                 helperText="กรอกตัวเลขอย่างน้อย 4 หลัก"
                 value={pin}
                 onChange={setPin}

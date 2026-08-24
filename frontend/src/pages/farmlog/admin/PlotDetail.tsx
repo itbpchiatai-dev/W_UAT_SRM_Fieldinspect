@@ -1008,7 +1008,7 @@ function InspectionCredentialSection({
     <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-1.5 text-base font-semibold text-gray-800">
-          <KeyRound className="h-4 w-4 text-gray-400" /> รหัสยืนยันแปลง
+          <KeyRound className="h-4 w-4 text-gray-400" /> รหัส Supplier ตรวจแปลง
         </h2>
         {/* The button waits for the query: its label and the modal's warning
             both depend on whether a password already exists. */}
@@ -1019,7 +1019,7 @@ function InspectionCredentialSection({
             className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium shadow-sm hover:bg-secondary"
           >
             <Pencil className="h-3.5 w-3.5" />
-            {configured ? 'เปลี่ยนรหัสยืนยันแปลง' : 'ตั้งรหัสยืนยันแปลง'}
+            {configured ? 'เปลี่ยนรหัส Supplier ตรวจแปลง' : 'ตั้งรหัส Supplier ตรวจแปลง'}
           </button>
         )}
       </div>
@@ -1028,11 +1028,11 @@ function InspectionCredentialSection({
         // Fixed-height placeholder — never flashes "ยังไม่ตั้งรหัส" first,
         // which would read as a real (and alarming) answer.
         <div className="flex h-[60px] items-center gap-2 rounded-md bg-gray-50 px-3 text-sm text-gray-400">
-          <Loader2 className="h-4 w-4 animate-spin" /> กำลังโหลดสถานะรหัสยืนยันแปลง…
+          <Loader2 className="h-4 w-4 animate-spin" /> กำลังโหลดสถานะรหัส Supplier ตรวจแปลง…
         </div>
       ) : isError ? (
         <div className="flex h-[60px] flex-wrap items-center justify-between gap-2 rounded-md bg-red-50 px-3 text-sm">
-          <span className="text-red-700">โหลดสถานะรหัสยืนยันแปลงไม่สำเร็จ</span>
+          <span className="text-red-700">โหลดสถานะรหัส Supplier ตรวจแปลงไม่สำเร็จ</span>
           <button
             type="button"
             onClick={() => refetch()}

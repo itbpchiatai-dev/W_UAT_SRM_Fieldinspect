@@ -140,9 +140,9 @@ const CONFIG_ERROR_MESSAGE = 'ไม่สามารถเตรียมห�
  * authorized" into a single generic response (round 8-9C); saying which one it
  * was here would rebuild client-side the enumeration oracle the backend
  * deliberately avoids. */
-const AUTH_FAILED_MESSAGE = 'หมายเลขหรือรหัสยืนยันแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ';
+const AUTH_FAILED_MESSAGE = 'หมายเลขหรือรหัส Supplier ตรวจแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ';
 
-const PASSWORD_REQUIRED_MESSAGE = 'กรุณากรอกรหัสยืนยันแปลง';
+const PASSWORD_REQUIRED_MESSAGE = 'กรุณากรอกรหัส Supplier ตรวจแปลง';
 
 /** Strips everything that isn't an ASCII digit and caps the length, so the
  * value in state can never be something the backend policy rejects for a
@@ -160,7 +160,7 @@ export function validatePlotPassword(
 ): string {
   if (!value) return PASSWORD_REQUIRED_MESSAGE;
   if (!new RegExp(`^[0-9]{${minLength},${maxLength}}$`).test(value)) {
-    return `รหัสยืนยันแปลงต้องเป็นตัวเลข ${minLength} ถึง ${maxLength} หลัก`;
+    return `รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข ${minLength} ถึง ${maxLength} หลัก`;
   }
   return '';
 }
@@ -862,7 +862,7 @@ export function PublicInspect() {
         // can be a nested Pydantic error object, and echoing server text into
         // the page is how a validation error turns into an information leak.
         setPasswordError(
-          `รหัสยืนยันแปลงต้องเป็นตัวเลข ${passwordMinLength} ถึง ${passwordMaxLength} หลัก`,
+          `รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข ${passwordMinLength} ถึง ${passwordMaxLength} หลัก`,
         );
       } else if (passwordRequired) {
         // One message for a network failure and for anything else unexpected
@@ -1246,7 +1246,7 @@ export function PublicInspect() {
                   {passwordRequired && (
                     <div>
                       <label htmlFor="plot-access-password" className="mb-1 block text-sm font-medium text-gray-700">
-                        รหัสยืนยันแปลง<span className="ml-1 text-red-500">*</span>
+                        รหัส Supplier ตรวจแปลง<span className="ml-1 text-red-500">*</span>
                       </label>
                       <div className="flex items-stretch gap-2">
                         <input
@@ -1273,8 +1273,8 @@ export function PublicInspect() {
                           // "submit", so revealing the code would fire a lookup.
                           type="button"
                           onClick={() => setShowPassword((v) => !v)}
-                          aria-label={showPassword ? 'ซ่อนรหัสยืนยันแปลง' : 'แสดงรหัสยืนยันแปลง'}
-                          title={showPassword ? 'ซ่อนรหัสยืนยันแปลง' : 'แสดงรหัสยืนยันแปลง'}
+                          aria-label={showPassword ? 'ซ่อนรหัส Supplier ตรวจแปลง' : 'แสดงรหัส Supplier ตรวจแปลง'}
+                          title={showPassword ? 'ซ่อนรหัส Supplier ตรวจแปลง' : 'แสดงรหัส Supplier ตรวจแปลง'}
                           className="flex w-12 shrink-0 items-center justify-center rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50"
                         >
                           {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}

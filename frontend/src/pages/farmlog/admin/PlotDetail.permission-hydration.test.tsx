@@ -1,6 +1,6 @@
 /**
  * Round 8-9F diagnostic — the permission chain that decides whether the
- * "ตั้งรหัสยืนยันแปลง" button exists at all:
+ * "ตั้งรหัส Supplier ตรวจแปลง" button exists at all:
  *
  *   GET /me/permissions → authStore.hydrateFromServer() → permissionKeys Set
  *   → useHasPermission('plots.update') → PlotDetail canUpdatePlot
@@ -194,13 +194,13 @@ describe('permission hydration — /me/permissions reaches useHasPermission', ()
 
 // --- the button itself ------------------------------------------------------
 
-describe('PlotDetail — the "ตั้งรหัสยืนยันแปลง" button with REAL permission plumbing', () => {
+describe('PlotDetail — the "ตั้งรหัส Supplier ตรวจแปลง" button with REAL permission plumbing', () => {
   it('renders the button after a real /me/permissions hydration containing plots.update', async () => {
     await useAuthStore.getState().hydrateFromServer();
 
     renderPlotDetail();
 
-    expect(await screen.findByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy();
     expect(getMePermissionsMock).toHaveBeenCalled();
   });
 
@@ -208,12 +208,12 @@ describe('PlotDetail — the "ตั้งรหัสยืนยันแป�
     await useAuthStore.getState().hydrateFromServer();
 
     renderPlotDetail();
-    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' }));
 
     // The trigger passes `configured` (false here) into state; the modal must
     // be gated on `!== null`, not on truthiness, or a plot with NO password —
     // exactly the case this rollout needs — could never open it.
-    expect(await screen.findByRole('heading', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy();
   });
 
   it('hides the button when the hydrated permissions genuinely lack plots.update', async () => {
@@ -223,9 +223,9 @@ describe('PlotDetail — the "ตั้งรหัสยืนยันแป�
     renderPlotDetail();
 
     // The section still renders (status is readable by plots.read)...
-    expect(await screen.findByText('รหัสยืนยันแปลง')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลง')).toBeTruthy();
     // ...but there is no way to act on it.
-    expect(screen.queryByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeNull();
   });
 
   it('hides the button while the credential status is still loading, then shows it', async () => {
@@ -237,12 +237,12 @@ describe('PlotDetail — the "ตั้งรหัสยืนยันแป�
 
     renderPlotDetail();
 
-    expect(await screen.findByText('กำลังโหลดสถานะรหัสยืนยันแปลง…')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /ตั้งรหัสยืนยันแปลง/ })).toBeNull();
+    expect(await screen.findByText('กำลังโหลดสถานะรหัส Supplier ตรวจแปลง…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /ตั้งรหัส Supplier ตรวจแปลง/ })).toBeNull();
 
     resolveStatus({ configured: false, credentialVersion: null, updatedAt: null });
 
-    expect(await screen.findByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy();
   });
 
   it('hides the button when the credential-status GET fails, and offers a retry instead', async () => {
@@ -254,7 +254,7 @@ describe('PlotDetail — the "ตั้งรหัสยืนยันแป�
 
     renderPlotDetail();
 
-    expect(await screen.findByText('โหลดสถานะรหัสยืนยันแปลงไม่สำเร็จ')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /ตั้งรหัสยืนยันแปลง/ })).toBeNull();
+    expect(await screen.findByText('โหลดสถานะรหัส Supplier ตรวจแปลงไม่สำเร็จ')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /ตั้งรหัส Supplier ตรวจแปลง/ })).toBeNull();
   });
 });

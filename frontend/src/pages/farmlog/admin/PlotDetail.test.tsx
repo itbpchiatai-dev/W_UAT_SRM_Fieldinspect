@@ -1862,7 +1862,7 @@ describe('PlotDetail — history Yield kg (round 8-8C)', () => {
   });
 });
 
-// --- round 8-9B: "รหัสยืนยันแปลง" status section ----------------------------
+// --- round 8-9B: "รหัส Supplier ตรวจแปลง" status section ----------------------------
 
 describe('PlotDetail — inspection password section (round 8-9B)', () => {
   it('renders the section heading next to the access-phone section', async () => {
@@ -1870,7 +1870,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    expect(await screen.findByText('รหัสยืนยันแปลง')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(screen.getByText('เบอร์โทรสำหรับเข้าตรวจแปลง')).toBeTruthy();
   });
 
@@ -1880,11 +1880,11 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    expect(await screen.findByText('กำลังโหลดสถานะรหัสยืนยันแปลง…')).toBeTruthy();
+    expect(await screen.findByText('กำลังโหลดสถานะรหัส Supplier ตรวจแปลง…')).toBeTruthy();
     expect(screen.queryByText('ยังไม่ตั้งรหัส')).toBeNull();
     expect(screen.queryByText('ตั้งรหัสแล้ว')).toBeNull();
     // no action button until we know which action it is
-    expect(screen.queryByRole('button', { name: /ตั้งรหัสยืนยันแปลง|เปลี่ยนรหัสยืนยันแปลง/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ตั้งรหัส Supplier ตรวจแปลง|เปลี่ยนรหัส Supplier ตรวจแปลง/ })).toBeNull();
   });
 
   it('shows "ยังไม่ตั้งรหัส" with the rollout hint when configured=false', async () => {
@@ -1894,7 +1894,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     expect(await screen.findByText('ยังไม่ตั้งรหัส')).toBeTruthy();
     expect(screen.getByText('ต้องตั้งรหัสก่อนเปิดใช้การค้นหาแปลงด้วยหมายเลขและรหัส')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy();
   });
 
   it('shows "ตั้งรหัสแล้ว" plus the last-updated time when configured=true', async () => {
@@ -1907,7 +1907,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     expect(await screen.findByText('ตั้งรหัสแล้ว')).toBeTruthy();
     expect(screen.getByText(/แก้ไขล่าสุด/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'เปลี่ยนรหัสยืนยันแปลง' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'เปลี่ยนรหัส Supplier ตรวจแปลง' })).toBeTruthy();
     expect(screen.queryByText('ยังไม่ตั้งรหัส')).toBeNull();
   });
 
@@ -1943,7 +1943,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    expect(await screen.findByText('โหลดสถานะรหัสยืนยันแปลงไม่สำเร็จ')).toBeTruthy();
+    expect(await screen.findByText('โหลดสถานะรหัส Supplier ตรวจแปลงไม่สำเร็จ')).toBeTruthy();
     // the rest of Plot Detail still rendered
     expect(screen.getByRole('link', { name: 'แก้ไขแปลง' })).toBeTruthy();
     expect(screen.getByText('เบอร์โทรสำหรับเข้าตรวจแปลง')).toBeTruthy();
@@ -1957,7 +1957,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    await screen.findByText('โหลดสถานะรหัสยืนยันแปลงไม่สำเร็จ');
+    await screen.findByText('โหลดสถานะรหัส Supplier ตรวจแปลงไม่สำเร็จ');
     getPlotInspectionCredentialMock.mockResolvedValue({
       configured: true, credentialVersion: 1, updatedAt: null,
     });
@@ -1973,7 +1973,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
     renderPage();
 
     expect(await screen.findByText('ยังไม่ตั้งรหัส')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeNull();
   });
 
   it('shows the set/change button with plots.update', async () => {
@@ -1982,7 +1982,7 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    expect(await screen.findByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy();
   });
 
   it('opens the modal with the plot identity and the correct mode', async () => {
@@ -1993,11 +1993,11 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'เปลี่ยนรหัสยืนยันแปลง' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'เปลี่ยนรหัส Supplier ตรวจแปลง' }));
 
     // modal title reflects the configured state, not just the button label
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'เปลี่ยนรหัสยืนยันแปลง' })).toBeTruthy());
-    expect(screen.getByLabelText('รหัสยืนยันแปลง')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'เปลี่ยนรหัส Supplier ตรวจแปลง' })).toBeTruthy());
+    expect(screen.getByLabelText('รหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(screen.getByLabelText('ยืนยันรหัสอีกครั้ง')).toBeTruthy();
     // Supplier / plot identity carried into the modal
     expect(screen.getAllByText('SUP001').length).toBeGreaterThanOrEqual(1);
@@ -2009,9 +2009,9 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' }));
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy());
     // no "existing inspectors lose access" warning on a first set
     expect(screen.queryByText(/ผู้ตรวจที่ใช้รหัสเดิม/)).toBeNull();
   });
@@ -2021,8 +2021,8 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัสยืนยันแปลง' }));
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'ตั้งรหัสยืนยันแปลง' })).toBeTruthy());
+    fireEvent.click(await screen.findByRole('button', { name: 'ตั้งรหัส Supplier ตรวจแปลง' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'ตั้งรหัส Supplier ตรวจแปลง' })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
     await waitFor(() => expect(screen.queryByLabelText('ยืนยันรหัสอีกครั้ง')).toBeNull());

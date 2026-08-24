@@ -1934,15 +1934,15 @@ describe('PlotImportModal — inspection password (round 8-9B.1)', () => {
   it('warns that the file may contain plot inspection passwords', () => {
     renderModal();
     expect(screen.getByText(
-      'ไฟล์ Excel อาจมีรหัสยืนยันแปลง กรุณาจำกัดผู้เข้าถึงไฟล์และลบไฟล์เมื่อใช้งานเสร็จ',
+      'ไฟล์ Excel อาจมีรหัส Supplier ตรวจแปลง กรุณาจำกัดผู้เข้าถึงไฟล์และลบไฟล์เมื่อใช้งานเสร็จ',
     )).toBeTruthy();
   });
 
-  it('shows the รหัสยืนยันแปลง column header after a preview', async () => {
+  it('shows the รหัส Supplier ตรวจแปลง column header after a preview', async () => {
     previewMock.mockResolvedValue(preview());
     renderModal();
     await doPreview();
-    expect(await screen.findByText('รหัสยืนยันแปลง')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลง')).toBeTruthy();
   });
 
   it('shows "ตั้งรหัสใหม่" for a set row', async () => {
@@ -1988,7 +1988,7 @@ describe('PlotImportModal — inspection password (round 8-9B.1)', () => {
       validRows: 0, errorRows: 1,
       rows: [row({
         status: 'error',
-        message: 'newInspectionPassword: รหัสยืนยันแปลงต้องเป็นตัวเลข 0-9 จำนวน 4 ถึง 20 หลัก',
+        message: 'newInspectionPassword: รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 0-9 จำนวน 4 ถึง 20 หลัก',
         inspectionPasswordChange: null,
       })],
     }));

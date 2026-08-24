@@ -63,7 +63,7 @@ function renderModal(props: Partial<{ configured: boolean; onClose: () => void; 
 
 function pinInputs(): HTMLInputElement[] {
   return [
-    screen.getByLabelText('รหัสยืนยันแปลง') as HTMLInputElement,
+    screen.getByLabelText('รหัส Supplier ตรวจแปลง') as HTMLInputElement,
     screen.getByLabelText('ยืนยันรหัสอีกครั้ง') as HTMLInputElement,
   ];
 }
@@ -121,12 +121,12 @@ describe('validatePlotInspectionPin', () => {
   it('rejects the wrong length or non-ASCII digits with one static message', () => {
     for (const bad of ['1', '12', '123', '1'.repeat(21), '13579a', '๑๓๕๗', '１２３４', '12 34']) {
       expect(validatePlotInspectionPin(bad))
-        .toBe('รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก');
+        .toBe('รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก');
     }
   });
 
   it('asks for a value when empty', () => {
-    expect(validatePlotInspectionPin('')).toBe('กรุณากรอกรหัสยืนยันแปลง');
+    expect(validatePlotInspectionPin('')).toBe('กรุณากรอกรหัส Supplier ตรวจแปลง');
   });
 
   it('never mentions the old guessability rules', () => {
@@ -142,9 +142,9 @@ describe('validatePlotInspectionPin', () => {
 describe('describeInspectionCredentialError', () => {
   it('maps each status to its specified Thai message', () => {
     expect(describeInspectionCredentialError(axiosStatus(422)))
-      .toBe('รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก');
+      .toBe('รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก');
     expect(describeInspectionCredentialError(axiosStatus(503)))
-      .toBe('ระบบยังไม่พร้อมตั้งรหัสยืนยันแปลง กรุณาติดต่อผู้ดูแลระบบ');
+      .toBe('ระบบยังไม่พร้อมตั้งรหัส Supplier ตรวจแปลง กรุณาติดต่อผู้ดูแลระบบ');
     expect(describeInspectionCredentialError(axiosStatus(409)))
       .toBe('มีผู้ใช้อื่นเปลี่ยนข้อมูลแปลงนี้ กรุณาลองใหม่อีกครั้ง');
     expect(describeInspectionCredentialError(axiosStatus(404)))
@@ -153,9 +153,9 @@ describe('describeInspectionCredentialError', () => {
 
   it('falls back to one generic message for anything else', () => {
     expect(describeInspectionCredentialError(axiosStatus(500)))
-      .toBe('ตั้งรหัสยืนยันแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      .toBe('ตั้งรหัส Supplier ตรวจแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     expect(describeInspectionCredentialError(new Error('boom')))
-      .toBe('ตั้งรหัสยืนยันแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      .toBe('ตั้งรหัส Supplier ตรวจแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
   });
 
   it('never surfaces the raw backend detail', () => {
@@ -233,13 +233,13 @@ describe('PlotInspectionPasswordModal — input contract', () => {
 
   it('titles itself for a first set and shows no change-warning', () => {
     renderModal({ configured: false });
-    expect(screen.getByText('ตั้งรหัสยืนยันแปลง')).toBeTruthy();
+    expect(screen.getByText('ตั้งรหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(screen.queryByText(/ผู้ตรวจที่ใช้รหัสเดิม/)).toBeNull();
   });
 
   it('titles itself for a replace and warns that old inspectors lose access', () => {
     renderModal({ configured: true });
-    expect(screen.getByText('เปลี่ยนรหัสยืนยันแปลง')).toBeTruthy();
+    expect(screen.getByText('เปลี่ยนรหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(screen.getByText(/ผู้ตรวจที่ใช้รหัสเดิมจะไม่สามารถเข้าตรวจแปลงนี้ได้/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /ยืนยันเปลี่ยนรหัส/ })).toBeTruthy();
   });
@@ -260,8 +260,8 @@ describe('PlotInspectionPasswordModal — input contract', () => {
   it('falls back to a read-only view without plots.update', () => {
     allowedPerms = new Set(['plots.read']);
     renderModal();
-    expect(screen.getByText(/คุณไม่มีสิทธิ์ตั้งหรือเปลี่ยนรหัสยืนยันแปลงนี้/)).toBeTruthy();
-    expect(screen.queryByLabelText('รหัสยืนยันแปลง')).toBeNull();
+    expect(screen.getByText(/คุณไม่มีสิทธิ์ตั้งหรือเปลี่ยนรหัส Supplier ตรวจแปลงนี้/)).toBeTruthy();
+    expect(screen.queryByLabelText('รหัส Supplier ตรวจแปลง')).toBeNull();
     expect(screen.queryByRole('button', { name: /ยืนยัน/ })).toBeNull();
   });
 });
@@ -273,7 +273,7 @@ describe('PlotInspectionPasswordModal — client validation', () => {
     renderModal();
     fillBoth('123');
     submit();
-    expect(await screen.findByText('รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก')).toBeTruthy();
     expect(setCredentialMock).not.toHaveBeenCalled();
   });
 
@@ -281,7 +281,7 @@ describe('PlotInspectionPasswordModal — client validation', () => {
     renderModal();
     fillBoth(PIN, OTHER_PIN);
     submit();
-    expect(await screen.findByText('รหัสยืนยันแปลงทั้งสองช่องไม่ตรงกัน')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลงทั้งสองช่องไม่ตรงกัน')).toBeTruthy();
     expect(setCredentialMock).not.toHaveBeenCalled();
   });
 
@@ -362,11 +362,11 @@ describe('PlotInspectionPasswordModal — submit', () => {
 
 describe('PlotInspectionPasswordModal — server errors', () => {
   it.each([
-    [422, 'รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก'],
-    [503, 'ระบบยังไม่พร้อมตั้งรหัสยืนยันแปลง กรุณาติดต่อผู้ดูแลระบบ'],
+    [422, 'รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก'],
+    [503, 'ระบบยังไม่พร้อมตั้งรหัส Supplier ตรวจแปลง กรุณาติดต่อผู้ดูแลระบบ'],
     [409, 'มีผู้ใช้อื่นเปลี่ยนข้อมูลแปลงนี้ กรุณาลองใหม่อีกครั้ง'],
     [404, 'ไม่พบแปลงนี้ หรือคุณไม่มีสิทธิ์จัดการแปลง'],
-    [500, 'ตั้งรหัสยืนยันแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'],
+    [500, 'ตั้งรหัส Supplier ตรวจแปลงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'],
   ])('shows the mapped message for HTTP %i', async (status, message) => {
     setCredentialMock.mockRejectedValue(axiosStatus(status as number));
     renderModal();
@@ -383,7 +383,7 @@ describe('PlotInspectionPasswordModal — server errors', () => {
     await screen.findByText('มีผู้ใช้อื่นเปลี่ยนข้อมูลแปลงนี้ กรุณาลองใหม่อีกครั้ง');
     expect(onClose).not.toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('รหัสยืนยันแปลง')).toBeTruthy();
+    expect(screen.getByLabelText('รหัส Supplier ตรวจแปลง')).toBeTruthy();
   });
 
   it('never puts the submitted PIN into the error message', async () => {
@@ -391,8 +391,8 @@ describe('PlotInspectionPasswordModal — server errors', () => {
     renderModal();
     fillBoth(PIN);
     submit();
-    await screen.findByText(/รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก/);
-    const errorText = screen.getByText(/รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก/).textContent ?? '';
+    await screen.findByText(/รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก/);
+    const errorText = screen.getByText(/รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก/).textContent ?? '';
     expect(errorText).not.toContain(PIN);
   });
 });

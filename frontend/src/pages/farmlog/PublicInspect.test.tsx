@@ -266,7 +266,7 @@ async function enterPhoneAndLookup(phone = REAL_PHONE) {
 /** Round 8-9D enforcement mode — fills BOTH fields and submits. */
 async function enterPhonePasswordAndLookup(phone = REAL_PHONE, password = PLOT_PASSWORD) {
   fireEvent.change(await waitForEntryForm(), { target: { value: phone } });
-  fireEvent.change(await screen.findByLabelText(/^รหัสยืนยันแปลง/), { target: { value: password } });
+  fireEvent.change(await screen.findByLabelText(/^รหัส Supplier ตรวจแปลง/), { target: { value: password } });
   fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
   await waitFor(() => expect(screen.getByText('เลือกแปลงที่จะตรวจ')).toBeTruthy());
 }
@@ -1995,7 +1995,7 @@ describe('PublicInspect — PublicInspectionPlotContext has no token field (roun
 });
 
 // ===========================================================================
-// Round 8-9D — plot password ("รหัสยืนยันแปลง") UX + capability contract
+// Round 8-9D — plot password ("รหัส Supplier ตรวจแปลง") UX + capability contract
 // ===========================================================================
 //
 // The live runtime has PUBLIC_PLOT_PASSWORD_ENFORCEMENT=false and this round
@@ -2023,11 +2023,11 @@ function dumpStorage(s: Storage | undefined): string {
   return out;
 }
 
-/** Anchored on purpose: the reveal button's aria-label ("แสดงรหัสยืนยันแปลง" /
- * "ซ่อนรหัสยืนยันแปลง") also CONTAINS the field label, so an unanchored regex
+/** Anchored on purpose: the reveal button's aria-label ("แสดงรหัส Supplier ตรวจแปลง" /
+ * "ซ่อนรหัส Supplier ตรวจแปลง") also CONTAINS the field label, so an unanchored regex
  * matches three elements. */
 async function passwordField(): Promise<HTMLInputElement> {
-  return (await screen.findByLabelText(/^รหัสยืนยันแปลง/)) as HTMLInputElement;
+  return (await screen.findByLabelText(/^รหัส Supplier ตรวจแปลง/)) as HTMLInputElement;
 }
 
 // --- Part D: capability loading / failure ----------------------------------
@@ -2056,7 +2056,7 @@ describe('PublicInspect — capability probe gates the entry form (round 8-9D Pa
     renderPublicInspect();
 
     await waitForEntryForm();
-    expect(screen.queryByLabelText(/^รหัสยืนยันแปลง/)).toBeNull();
+    expect(screen.queryByLabelText(/^รหัส Supplier ตรวจแปลง/)).toBeNull();
     expect(screen.queryByText(/กรอกตัวเลขอย่างน้อย/)).toBeNull();
     expect(screen.getByRole('button', { name: 'ค้นหาแปลง' })).toBeTruthy();
   });
@@ -2109,7 +2109,7 @@ describe('PublicInspect — capability probe gates the entry form (round 8-9D Pa
 
     // Back at the entry step, in the NEW mode, with nothing carried over.
     await waitForEntryForm();
-    await waitFor(() => expect(screen.queryByLabelText(/^รหัสยืนยันแปลง/)).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText(/^รหัส Supplier ตรวจแปลง/)).toBeNull());
     expect(screen.queryByText('เลือกแปลงที่จะตรวจ')).toBeNull();
     expect(renderedSecretSurface()).not.toContain(PLOT_PASSWORD);
   });
@@ -2149,11 +2149,11 @@ describe('PublicInspect — password input (round 8-9D Part E)', () => {
     renderPublicInspect();
     const input = await passwordField();
 
-    const reveal = screen.getByRole('button', { name: 'แสดงรหัสยืนยันแปลง' });
+    const reveal = screen.getByRole('button', { name: 'แสดงรหัส Supplier ตรวจแปลง' });
     fireEvent.click(reveal);
     expect((await passwordField()).type).toBe('text');
 
-    fireEvent.click(screen.getByRole('button', { name: 'ซ่อนรหัสยืนยันแปลง' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ซ่อนรหัส Supplier ตรวจแปลง' }));
     expect((await passwordField()).type).toBe('password');
     expect(input).toBeTruthy();
   });
@@ -2164,7 +2164,7 @@ describe('PublicInspect — password input (round 8-9D Part E)', () => {
     fireEvent.change(await waitForEntryForm(), { target: { value: REAL_PHONE } });
     fireEvent.change(await passwordField(), { target: { value: PLOT_PASSWORD } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'แสดงรหัสยืนยันแปลง' }));
+    fireEvent.click(screen.getByRole('button', { name: 'แสดงรหัส Supplier ตรวจแปลง' }));
 
     expect(lookupMock).not.toHaveBeenCalled();
     expect(screen.queryByText('เลือกแปลงที่จะตรวจ')).toBeNull();
@@ -2175,7 +2175,7 @@ describe('PublicInspect — password input (round 8-9D Part E)', () => {
     fireEvent.change(await waitForEntryForm(), { target: { value: REAL_PHONE } });
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
 
-    expect(await screen.findByText('กรุณากรอกรหัสยืนยันแปลง')).toBeTruthy();
+    expect(await screen.findByText('กรุณากรอกรหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
@@ -2185,7 +2185,7 @@ describe('PublicInspect — password input (round 8-9D Part E)', () => {
     fireEvent.change(await passwordField(), { target: { value: '135' } });
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
 
-    expect(await screen.findByText('รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก')).toBeTruthy();
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
@@ -2246,7 +2246,7 @@ describe('PublicInspect — password input (round 8-9D Part E)', () => {
     fireEvent.change(await passwordField(), { target: { value: '๑๒๓๔' } });
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
 
-    expect(await screen.findByText('กรุณากรอกรหัสยืนยันแปลง')).toBeTruthy();
+    expect(await screen.findByText('กรุณากรอกรหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(lookupMock).not.toHaveBeenCalled();
   });
 });
@@ -2288,7 +2288,7 @@ describe('PublicInspect — enforcement-mode lookup (round 8-9D Parts G/J)', () 
     fireEvent.change(await passwordField(), { target: { value: PLOT_PASSWORD } });
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
 
-    await screen.findByText('หมายเลขหรือรหัสยืนยันแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ');
+    await screen.findByText('หมายเลขหรือรหัส Supplier ตรวจแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ');
     expect((await passwordField()).value).toBe(PLOT_PASSWORD);
   });
 
@@ -2297,7 +2297,7 @@ describe('PublicInspect — enforcement-mode lookup (round 8-9D Parts G/J)', () 
     renderPublicInspect();
     await enterPhonePasswordAndLookupExpectingFailure();
 
-    const message = await screen.findByText('หมายเลขหรือรหัสยืนยันแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ');
+    const message = await screen.findByText('หมายเลขหรือรหัส Supplier ตรวจแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ');
     expect(message).toBeTruthy();
     expect(screen.queryByText(/รหัสไม่ถูกต้อง$/)).toBeNull();
     expect(screen.queryByText(/ไม่พบหมายเลข/)).toBeNull();
@@ -2320,7 +2320,7 @@ describe('PublicInspect — enforcement-mode lookup (round 8-9D Parts G/J)', () 
     renderPublicInspect();
     await enterPhonePasswordAndLookupExpectingFailure();
 
-    expect(await screen.findByText('รหัสยืนยันแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก')).toBeTruthy();
+    expect(await screen.findByText('รหัส Supplier ตรวจแปลงต้องเป็นตัวเลข 4 ถึง 20 หลัก')).toBeTruthy();
     expect(document.body.textContent).not.toContain('LEAKY-SERVER-DETAIL-do-not-render');
   });
 
@@ -2334,7 +2334,7 @@ describe('PublicInspect — enforcement-mode lookup (round 8-9D Parts G/J)', () 
 
     fireEvent.change(await waitForEntryForm(), { target: { value: REAL_PHONE } });
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
-    expect(await screen.findByText('กรุณากรอกรหัสยืนยันแปลง')).toBeTruthy();
+    expect(await screen.findByText('กรุณากรอกรหัส Supplier ตรวจแปลง')).toBeTruthy();
     expect(lookupMock).not.toHaveBeenCalled();
 
     // With the code supplied, the qrKey travels in the SAME body as the
@@ -2401,7 +2401,7 @@ describe('PublicInspect — one password, many plots (round 8-9D Parts H/I)', ()
     fireEvent.click(screen.getByRole('button', { name: 'กลับรายการแปลง' }));
 
     expect(await screen.findByText('เลือกแปลงที่จะตรวจ')).toBeTruthy();
-    expect(screen.queryByLabelText(/^รหัสยืนยันแปลง/)).toBeNull();
+    expect(screen.queryByLabelText(/^รหัส Supplier ตรวจแปลง/)).toBeNull();
     expect(lookupMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2419,7 +2419,7 @@ describe('PublicInspect — one password, many plots (round 8-9D Parts H/I)', ()
     fireEvent.click(screen.getByRole('button', { name: 'ตรวจแปลงถัดไป' }));
 
     expect(await screen.findByText('เลือกแปลงที่จะตรวจ')).toBeTruthy();
-    expect(screen.queryByLabelText(/^รหัสยืนยันแปลง/)).toBeNull();
+    expect(screen.queryByLabelText(/^รหัส Supplier ตรวจแปลง/)).toBeNull();
     expect(lookupMock).toHaveBeenCalledTimes(1);
     // a second plot in the same session — still no re-entry
     fireEvent.click(screen.getByRole('radio', { name: 'เกษตรกร' }));
@@ -2607,7 +2607,7 @@ describe('PublicInspect — the password is never persisted anywhere (round 8-9D
     lookupMock.mockRejectedValueOnce({ isAxiosError: true, response: { status: 404 } });
     renderPublicInspect();
     await enterPhonePasswordAndLookupExpectingFailure();
-    await screen.findByText('หมายเลขหรือรหัสยืนยันแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ');
+    await screen.findByText('หมายเลขหรือรหัส Supplier ตรวจแปลงไม่ถูกต้อง หรือยังไม่ได้รับอนุญาตให้เข้าตรวจ');
 
     for (const spy of spies) {
       for (const call of spy.mock.calls) {
@@ -2647,7 +2647,7 @@ describe('PublicInspect — password field accessibility and layout (round 8-9D 
 
     const label = document.querySelector('label[for="plot-access-password"]');
     expect(label).toBeTruthy();
-    expect(label?.textContent).toContain('รหัสยืนยันแปลง');
+    expect(label?.textContent).toContain('รหัส Supplier ตรวจแปลง');
     expect(input.id).toBe('plot-access-password');
   });
 
@@ -2665,7 +2665,7 @@ describe('PublicInspect — password field accessibility and layout (round 8-9D 
     fireEvent.change(await waitForEntryForm(), { target: { value: REAL_PHONE } });
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหาแปลง' }));
 
-    const alert = await screen.findByText('กรุณากรอกรหัสยืนยันแปลง');
+    const alert = await screen.findByText('กรุณากรอกรหัส Supplier ตรวจแปลง');
     expect(alert.getAttribute('role')).toBe('alert');
     expect((await passwordField()).getAttribute('aria-invalid')).toBe('true');
   });
@@ -2674,7 +2674,7 @@ describe('PublicInspect — password field accessibility and layout (round 8-9D 
     renderPublicInspect();
     const phone = await waitForEntryForm();
     const password = await passwordField();
-    const toggle = screen.getByRole('button', { name: 'แสดงรหัสยืนยันแปลง' });
+    const toggle = screen.getByRole('button', { name: 'แสดงรหัส Supplier ตรวจแปลง' });
     const submit = screen.getByRole('button', { name: 'ค้นหาแปลง' });
 
     // No element overrides tabindex, so DOM order IS tab order.
@@ -2721,7 +2721,7 @@ describe('PublicInspect — password field accessibility and layout (round 8-9D 
   it('the row is fluid: the input can shrink and the button cannot, so nothing overflows at 320px', async () => {
     renderPublicInspect();
     const input = await passwordField();
-    const toggle = screen.getByRole('button', { name: 'แสดงรหัสยืนยันแปลง' });
+    const toggle = screen.getByRole('button', { name: 'แสดงรหัส Supplier ตรวจแปลง' });
 
     // min-w-0 + flex-1 is what actually stops a flex child from forcing its
     // parent wider than the viewport on a 320px phone.
@@ -2748,7 +2748,7 @@ describe('PublicInspect — the capability answer is never allowed to go stale (
     configMock.mockResolvedValue(CONFIG_PHONE_ONLY);
     const first = renderPublicInspect();
     await waitForEntryForm();
-    expect(screen.queryByLabelText(/^รหัสยืนยันแปลง/)).toBeNull();
+    expect(screen.queryByLabelText(/^รหัส Supplier ตรวจแปลง/)).toBeNull();
     first.unmount();
 
     configMock.mockResolvedValue(CONFIG_PASSWORD_REQUIRED);
@@ -2768,7 +2768,7 @@ describe('PublicInspect — the capability answer is never allowed to go stale (
     renderPublicInspect();
 
     await waitForEntryForm();
-    await waitFor(() => expect(screen.queryByLabelText(/^รหัสยืนยันแปลง/)).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText(/^รหัส Supplier ตรวจแปลง/)).toBeNull());
   });
 
   it('a remount always passes through the loading gate — never renders from a cached posture', async () => {

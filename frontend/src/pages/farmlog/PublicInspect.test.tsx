@@ -152,7 +152,7 @@ function jpegFile(name: string): File {
  * following `fireEvent.click` on Submit would hit the hard photoProcessing
  * guard and silently no-op. */
 async function pickPhotoAndWait(index: number, file: File) {
-  fireEvent.change(screen.getAllByLabelText(/เลือกรูป/)[index], { target: { files: [file] } });
+  fireEvent.change(screen.getAllByLabelText(/เลือกไฟล์/)[index], { target: { files: [file] } });
   await waitFor(() => expect(screen.queryByText('กำลังเตรียมรูป...')).toBeNull());
 }
 
@@ -1080,7 +1080,7 @@ describe('PublicInspect — round 8-14B: photo processing gates submit', () => {
     prepareInspectionPhotoMock.mockReturnValue(new Promise(() => {})); // never settles
     await goToFormStep();
 
-    fireEvent.change(screen.getAllByLabelText(/เลือกรูป/)[0], { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getAllByLabelText(/เลือกไฟล์/)[0], { target: { files: [jpegFile('a.jpg')] } });
     await screen.findByText('กำลังเตรียมรูป...');
 
     const submitBtn = screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }) as HTMLButtonElement;
@@ -1092,7 +1092,7 @@ describe('PublicInspect — round 8-14B: photo processing gates submit', () => {
     prepareInspectionPhotoMock.mockReturnValue(new Promise(() => {})); // never settles
     await goToFormStep();
 
-    fireEvent.change(screen.getAllByLabelText(/เลือกรูป/)[0], { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getAllByLabelText(/เลือกไฟล์/)[0], { target: { files: [jpegFile('a.jpg')] } });
     await screen.findByText('กำลังเตรียมรูป...');
 
     const submitBtn = screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }) as HTMLButtonElement;

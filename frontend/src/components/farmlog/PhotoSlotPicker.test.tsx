@@ -83,22 +83,31 @@ describe('countSelectedPhotos / slot layout', () => {
 });
 
 describe('PhotoSlotPicker — static rendering', () => {
-  it('renders one input per slot with the allowlisted accept attribute', () => {
+  it('renders TWO inputs per slot (camera + file), both with the allowlisted accept attribute', () => {
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
-    expect(screen.getAllByLabelText(/เลือกรูป/)).toHaveLength(MAX_PHOTO_COUNT);
+    expect(screen.getAllByLabelText(/ถ่ายรูป/)).toHaveLength(MAX_PHOTO_COUNT);
+    expect(screen.getAllByLabelText(/เลือกไฟล์/)).toHaveLength(MAX_PHOTO_COUNT);
     for (const label of PHOTO_SLOT_LABELS) {
-      const input = screen.getByLabelText(`เลือกรูป ${label}`) as HTMLInputElement;
-      expect(input.accept).toBe(ALLOWED_PHOTO_MIME_TYPES.join(','));
+      const cameraInput = screen.getByLabelText(`ถ่ายรูป ${label}`) as HTMLInputElement;
+      const fileInput = screen.getByLabelText(`เลือกไฟล์ ${label}`) as HTMLInputElement;
+      expect(cameraInput.accept).toBe(ALLOWED_PHOTO_MIME_TYPES.join(','));
+      expect(fileInput.accept).toBe(ALLOWED_PHOTO_MIME_TYPES.join(','));
     }
   });
 
-  // Round 8-25L — capture="environment" used to force mobile browsers
-  // straight into the camera app, with no way to attach an existing photo.
-  it('never sets the capture attribute — mobile must offer camera AND gallery/files, not camera-only', () => {
+  // Round 8-25L.1 — a single input with no `capture` fixed file selection
+  // but then lost the camera option outright on some mobile browsers (round
+  // 8-25L's fix was too broad). Two separate inputs guarantee both choices
+  // unconditionally: the camera one always carries capture="environment",
+  // the file one never does — see the component's own comment for why this
+  // replaced relying on one OS chooser sheet.
+  it('the camera input always carries capture="environment"; the file input never does', () => {
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
     for (const label of PHOTO_SLOT_LABELS) {
-      const input = screen.getByLabelText(`เลือกรูป ${label}`) as HTMLInputElement;
-      expect(input.hasAttribute('capture')).toBe(false);
+      const cameraInput = screen.getByLabelText(`ถ่ายรูป ${label}`) as HTMLInputElement;
+      const fileInput = screen.getByLabelText(`เลือกไฟล์ ${label}`) as HTMLInputElement;
+      expect(cameraInput.getAttribute('capture')).toBe('environment');
+      expect(fileInput.hasAttribute('capture')).toBe(false);
     }
   });
 
@@ -146,7 +155,7 @@ describe('PhotoSlotPicker — 24: shows a processing state while preparing', () 
     prepareMock.mockReturnValue(d.promise);
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
 
-    const input = screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`) as HTMLInputElement;
+    const input = screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`) as HTMLInputElement;
     fireEvent.change(input, { target: { files: [jpegFile()] } });
 
     expect(await screen.findByText('กำลังเตรียมรูป...')).toBeTruthy();
@@ -167,7 +176,7 @@ describe('PhotoSlotPicker — 25: onProcessingChange transitions', () => {
     await waitFor(() => expect(onProcessingChange).toHaveBeenCalledWith(false));
     onProcessingChange.mockClear();
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
     await waitFor(() => expect(onProcessingChange).toHaveBeenCalledWith(true));
 
     d.resolve(webpResult('inspection-photo-1.webp'));
@@ -182,7 +191,7 @@ describe('PhotoSlotPicker — 26: onChange only fires after prepare succeeds', (
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
     await screen.findByText('กำลังเตรียมรูป...');
     expect(onChange).not.toHaveBeenCalled();
 
@@ -195,7 +204,7 @@ describe('PhotoSlotPicker — 26: onChange only fires after prepare succeeds', (
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [pdfFile()] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [pdfFile()] } });
 
     expect(await screen.findByText(UNSUPPORTED_TYPE_MESSAGE)).toBeTruthy();
     expect(onChange).not.toHaveBeenCalled();
@@ -209,7 +218,7 @@ describe('PhotoSlotPicker — 27: a failed prepare never overwrites an existing 
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={[oldFile, null, null, null, null]} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('bad.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('bad.jpg')] } });
 
     await screen.findByText('เตรียมรูปไม่สำเร็จ');
     expect(onChange).not.toHaveBeenCalled();
@@ -226,7 +235,7 @@ describe('PhotoSlotPicker — 28: a faster second pick beats a slower first pick
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={onChange} />);
 
-    const input = screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`);
+    const input = screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`);
     fireEvent.change(input, { target: { files: [jpegFile('A.jpg')] } });
     // Let A's queued task actually reach (and start awaiting)
     // prepareInspectionPhoto — round 8-14B.1's early stale-check runs
@@ -256,7 +265,7 @@ describe('PhotoSlotPicker — 29: removing during processing prevents the stale 
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={[oldFile, null, null, null, null]} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('replacement.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('replacement.jpg')] } });
     await screen.findByText('กำลังเตรียมรูป...');
 
     fireEvent.click(screen.getByLabelText(`ลบรูป ${PHOTO_SLOT_LABELS[0]}`));
@@ -281,7 +290,7 @@ describe('PhotoSlotPicker — 30: no setState after unmount', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { unmount } = render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
     await screen.findByText('กำลังเตรียมรูป...');
     unmount();
 
@@ -304,7 +313,7 @@ describe('PhotoSlotPicker — 31: preview URL revoke (async path)', () => {
     const { rerender } = render(<PhotoSlotPicker slots={[oldFile, null, null, null, null]} onChange={onChange} />);
     revokeSpy.mockClear();
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('new.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('new.jpg')] } });
     await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
     const [nextSlots] = onChange.mock.calls[0];
     rerender(<PhotoSlotPicker slots={nextSlots} onChange={onChange} />);
@@ -330,8 +339,8 @@ describe('PhotoSlotPicker — 32: slot order is preserved under concurrent picks
     render(<PhotoSlotPicker slots={currentSlots} onChange={onChange} />);
 
     // 1. Pick slot 0 and slot 2 back-to-back.
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('c.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('c.jpg')] } });
 
     // 2. Slot 0 succeeds (processing is serialized, so slot 2's own prepare
     // call can't even start until slot 0's queue slot clears).
@@ -366,8 +375,8 @@ describe('PhotoSlotPicker — round 8-14B.1: multi-slot race hardening', () => {
     // "remove stays available during a replacement" design.
     render(<PhotoSlotPicker slots={[null, null, jpegFile('existing-c.jpg'), null, null]} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('replacement-c.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('replacement-c.jpg')] } });
 
     // Slot 2's queued task is still waiting behind slot 0 — cancel it now.
     fireEvent.click(screen.getByLabelText(`ลบรูป ${PHOTO_SLOT_LABELS[2]}`));
@@ -388,8 +397,8 @@ describe('PhotoSlotPicker — round 8-14B.1: multi-slot race hardening', () => {
     prepareMock.mockReturnValueOnce(slot0.promise);
     const { unmount } = render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('c.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('c.jpg')] } });
 
     unmount();
     slot0.resolve(webpResult('inspection-photo-1.webp'));
@@ -407,7 +416,7 @@ describe('PhotoSlotPicker — round 8-14B.1: multi-slot race hardening', () => {
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={[null, null, jpegFile('existing-c.jpg'), null, null]} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
     slot0.resolve(webpResult('inspection-photo-1.webp', { file: new File(['a'], 'a.webp', { type: 'image/webp' }) }));
     await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
 
@@ -429,8 +438,8 @@ describe('PhotoSlotPicker — round 8-14B.1: multi-slot race hardening', () => {
       onChange={() => {}} onProcessingChange={onProcessingChange} />);
     await waitFor(() => expect(onProcessingChange).toHaveBeenCalledWith(false));
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('replacement-c.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile('a.jpg')] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[2]}`), { target: { files: [jpegFile('replacement-c.jpg')] } });
     await waitFor(() => expect(onProcessingChange).toHaveBeenLastCalledWith(true));
 
     // Cancel slot 2 (its queued task hasn't started) before slot 0 resolves.
@@ -446,7 +455,7 @@ describe('PhotoSlotPicker — 33: generic per-slot filename passed to the compre
     prepareMock.mockResolvedValue(webpResult('inspection-photo-5.webp'));
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
 
-    fireEvent.change(screen.getByLabelText('เลือกรูป ปัญหาอื่นๆ'), { target: { files: [jpegFile('IMG_private.jpg')] } });
+    fireEvent.change(screen.getByLabelText('เลือกไฟล์ ปัญหาอื่นๆ'), { target: { files: [jpegFile('IMG_private.jpg')] } });
 
     await waitFor(() => expect(prepareMock).toHaveBeenCalledWith(expect.any(File), 'inspection-photo-5.webp'));
   });
@@ -460,7 +469,7 @@ describe('PhotoSlotPicker — 34: non-blocking fallback warning', () => {
     const onChange = vi.fn();
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText(`เลือกรูป ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
+    fireEvent.change(screen.getByLabelText(`เลือกไฟล์ ${PHOTO_SLOT_LABELS[0]}`), { target: { files: [jpegFile()] } });
 
     expect(await screen.findByText(ENCODER_UNSUPPORTED_WARNING)).toBeTruthy();
     await waitFor(() => expect(onChange).toHaveBeenCalledOnce());

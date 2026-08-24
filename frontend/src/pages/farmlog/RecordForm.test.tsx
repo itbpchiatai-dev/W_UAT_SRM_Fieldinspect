@@ -650,7 +650,7 @@ describe('RecordForm — round 8-14B: photo processing gates submit', () => {
     prepareInspectionPhotoMock.mockReturnValue(new Promise(() => {})); // never settles
     await goToNewRecordForm();
 
-    fireEvent.change(screen.getAllByLabelText(/เลือกรูป/)[0], { target: { files: [new File(['x'], 'a.jpg', { type: 'image/jpeg' })] } });
+    fireEvent.change(screen.getAllByLabelText(/เลือกไฟล์/)[0], { target: { files: [new File(['x'], 'a.jpg', { type: 'image/jpeg' })] } });
     await screen.findByText('กำลังเตรียมรูป...');
 
     const submitBtn = screen.getByRole('button', { name: 'บันทึก' }) as HTMLButtonElement;
@@ -661,7 +661,7 @@ describe('RecordForm — round 8-14B: photo processing gates submit', () => {
     prepareInspectionPhotoMock.mockReturnValue(new Promise(() => {})); // never settles
     await goToNewRecordForm();
 
-    fireEvent.change(screen.getAllByLabelText(/เลือกรูป/)[0], { target: { files: [new File(['x'], 'a.jpg', { type: 'image/jpeg' })] } });
+    fireEvent.change(screen.getAllByLabelText(/เลือกไฟล์/)[0], { target: { files: [new File(['x'], 'a.jpg', { type: 'image/jpeg' })] } });
     await screen.findByText('กำลังเตรียมรูป...');
 
     const submitBtn = screen.getByRole('button', { name: 'บันทึก' }) as HTMLButtonElement;
@@ -678,7 +678,7 @@ describe('RecordForm — round 8-14B: photo processing gates submit', () => {
     createRecordWithPhotosMock.mockResolvedValue({ id: 'rec-1' });
     await goToNewRecordForm();
 
-    fireEvent.change(screen.getAllByLabelText(/เลือกรูป/)[0], { target: { files: [new File(['x'], 'IMG_private.jpg', { type: 'image/jpeg' })] } });
+    fireEvent.change(screen.getAllByLabelText(/เลือกไฟล์/)[0], { target: { files: [new File(['x'], 'IMG_private.jpg', { type: 'image/jpeg' })] } });
     await waitFor(() => expect(screen.queryByText('กำลังเตรียมรูป...')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 

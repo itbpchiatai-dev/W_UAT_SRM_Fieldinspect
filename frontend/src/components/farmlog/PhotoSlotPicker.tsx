@@ -40,7 +40,7 @@
  * doesn't leak blob URLs.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Loader2, X } from 'lucide-react';
+import { Camera, ImagePlus, Loader2, X } from 'lucide-react';
 
 // Round 8-17B Part C — lib/inspection-photo-compression (canvas decode/
 // encode work) is dynamic-imported instead of a static top-level import, so
@@ -88,6 +88,22 @@ interface Props {
 }
 
 export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange }: Props) {
+  // Round 8-25L.1 — two separate inputs per slot, not one. Dropping
+  // `capture="environment"` (round 8-25L) fixed gallery/file selection but
+  // then LOST the camera option outright on some mobile browsers: without
+  // `capture`, whether the OS chooser sheet even offers "Camera" alongside
+  // "Files/Photos" is inconsistent across browsers/devices — there is no
+  // single <input> incantation that reliably guarantees BOTH everywhere.
+  // Two explicit buttons, each wired to its own hidden input (one plain, one
+  // capture="environment"), guarantees both choices unconditionally instead
+  // of gambling on one OS sheet's contents.
+  const cameraInputRefs = [
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+  ];
   const fileInputRefs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
@@ -255,23 +271,39 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
                 <span className="text-[11px]">กำลังเตรียมรูป...</span>
               </div>
             ) : (
-              <button type="button" disabled={disabled} onClick={() => fileInputRefs[idx].current?.click()}
-                className="flex h-24 w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600 disabled:opacity-50">
-                <Camera className="h-5 w-5" />
-                <span className="text-[11px]">ถ่าย/เลือกรูป</span>
-              </button>
+              // Round 8-25L.1 — two explicit choices, not one combined
+              // button: on mobile, "ถ่ายรูป" opens the camera directly
+              // (capture="environment" on its own hidden input) while
+              // "เลือกไฟล์" opens the OS's normal file/gallery picker (no
+              // capture on ITS hidden input) — see the refs' comment above
+              // for why this replaced the single-button, single-input,
+              // OS-chooser-dependent version.
+              <div className="flex h-24 w-full gap-1">
+                <button type="button" disabled={disabled} onClick={() => cameraInputRefs[idx].current?.click()}
+                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600 disabled:opacity-50">
+                  <Camera className="h-5 w-5" />
+                  <span className="text-[10px]">ถ่ายรูป</span>
+                </button>
+                <button type="button" disabled={disabled} onClick={() => fileInputRefs[idx].current?.click()}
+                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600 disabled:opacity-50">
+                  <ImagePlus className="h-5 w-5" />
+                  <span className="text-[10px]">เลือกไฟล์</span>
+                </button>
+              </div>
             )}
-            {/* Round 8-25L — no `capture` attribute. `capture="environment"`
-                used to force mobile browsers straight into the camera app,
-                skipping their native "Camera / Photo Library / Files" chooser
-                entirely — there was no way to attach an existing photo from
-                a plot inspection on a phone. Dropping it restores that
-                OS-native choice; desktop is unaffected either way (capture
-                is a no-op there). */}
+            <input
+              ref={cameraInputRefs[idx]}
+              type="file"
+              aria-label={`ถ่ายรูป ${label}`}
+              accept={ALLOWED_PHOTO_MIME_TYPES.join(',')}
+              capture="environment"
+              className="hidden"
+              onChange={(e) => pick(idx, e)}
+            />
             <input
               ref={fileInputRefs[idx]}
               type="file"
-              aria-label={`เลือกรูป ${label}`}
+              aria-label={`เลือกไฟล์ ${label}`}
               accept={ALLOWED_PHOTO_MIME_TYPES.join(',')}
               className="hidden"
               onChange={(e) => pick(idx, e)}

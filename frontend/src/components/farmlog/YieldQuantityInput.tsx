@@ -60,7 +60,16 @@ export interface YieldQuantityInputProps {
   error?: string | null;
 }
 
-const inputCls = 'w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
+// Round 8-25N — explicit bg-white/text-gray-900, same fix and same reason
+// as PublicInspect.tsx's own inputCls: with no explicit background/text
+// color, `html { color-scheme: light dark }` (index.css) lets the BROWSER
+// auto-dark-theme this input the instant the device's OS is in dark mode —
+// independent of our app's own .dark class. This component's caller-side
+// card (RecordForm's "ผลผลิต (Yield)" section AND PublicInspect's Yield
+// card) is a fixed light-green/white box either way, never one of the
+// pages' dark-mode-aware bg-card sections — so a fixed light input here is
+// consistent with its surrounding card in both callers, not just a patch.
+const inputCls = 'w-full rounded-md border border-gray-300 bg-white text-gray-900 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
 
 export function YieldQuantityInput({
   quantityKg,

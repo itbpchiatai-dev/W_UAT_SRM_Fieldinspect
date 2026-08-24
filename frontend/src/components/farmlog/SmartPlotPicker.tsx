@@ -208,7 +208,11 @@ export function SmartPlotPicker({ supplierId, value, onChange, disabled, error }
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   placeholder="ค้นหารหัส / ชื่อแปลง"
-                  className="w-full rounded-md border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  // Round 8-25N — explicit bg-white/text-gray-900: same
+                  // browser-auto-dark-widget fix as PublicInspect/
+                  // YieldQuantityInput's inputCls (see their comments) —
+                  // this modal is a fixed bg-white sheet in both callers.
+                  className="w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
                 />
               </div>
               <button

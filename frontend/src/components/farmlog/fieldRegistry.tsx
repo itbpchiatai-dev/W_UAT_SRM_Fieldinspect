@@ -10,8 +10,13 @@
 import type { FieldDefinition, FieldType } from '../../api/fielddefs';
 import { OptionButtons } from './OptionButtons';
 
+// Round 8-25N — explicit bg-white/text-gray-900, same browser-auto-dark-
+// widget fix as PublicInspect/YieldQuantityInput/SmartPlotPicker (see their
+// comments) — every "ฟิลด์เพิ่มเติม" custom field renders inside one of
+// those pages' fixed light-card sections in both RecordForm and
+// PublicInspect.
 const inputCls =
-  'w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
+  'w-full rounded-md border border-gray-300 bg-white text-gray-900 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
 
 export type FieldValue = string | number | boolean | null;
 

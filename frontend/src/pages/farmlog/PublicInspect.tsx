@@ -231,7 +231,21 @@ export function computeIsFormDirty(
   return keys.some((k) => fields[k] !== baseline[k]);
 }
 
-const inputCls = 'w-full rounded-md border border-gray-300 px-3 py-3 text-base shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500';
+// Round 8-25N — explicit bg-white/text-gray-900, not just border/padding.
+// index.css declares `html { color-scheme: light dark }` globally (so the
+// admin app's OWN dark-mode toggle can theme native widgets like
+// scrollbars/date-pickers when the user opts into it) — but that same
+// declaration makes the BROWSER auto-dark-theme any input with no explicit
+// background/text color the instant the DEVICE's OS is in dark mode,
+// regardless of our app's own theme state. This page has no theme toggle
+// at all and is fixed-light by design (every card here is bg-white) — the
+// inputs were the one place that design intent was never actually
+// declared, so a phone in system dark mode got dark-filled, light-card
+// inputs: readable individually, but visually broken (this is what the
+// screenshot in round 8-25N showed — a different root cause from round
+// 8-25M's RecordForm fix, which was our OWN .dark class cascading, not the
+// browser's UA default).
+const inputCls = 'w-full rounded-md border border-gray-300 bg-white text-gray-900 px-3 py-3 text-base shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500';
 const primaryBtnCls = 'flex w-full items-center justify-center gap-2 rounded-md bg-green-600 px-4 py-4 text-base font-semibold text-white shadow-sm hover:bg-green-700 disabled:opacity-50';
 const secondaryBtnCls = 'w-full rounded-md border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50';
 

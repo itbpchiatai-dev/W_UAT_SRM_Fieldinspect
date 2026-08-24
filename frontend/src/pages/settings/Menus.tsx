@@ -26,6 +26,7 @@ import {
   type MenuCreatePayload,
 } from '../../api/menus';
 import { listPermissions } from '../../api/permissions';
+import { ActionMenu } from '../../components/ActionMenu';
 import type { MenuItemTree } from '../../types/auth';
 
 const menuSchema = z.object({
@@ -146,44 +147,37 @@ export function Menus() {
                       <span className="ml-2 text-xs text-muted-foreground">{node.path}</span>
                     ) : null}
                   </span>
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => move(node, -1)}
-                      className="rounded-md p-1.5 hover:bg-secondary"
-                      aria-label={t('settings.menus.moveUp')}
-                    >
-                      <ChevronUp className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(node, 1)}
-                      className="rounded-md p-1.5 hover:bg-secondary"
-                      aria-label={t('settings.menus.moveDown')}
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditing(node)}
-                      className="rounded-md p-1.5 hover:bg-secondary"
-                      aria-label={t('common.edit')}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (confirm(t('settings.menus.confirmDelete', { key: node.key }))) {
-                          deleteM.mutate(node.id);
-                        }
-                      }}
-                      className="rounded-md p-1.5 text-destructive hover:bg-destructive/10"
-                      aria-label={t('common.delete')}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
+                  {/* Round 8-25H — one ActionMenu trigger for all 4 actions,
+                      matching Users/Roles/farmlog admin tables. Reorder
+                      (↑/↓) moving into the menu was a deliberate call — see
+                      the round brief — the user chose "all 4" over keeping
+                      ↑/↓ inline despite reordering meaning repeated
+                      open-menu-click cycles. */}
+                  <ActionMenu
+                    ariaLabel={`${t('common.actions')}: ${node.key}`}
+                    items={[
+                      {
+                        key: 'move-up', label: t('settings.menus.moveUp'), icon: ChevronUp,
+                        onClick: () => move(node, -1),
+                      },
+                      {
+                        key: 'move-down', label: t('settings.menus.moveDown'), icon: ChevronDown,
+                        onClick: () => move(node, 1),
+                      },
+                      {
+                        key: 'edit', label: t('common.edit'), icon: Pencil,
+                        onClick: () => setEditing(node),
+                      },
+                      {
+                        key: 'delete', label: t('common.delete'), icon: Trash2, danger: true,
+                        onClick: () => {
+                          if (confirm(t('settings.menus.confirmDelete', { key: node.key }))) {
+                            deleteM.mutate(node.id);
+                          }
+                        },
+                      },
+                    ]}
+                  />
                 </li>
               );
             })}

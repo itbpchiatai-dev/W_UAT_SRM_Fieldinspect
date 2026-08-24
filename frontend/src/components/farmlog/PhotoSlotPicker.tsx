@@ -261,12 +261,18 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
                 <span className="text-[11px]">ถ่าย/เลือกรูป</span>
               </button>
             )}
+            {/* Round 8-25L — no `capture` attribute. `capture="environment"`
+                used to force mobile browsers straight into the camera app,
+                skipping their native "Camera / Photo Library / Files" chooser
+                entirely — there was no way to attach an existing photo from
+                a plot inspection on a phone. Dropping it restores that
+                OS-native choice; desktop is unaffected either way (capture
+                is a no-op there). */}
             <input
               ref={fileInputRefs[idx]}
               type="file"
               aria-label={`เลือกรูป ${label}`}
               accept={ALLOWED_PHOTO_MIME_TYPES.join(',')}
-              capture="environment"
               className="hidden"
               onChange={(e) => pick(idx, e)}
             />

@@ -92,6 +92,16 @@ describe('PhotoSlotPicker — static rendering', () => {
     }
   });
 
+  // Round 8-25L — capture="environment" used to force mobile browsers
+  // straight into the camera app, with no way to attach an existing photo.
+  it('never sets the capture attribute — mobile must offer camera AND gallery/files, not camera-only', () => {
+    render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
+    for (const label of PHOTO_SLOT_LABELS) {
+      const input = screen.getByLabelText(`เลือกรูป ${label}`) as HTMLInputElement;
+      expect(input.hasAttribute('capture')).toBe(false);
+    }
+  });
+
   it('labels the photos as optional (ไม่บังคับ)', () => {
     render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
     expect(screen.getByText('รูปถ่ายแปลง (ไม่บังคับ)')).toBeTruthy();

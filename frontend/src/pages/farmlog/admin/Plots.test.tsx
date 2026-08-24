@@ -3843,3 +3843,27 @@ describe('Plots list — partial identity/access-number search (round 8-18B.1)',
     expect(JSON.stringify(call)).not.toContain('5552');
   });
 });
+
+// Round 8-25I — a shortcut to the PUBLIC (no-login) inspection entry point,
+// for admins who want to open/demo it without a phone.
+describe('Plots list — public inspect shortcut (round 8-25I)', () => {
+  it('links to /public/inspect and opens in a new tab', async () => {
+    listPlotsMock.mockResolvedValue([
+      {
+        id: 'plot-1', supplierId: 'sup-1', plotCode: 'SUP001-P001', name: 'แปลงทดสอบ',
+        village: null, district: null, province: 'จังหวัดทดสอบ',
+        latitude: '13.7563000', longitude: '100.5018000',
+        isActive: true, assignedCount: 0, primaryPhone: null, additionalPhones: [],
+      },
+    ]);
+    renderPlotsPage();
+    await screen.findByText('SUP001-P001');
+
+    const link = screen.getByRole('link', { name: /เปิดหน้าตรวจแปลง \(Public\)/ });
+    expect(link.getAttribute('href')).toBe('/public/inspect');
+    expect(link.getAttribute('target')).toBe('_blank');
+    // rel="noopener noreferrer" — a target="_blank" link without it lets the
+    // opened page reach back into this window via window.opener.
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+});

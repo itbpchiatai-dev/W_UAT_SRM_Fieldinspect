@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   Download,
+  ExternalLink,
   Eye,
   Loader2,
   MapPin,
@@ -1149,6 +1150,24 @@ export function Plots() {
               {supplierPrintLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
               พิมพ์ QR ทั้ง Supplier
             </button>
+            {/* Round 8-25I — shortcut to the PUBLIC (no-login) inspection
+                entry point, for admins who want to open/demo it without a
+                phone. Relative path so it resolves correctly in every
+                environment (dev/UAT/prod) without hardcoding a domain.
+                Opens in a new tab: this leaves the authenticated admin app
+                entirely, and text/icon deliberately differ from the other
+                buttons here (which all act ON this page's own data) to
+                signal that. */}
+            <a
+              href="/public/inspect"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="เปิดหน้าตรวจแปลงสำหรับ Field Officer (ไม่ต้อง login) ในแท็บใหม่"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:bg-secondary hover:text-foreground"
+            >
+              <ExternalLink className="h-4 w-4" />
+              เปิดหน้าตรวจแปลง (Public)
+            </a>
           </div>
         </div>
       </header>

@@ -30,6 +30,7 @@ import {
 } from '../../api/users';
 import { listSuppliers, type SupplierSummary } from '../../api/suppliers';
 import { listRoles } from '../../api/roles';
+import { ActionMenu } from '../../components/ActionMenu';
 import { useAuth } from '../../hooks/useAuth';
 import { useHasPermission } from '../../hooks/useHasPermission';
 import { groupByCategory, listPermissions } from '../../api/permissions';
@@ -243,28 +244,31 @@ export function Users() {
                     {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <div className="flex justify-end gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(u.id)}
-                        className="rounded-md p-1.5 text-foreground hover:bg-secondary"
-                        aria-label={t('common.edit')}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!u.isActive}
-                        onClick={() => {
-                          if (confirm(t('settings.users.confirmDeactivate', { email: u.email }))) {
-                            deactivateM.mutate(u.id);
-                          }
-                        }}
-                        className="rounded-md p-1.5 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
-                        aria-label={t('settings.users.deactivate')}
-                      >
-                        <UserX className="h-4 w-4" />
-                      </button>
+                    {/* Round 8-25H — one ActionMenu trigger, matching the
+                        farmlog admin tables (Plots/Suppliers/RecordList/
+                        MasterData). Edit's aria-label used to be the row's
+                        only lookup target for openEditor() in tests; the
+                        item's accessible NAME (screen.getByRole('menuitem'))
+                        takes over that role now. */}
+                    <div className="flex justify-end">
+                      <ActionMenu
+                        ariaLabel={`${t('common.actions')}: ${u.email}`}
+                        items={[
+                          {
+                            key: 'edit', label: t('common.edit'), icon: Pencil,
+                            onClick: () => setEditingId(u.id),
+                          },
+                          {
+                            key: 'deactivate', label: t('settings.users.deactivate'), icon: UserX, danger: true,
+                            disabled: !u.isActive,
+                            onClick: () => {
+                              if (confirm(t('settings.users.confirmDeactivate', { email: u.email }))) {
+                                deactivateM.mutate(u.id);
+                              }
+                            },
+                          },
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

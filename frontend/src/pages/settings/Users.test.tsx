@@ -107,11 +107,14 @@ function renderPage() {
   );
 }
 
-/** Open the Edit modal for the single listed user. The row's edit button
- * is identified by its aria-label (t('common.edit')), not by DOM position. */
+/** Open the Edit modal for the single listed user. Round 8-25H — the row's
+ * edit action moved behind one ActionMenu trigger, so open that first; the
+ * menu item is then identified by its accessible name (t('common.edit')),
+ * not by DOM position. */
 async function openEditor() {
   await screen.findByText('target@example.invalid');
-  fireEvent.click(await screen.findByRole('button', { name: 'common.edit' }));
+  fireEvent.click(await screen.findByRole('button', { name: /common\.actions/ }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'common.edit' }));
   await screen.findByRole('dialog');
 }
 
@@ -480,5 +483,33 @@ describe('Add Local User error recovery', () => {
 
     await waitFor(() => expect(createUserMock).toHaveBeenCalledTimes(1));
     expect(createUserMock.mock.calls[0][0].password).toBeUndefined();
+  });
+});
+
+// Round 8-25H — row actions moved behind one ActionMenu trigger, matching
+// the farmlog admin tables.
+describe('row actions — ActionMenu (round 8-25H)', () => {
+  it('hides both actions behind one trigger until opened', async () => {
+    renderPage();
+    await screen.findByText('target@example.invalid');
+
+    expect(screen.queryByRole('menuitem', { name: 'common.edit' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'settings.users.deactivate' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /common\.actions/ }));
+
+    expect(screen.getByRole('menuitem', { name: 'common.edit' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'settings.users.deactivate' })).toBeTruthy();
+  });
+
+  it('disables the deactivate item for an already-inactive user', async () => {
+    listUsersMock.mockResolvedValue([summary({ isActive: false })]);
+    renderPage();
+    await screen.findByText('target@example.invalid');
+
+    fireEvent.click(screen.getByRole('button', { name: /common\.actions/ }));
+
+    expect(screen.getByRole('menuitem', { name: 'settings.users.deactivate' }).hasAttribute('disabled'))
+      .toBe(true);
   });
 });

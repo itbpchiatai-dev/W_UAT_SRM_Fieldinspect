@@ -1541,6 +1541,114 @@ describe('Plots list — "รอบปลูกปัจจุบัน" filter 
   });
 });
 
+describe('Plots list — "วันที่เริ่ม...ถึง" planting-date filter (round 8-25K)', () => {
+  function onePlot() {
+    return [
+      {
+        id: 'plot-1', supplierId: 'sup-1', supplierCode: 'SUP001', supplierName: 'Supplier One', qrKey: 'qr-1', plotCode: 'SUP001-P001', name: 'แปลงทดสอบ',
+        village: null, district: null, province: 'จังหวัดทดสอบ',
+        latitude: null, longitude: null,
+        isActive: true, assignedCount: 0, primaryPhone: null, additionalPhones: [],
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    listPlotsMock.mockResolvedValue(onePlot());
+  });
+
+  it('forwards both bounds to listPlots', async () => {
+    renderPlotsPage();
+    await screen.findByText('แปลงทดสอบ');
+
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (ถึง)'), { target: { value: '2026-08-31' } });
+
+    await waitFor(() => expect(hasListPlotsCallContaining({
+      plantingDateFrom: '2026-08-01', plantingDateTo: '2026-08-31',
+    })).toBe(true));
+  });
+
+  it('forwards a single bound alone — the other stays undefined, not an empty string', async () => {
+    renderPlotsPage();
+    await screen.findByText('แปลงทดสอบ');
+
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
+
+    await waitFor(() => expect(hasListPlotsCallContaining({
+      plantingDateFrom: '2026-08-01', plantingDateTo: undefined,
+    })).toBe(true));
+  });
+
+  it('resets to the first page when either bound changes', async () => {
+    // "ถัดไป →" is disabled unless the current page is FULL (plots.length
+    // >= pageSize) — a full 100-row page is needed to reach page 2 at all.
+    listPlotsMock.mockResolvedValue(Array.from({ length: 100 }, (_, i) => ({
+      ...onePlot()[0], id: `plot-${i}`, plotCode: `SUP001-P${i}`,
+    })));
+    renderPlotsPage();
+    await screen.findByText('SUP001-P0');
+    fireEvent.click(await screen.findByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(hasListPlotsCallContaining({ offset: 100 })).toBe(true));
+
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
+
+    await waitFor(() => expect(hasListPlotsCallContaining({ offset: 0, plantingDateFrom: '2026-08-01' })).toBe(true));
+  });
+
+  it('ล้างค่า clears both date bounds too', async () => {
+    renderPlotsPage();
+    await screen.findByText('แปลงทดสอบ');
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (ถึง)'), { target: { value: '2026-08-31' } });
+    await waitFor(() => expect(hasListPlotsCallContaining({ plantingDateFrom: '2026-08-01' })).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'ล้างค่า' }));
+
+    await waitFor(() => expect(hasListPlotsCallContaining({
+      plantingDateFrom: undefined, plantingDateTo: undefined,
+    })).toBe(true));
+    expect((screen.getByLabelText('วันที่เริ่ม (จาก)') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('วันที่เริ่ม (ถึง)') as HTMLInputElement).value).toBe('');
+  });
+
+  it('forwards both bounds to searchPlotsByPhone in phone-search mode', async () => {
+    searchPlotsByPhoneMock.mockResolvedValue(onePlot());
+    renderPlotsPage();
+    await screen.findByText('แปลงทดสอบ');
+
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
+    await waitFor(() => expect(hasListPlotsCallContaining({ plantingDateFrom: '2026-08-01' })).toBe(true));
+
+    fireEvent.change(screen.getByLabelText(ACCESS_NUMBER_LABEL), { target: { value: '0812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ค้นหา' }));
+
+    await waitFor(() => {
+      const call = searchPlotsByPhoneMock.mock.calls[0]?.[0] as { plantingDateFrom?: string } | undefined;
+      expect(call?.plantingDateFrom).toBe('2026-08-01');
+    });
+  });
+
+  it('is NEVER forwarded to the Excel template download — list-only, same precedent as the access-number search box', async () => {
+    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    renderPlotsPage();
+    await screen.findByText('แปลงทดสอบ');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
+    fireEvent.click(within(await screen.findByRole('listbox')).getByText('SUP001'));
+    fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
+    await waitFor(() => expect(hasListPlotsCallContaining({ plantingDateFrom: '2026-08-01' })).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+
+    await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalled());
+    const call = downloadPlotImportTemplateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty('plantingDateFrom');
+    expect(call).not.toHaveProperty('plantingDateTo');
+  });
+});
+
 describe('Plots list — rows-per-page selector (100 / 200 / 500 / ทั้งหมด)', () => {
   function onePlot() {
     return [

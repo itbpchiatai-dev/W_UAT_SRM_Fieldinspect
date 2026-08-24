@@ -181,6 +181,12 @@ class PlotPhoneSearchRequest(CamelBaseModel):
     # same reason as cycle_label: it is plot identity, never PII, so a
     # Pydantic auto-422 echoing it is harmless — unlike `phone` above.
     q: str | None = None
+    # Round 8-25K — "วันที่เริ่ม...ถึง", scoped to the plot's ACTIVE
+    # PlotCycle.planting_date only (same scope as cycle_label above — see
+    # plot_repository._apply_planting_date_filter's docstring). Plain `date`,
+    # not PII, ordinary Pydantic auto-422 on a malformed value is fine.
+    planting_date_from: date | None = None
+    planting_date_to: date | None = None
 
 
 class PlotAccessPhoneRead(CamelBaseModel):

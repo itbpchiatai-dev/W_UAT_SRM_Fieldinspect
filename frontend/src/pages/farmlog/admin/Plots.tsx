@@ -654,6 +654,14 @@ export function Plots() {
   // Round 8-18 — "รอบปลูกปัจจุบัน" (cycleLabel) filter: matches ONLY a
   // plot's ACTIVE PlotCycle, exact match, never a closed/historical cycle.
   const [filterCycleLabel, setFilterCycleLabel] = useState<string>('');
+  // Round 8-25K — "วันที่เริ่ม...ถึง": matches ONLY the plot's ACTIVE
+  // PlotCycle.plantingDate (same "active cycle only" scope as
+  // filterCycleLabel above), never a closed/historical cycle's. Deliberately
+  // NOT forwarded to the Excel template download (handleDownloadTemplate
+  // below) — same precedent as the access-number search box, which the
+  // template's own filter summary already calls out as list-only.
+  const [filterPlantingDateFrom, setFilterPlantingDateFrom] = useState<string>('');
+  const [filterPlantingDateTo, setFilterPlantingDateTo] = useState<string>('');
   // Round 8-6I Part D — plot status filter ("สถานะแปลง"): ทั้งหมด/ใช้งาน/
   // ปิดใช้งาน. Round 8-17A.2 Part B — default changed from 'all' to 'active'
   // (DEFAULT_PLOT_STATUS): a fresh visit to the Plots page should show only
@@ -744,8 +752,8 @@ export function Plots() {
     // (visible to React Query devtools / any cache inspection) can't carry
     // the PII itself.
     queryKey: phoneSearchDigits
-      ? ['plots', 'phone', page, pageSize, phoneSearchNonce, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleLabel]
-      : ['plots', 'text', page, pageSize, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleLabel],
+      ? ['plots', 'phone', page, pageSize, phoneSearchNonce, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleLabel, filterPlantingDateFrom, filterPlantingDateTo]
+      : ['plots', 'text', page, pageSize, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleLabel, filterPlantingDateFrom, filterPlantingDateTo],
     queryFn: () => {
       // Round 8-17A.2 Part C/D — secure phone search: POST body, never
       // listPlots' GET ?q=. The other filters (supplier/province/crop/
@@ -763,6 +771,8 @@ export function Plots() {
           variety: filterVariety || undefined,
           plotStatus: filterPlotStatus,
           cycleLabel: filterCycleLabel || undefined,
+          plantingDateFrom: filterPlantingDateFrom || undefined,
+          plantingDateTo: filterPlantingDateTo || undefined,
         };
         if (pageSize === 'all') {
           return fetchAllPages(
@@ -780,6 +790,8 @@ export function Plots() {
         variety: filterVariety || undefined,
         plotStatus: filterPlotStatus,
         cycleLabel: filterCycleLabel || undefined,
+        plantingDateFrom: filterPlantingDateFrom || undefined,
+        plantingDateTo: filterPlantingDateTo || undefined,
       };
       // "ทั้งหมด": page through every match under the hood (single logical
       // page, so prev/next are disabled below). Otherwise fetch one window.
@@ -855,6 +867,7 @@ export function Plots() {
   const hasActiveFilters = q.trim() !== '' || searchText.trim() !== '' || phoneText.trim() !== ''
     || filterSupplier !== ''
     || filterProvince !== '' || filterCrop !== '' || filterVariety !== '' || filterCycleLabel !== ''
+    || filterPlantingDateFrom !== '' || filterPlantingDateTo !== ''
     || filterPlotStatus !== DEFAULT_PLOT_STATUS || phoneSearchDigits !== null;
 
   function applySearch() {
@@ -925,6 +938,8 @@ export function Plots() {
     setFilterCrop('');
     setFilterVariety('');
     setFilterCycleLabel('');
+    setFilterPlantingDateFrom('');
+    setFilterPlantingDateTo('');
     setFilterPlotStatus(DEFAULT_PLOT_STATUS);
     setSupplierPrintError('');
     setTemplateError(null);
@@ -1434,6 +1449,44 @@ export function Plots() {
             placeholder="ค้นหารอบปลูก..."
             emptyMessage="ไม่พบรอบปลูก"
           />
+          {/* Round 8-25K — "วันที่เริ่ม...ถึง": matches ONLY the plot's
+              ACTIVE PlotCycle.plantingDate (same scope as the รอบปลูกปัจจุบัน
+              combobox above it). Real <label htmlFor> + id, not title/
+              aria-label alone — round 8-25E already established that a
+              placeholder is not a substitute for a visible label on a date
+              input (native browsers ignore it, showing only mm/dd/yyyy). */}
+          <div className="min-w-[160px]">
+            <label htmlFor="plot-filter-planting-date-from" className="mb-1 block text-xs font-medium text-muted-foreground">
+              วันที่เริ่ม (จาก)
+            </label>
+            <input
+              id="plot-filter-planting-date-from"
+              type="date"
+              value={filterPlantingDateFrom}
+              onChange={(e) => {
+                setPage(0);
+                setFilterPlantingDateFrom(e.target.value);
+                setTemplateError(null);
+              }}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <div className="min-w-[160px]">
+            <label htmlFor="plot-filter-planting-date-to" className="mb-1 block text-xs font-medium text-muted-foreground">
+              วันที่เริ่ม (ถึง)
+            </label>
+            <input
+              id="plot-filter-planting-date-to"
+              type="date"
+              value={filterPlantingDateTo}
+              onChange={(e) => {
+                setPage(0);
+                setFilterPlantingDateTo(e.target.value);
+                setTemplateError(null);
+              }}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
         </div>
       </div>
 

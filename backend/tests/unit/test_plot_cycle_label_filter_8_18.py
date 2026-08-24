@@ -185,7 +185,7 @@ async def test_list_plots_endpoint_forwards_cycle_label():
     mocked.assert_awaited_once_with(
         ANY, supplier_id=None, province=None, crop=None, variety=None,
         limit=50, offset=0, q=None, active_only=False, plot_status="all",
-        cycle_label="jun2026",
+        cycle_label="jun2026", planting_date_from=None, planting_date_to=None,
     )
 
 

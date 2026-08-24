@@ -97,6 +97,17 @@ describe('plots query params', () => {
       params: { cycle_label: 'jun2026' },
     });
   });
+
+  // Round 8-25K — "วันที่เริ่ม...ถึง" filter.
+  it('listPlots sends plantingDateFrom/To as planting_date_from/to', async () => {
+    const getSpy = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: [] });
+
+    await listPlots({ plantingDateFrom: '2026-08-01', plantingDateTo: '2026-08-31' });
+
+    expect(getSpy).toHaveBeenCalledWith('/api/v1/plots', {
+      params: { planting_date_from: '2026-08-01', planting_date_to: '2026-08-31' },
+    });
+  });
 });
 
 describe('listPlotCycleLabels (round 8-18)', () => {
@@ -179,6 +190,20 @@ describe('searchPlotsByPhone', () => {
     expect((body as { q?: string }).q).toBe('SUP001-P002');
     expect(url).not.toContain('?');
     expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  // Round 8-25K — same filter as listPlots, still camelCase here (POST body,
+  // parsed by CamelBaseModel — unlike the GET query-param snake_case above).
+  it('carries plantingDateFrom/To camelCase in the POST body', async () => {
+    const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: [] });
+
+    await searchPlotsByPhone({
+      phone: '0812345678', plantingDateFrom: '2026-08-01', plantingDateTo: '2026-08-31',
+    });
+
+    const body = postSpy.mock.calls[0][1] as { plantingDateFrom?: string; plantingDateTo?: string };
+    expect(body.plantingDateFrom).toBe('2026-08-01');
+    expect(body.plantingDateTo).toBe('2026-08-31');
   });
 
   it('omits q when only a number is searched', async () => {

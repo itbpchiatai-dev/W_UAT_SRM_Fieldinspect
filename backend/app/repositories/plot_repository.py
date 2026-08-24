@@ -172,6 +172,46 @@ def _apply_cycle_label_filter(stmt, *, cycle_label: str | None):
     return stmt.where(exists_clause)
 
 
+def _apply_planting_date_filter(
+    stmt, *, planting_date_from: datetime.date | None, planting_date_to: datetime.date | None,
+):
+    """"วันที่เริ่ม...ถึง" filter (round 8-25K) — shared by list_plots and
+    search_plots_by_phone, same one-place pattern as
+    _apply_cycle_label_filter above (kept next to it deliberately: both are
+    EXISTS clauses scoped to the plot's ACTIVE PlotCycle only).
+
+    Filters on PlotCycle.planting_date — the same date already shown on this
+    page as "ปลูก: <date>" (Plots.tsx's plantingDateLabel, sourced from
+    activeCyclePlantingDate) — not started_at/closed_at, which belong to a
+    DIFFERENT, already-existing "สถานะแปลง" filter one dropdown over. Explicit
+    product decision (round 8-25K brief): a closed/historical cycle's
+    planting_date never matches, even if it falls inside the range — same
+    "active cycle only" scope as cycle_label, so the two filters can be
+    combined without surprising interaction (e.g. "รอบปลูกปัจจุบัน" + this one
+    always describe the SAME cycle, never two different ones on the same
+    plot).
+
+    Each bound is independent and inclusive (>=/<=) — either can be given
+    alone, matching the record-date filter's date_from/date_to convention in
+    record_repository.list_records. No date_from > date_to guard: neither
+    that filter nor this one enforces ordering — an inverted range is simply
+    over-constrained and returns zero rows, which is self-evidently wrong to
+    the person who typed it, not a state worth a 422 for.
+    """
+    if planting_date_from is None and planting_date_to is None:
+        return stmt
+    conditions = [
+        PlotCycle.plot_id == Plot.id,
+        PlotCycle.status == "active",
+    ]
+    if planting_date_from is not None:
+        conditions.append(PlotCycle.planting_date >= planting_date_from)
+    if planting_date_to is not None:
+        conditions.append(PlotCycle.planting_date <= planting_date_to)
+    exists_clause = select(PlotCycle.id).where(*conditions).exists()
+    return stmt.where(exists_clause)
+
+
 def apply_plot_text_filter(stmt, *, q: str | None):
     """Round 8-18B — the free-text "ชื่อแปลงหรือรหัสแปลง" filter, in ONE place
     shared by list_plots, search_plots_by_phone and the template endpoint's
@@ -208,6 +248,8 @@ async def list_plots(
     active_only: bool = False,
     plot_status: str = "all",
     cycle_label: str | None = None,
+    planting_date_from: datetime.date | None = None,
+    planting_date_to: datetime.date | None = None,
 ) -> list[Plot]:
     stmt = (
         select(Plot)
@@ -239,6 +281,9 @@ async def list_plots(
     if variety:
         stmt = stmt.where(Plot.current_variety == variety)
     stmt = _apply_cycle_label_filter(stmt, cycle_label=cycle_label)
+    stmt = _apply_planting_date_filter(
+        stmt, planting_date_from=planting_date_from, planting_date_to=planting_date_to,
+    )
     stmt = _apply_plot_status_filter(stmt, plot_status=plot_status, active_only=active_only)
     stmt = apply_plot_text_filter(stmt, q=q)
     stmt = stmt.limit(limit).offset(offset)
@@ -258,6 +303,8 @@ async def search_plots_by_phone(
     plot_status: str = "all",
     cycle_label: str | None = None,
     q: str | None = None,
+    planting_date_from: datetime.date | None = None,
+    planting_date_to: datetime.date | None = None,
 ) -> list[Plot]:
     """Round 8-17A.2 — secure phone search: same result shape/eager-loading
     and same supplier/province/crop/variety/plot_status/cycle_label filters
@@ -328,6 +375,9 @@ async def search_plots_by_phone(
     if variety:
         stmt = stmt.where(Plot.current_variety == variety)
     stmt = _apply_cycle_label_filter(stmt, cycle_label=cycle_label)
+    stmt = _apply_planting_date_filter(
+        stmt, planting_date_from=planting_date_from, planting_date_to=planting_date_to,
+    )
     stmt = _apply_plot_status_filter(stmt, plot_status=plot_status, active_only=False)
     stmt = apply_plot_text_filter(stmt, q=q)
     stmt = stmt.limit(limit).offset(offset)

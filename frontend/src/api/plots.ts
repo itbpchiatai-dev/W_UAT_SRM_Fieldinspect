@@ -247,6 +247,13 @@ export interface PlotListParams {
    * after trim. Sourced from listPlotCycleLabels' real values, not free
    * text. */
   cycleLabel?: string;
+  /** "วันที่เริ่ม...ถึง" filter (round 8-25K) — matches ONLY the plot's
+   * ACTIVE PlotCycle.plantingDate (the same date this page already shows as
+   * "ปลูก: <date>"), never a closed/historical cycle's — same scope as
+   * cycleLabel above. ISO date strings (YYYY-MM-DD); either bound alone is
+   * valid. */
+  plantingDateFrom?: string;
+  plantingDateTo?: string;
 }
 
 export interface PlotProvinceListParams {
@@ -312,6 +319,8 @@ export async function listPlots(params: PlotListParams = {}): Promise<PlotSummar
       active_only: params.activeOnly,
       plot_status: params.plotStatus,
       cycle_label: params.cycleLabel,
+      planting_date_from: params.plantingDateFrom,
+      planting_date_to: params.plantingDateTo,
     },
   });
   return res.data;
@@ -335,6 +344,10 @@ export interface PlotPhoneSearchParams {
    * forces a fallback to GET /plots?q= (which would put the phone in a URL).
    * Matches plotCode/plotName only — never province. */
   q?: string;
+  /** Round 8-25K — same "วันที่เริ่ม...ถึง" filter as PlotListParams; see
+   * its docstring. */
+  plantingDateFrom?: string;
+  plantingDateTo?: string;
 }
 
 /**
@@ -361,6 +374,8 @@ export async function searchPlotsByPhone(params: PlotPhoneSearchParams): Promise
     offset: params.offset,
     cycleLabel: params.cycleLabel,
     q: params.q,
+    plantingDateFrom: params.plantingDateFrom,
+    plantingDateTo: params.plantingDateTo,
   });
   return res.data;
 }

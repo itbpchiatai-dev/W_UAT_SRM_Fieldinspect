@@ -182,6 +182,7 @@ async def test_endpoint_forwards_the_validated_digits_to_the_repository():
     mocked.assert_awaited_once_with(
         ANY, "0812345678", supplier_id=None, province=None, crop=None, variety=None,
         limit=50, offset=0, plot_status="all", cycle_label=None, q=None,
+        planting_date_from=None, planting_date_to=None,
     )
     assert len(result) == 1
 
@@ -204,6 +205,7 @@ async def test_endpoint_forwards_every_optional_filter():
         ANY, "0812345678", supplier_id=supplier_id, province="เชียงใหม่",
         crop="พริก", variety="พริกขี้หนู", limit=10, offset=20, plot_status="active",
         cycle_label="jun2026", q="SUP001-P002",
+        planting_date_from=None, planting_date_to=None,
     )
 
 

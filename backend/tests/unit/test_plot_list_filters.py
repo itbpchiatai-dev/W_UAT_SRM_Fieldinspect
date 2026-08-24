@@ -66,6 +66,8 @@ async def test_list_plots_passes_province_filter_to_repository() -> None:
         active_only=True,
         plot_status="all",
         cycle_label=None,
+        planting_date_from=None,
+        planting_date_to=None,
     )
     assert result[0].province == "Chiang Mai"
 
@@ -91,6 +93,8 @@ async def test_list_plots_passes_crop_and_variety_filters_to_repository() -> Non
         active_only=False,
         plot_status="all",
         cycle_label=None,
+        planting_date_from=None,
+        planting_date_to=None,
     )
     assert result[0].current_crop == "พริก"
 

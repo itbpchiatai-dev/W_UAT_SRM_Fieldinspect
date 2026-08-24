@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -883,6 +883,8 @@ async def list_plots(
     active_only: bool = False,
     plot_status: PlotStatusFilter = "all",
     cycle_label: str | None = None,
+    planting_date_from: date | None = None,
+    planting_date_to: date | None = None,
 ) -> list[PlotSummary]:
     _check_plot_status_conflict(plot_status, active_only)
     plots = await repo.list_plots(
@@ -897,6 +899,8 @@ async def list_plots(
         active_only=active_only,
         plot_status=plot_status,
         cycle_label=cycle_label,
+        planting_date_from=planting_date_from,
+        planting_date_to=planting_date_to,
     )
     return [_to_summary(p) for p in plots]
 
@@ -1024,6 +1028,8 @@ async def search_plots_by_phone(
         plot_status=payload.plot_status,
         cycle_label=payload.cycle_label,
         q=payload.q,
+        planting_date_from=payload.planting_date_from,
+        planting_date_to=payload.planting_date_to,
     )
     return [_to_summary(p) for p in plots]
 

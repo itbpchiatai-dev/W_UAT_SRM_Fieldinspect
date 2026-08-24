@@ -88,7 +88,7 @@ async def test_list_plots_plot_status_all_returns_both_active_and_inactive():
     mocked.assert_awaited_once_with(
         ANY, supplier_id=None, province=None, crop=None, variety=None,
         limit=50, offset=0, q=None, active_only=False, plot_status="all",
-        cycle_label=None,
+        cycle_label=None, planting_date_from=None, planting_date_to=None,
     )
     assert {p.is_active for p in result} == {True, False}
 
@@ -142,7 +142,7 @@ async def test_list_plots_supplier_and_other_filters_still_forwarded_with_plot_s
     mocked.assert_awaited_once_with(
         ANY, supplier_id=supplier_id, province="Chiang Mai", crop="พริก", variety="พริกขี้หนู",
         limit=50, offset=0, q="P001", active_only=False, plot_status="inactive",
-        cycle_label=None,
+        cycle_label=None, planting_date_from=None, planting_date_to=None,
     )
 
 

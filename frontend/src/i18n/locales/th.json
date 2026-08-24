@@ -78,8 +78,10 @@
       "new": "เพิ่มผู้ใช้",
       "edit": "แก้ไขผู้ใช้",
       "deactivate": "ปิดใช้งาน",
+      "activate": "เปิดใช้งาน",
       "searchPlaceholder": "ค้นหาจากอีเมล",
       "confirmDeactivate": "ยืนยันปิดใช้งาน {{email}}?",
+      "confirmActivate": "ยืนยันเปิดใช้งาน {{email}}?",
       "tabs": {
         "profile": "โปรไฟล์",
         "overrides": "สิทธิ์เพิ่มเติม"

@@ -78,8 +78,10 @@
       "new": "New user",
       "edit": "Edit user",
       "deactivate": "Deactivate",
+      "activate": "Activate",
       "searchPlaceholder": "Search by email",
       "confirmDeactivate": "Deactivate {{email}}?",
+      "confirmActivate": "Activate {{email}}?",
       "tabs": {
         "profile": "Profile",
         "overrides": "Overrides"

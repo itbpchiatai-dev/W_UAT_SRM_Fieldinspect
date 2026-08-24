@@ -89,6 +89,10 @@ const userSchema = z.object({
   roleNames: z.array(z.string()).default([]),
   supplierId: z.string().nullable().optional(),
   isSupplierAdmin: z.boolean().default(false),
+  // Round 8-25J — edit-only; the create form always creates an active user
+  // (backend defaults is_active=True on create and doesn't accept the field
+  // there), so this only ever reads/writes on mode === 'edit'.
+  isActive: z.boolean().default(true),
 });
 type UserFormValues = z.infer<typeof userSchema>;
 
@@ -384,6 +388,7 @@ function UserEditor({ mode, userId, onClose }: UserEditorProps) {
       roleNames: existing?.roles?.map((r) => r.name) ?? [],
       supplierId: existing?.supplierId ?? null,
       isSupplierAdmin: existing?.isSupplierAdmin ?? false,
+      isActive: existing?.isActive ?? true,
     }),
     [existing],
   );
@@ -439,9 +444,15 @@ function UserEditor({ mode, userId, onClose }: UserEditorProps) {
         };
         await createUser(payload);
       } else if (userId) {
+        // isActive omitted entirely when editing your own account — the
+        // toggle is hidden for that case (below), but the backend ALSO
+        // 403s on any non-null isActive in a self-PATCH (even one matching
+        // the current value), so this can't just send the unchanged value.
+        const isSelf = existing?.id === currentUser?.id;
         await updateUser(userId, {
           fullName: values.fullName,
           roleNames: values.roleNames,
+          ...(isSelf ? {} : { isActive: values.isActive }),
           ...supplierPayload,
         });
       }
@@ -579,6 +590,49 @@ function UserEditor({ mode, userId, onClose }: UserEditorProps) {
                   <input type="checkbox" {...register('isSupplierAdmin')} />
                   <span>เป็น Supplier Admin (supplier:owner)</span>
                 </label>
+              </div>
+            ) : null}
+
+            {/* Round 8-25J — activate/deactivate toggle inside the edit
+                form. Before this round the ONLY way to flip a user back on
+                after deactivating them was a direct API call — the list's
+                ActionMenu only ever offered "ปิดการใช้งาน" (disabled once
+                already inactive) and this form had no such field at all,
+                so a routine password reset on a deactivated account looked
+                like it silently failed (see round 8-25I's investigation).
+                Same self-guard as the list's deactivate action and the
+                password-reset section below — the backend 403s on ANY
+                isActive value in a self-PATCH, so the control is hidden
+                rather than just disabled. */}
+            {mode === 'edit' && existing && existing.id !== currentUser?.id ? (
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-secondary/20 p-3">
+                <div>
+                  <span className="text-sm font-medium">{t('settings.users.fields.active')}</span>
+                  <p className="text-xs text-muted-foreground">
+                    {watch('isActive') ? t('common.yes') : t('common.no')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !watch('isActive');
+                    const label = t(next ? 'settings.users.confirmActivate' : 'settings.users.confirmDeactivate', {
+                      email: existing.email,
+                    });
+                    if (confirm(label)) setValue('isActive', next, { shouldDirty: true });
+                  }}
+                  className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
+                    watch('isActive') ? 'border-success bg-success' : 'border-border bg-input'
+                  }`}
+                  aria-label={t(watch('isActive') ? 'settings.users.deactivate' : 'settings.users.activate')}
+                  title={t(watch('isActive') ? 'settings.users.deactivate' : 'settings.users.activate')}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow ring-1 ring-black/5 transition-transform ${
+                      watch('isActive') ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
               </div>
             ) : null}
 

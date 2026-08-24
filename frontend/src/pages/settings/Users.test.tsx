@@ -513,3 +513,86 @@ describe('row actions — ActionMenu (round 8-25H)', () => {
       .toBe(true);
   });
 });
+
+// Round 8-25J — before this round, resetting a deactivated user's password
+// (or editing any other field) never reactivated them: the row's ActionMenu
+// only offers "ปิดการใช้งาน" (disabled once inactive) and the edit form had
+// no isActive control at all. The toggle here closes that gap.
+describe('activate/deactivate toggle in the edit form (round 8-25J)', () => {
+  it('shows the toggle, reflecting the target\'s current isActive state', async () => {
+    renderPage();
+    await openEditor();
+
+    // The list header behind the modal uses this SAME i18n key for its own
+    // "ใช้งาน" column — waitFor a COUNT of 2 (list header + the form's own
+    // label), not just findAllByText, which would resolve the instant the
+    // first (list-only) match appears, before existing/defaults load.
+    await waitFor(() => expect(screen.getAllByText('settings.users.fields.active').length).toBe(2));
+    expect(await screen.findByRole('button', { name: 'settings.users.deactivate' })).toBeTruthy();
+  });
+
+  it('hides the toggle entirely when the target IS the caller (no self-deactivation)', async () => {
+    listUsersMock.mockResolvedValue([summary({ id: CALLER_ID })]);
+    getUserMock.mockResolvedValue(detail({ id: CALLER_ID }));
+    renderPage();
+    await openEditor();
+    // Let the getUser() query settle before asserting an absence — an early
+    // query means "not rendered yet", not "correctly hidden".
+    await waitFor(() => expect(getUserMock).toHaveBeenCalled());
+
+    // Only the list header's column title remains — not the form's copy too.
+    expect(screen.getAllByText('settings.users.fields.active').length).toBe(1);
+    expect(screen.queryByRole('button', { name: 'settings.users.deactivate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.users.activate' })).toBeNull();
+  });
+
+  it('flips to inactive after confirm, and Save sends isActive:false', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    updateUserMock.mockResolvedValue(detail());
+    renderPage();
+    await openEditor();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.users.deactivate' }));
+    // The toggle re-labels itself once off — proves the flip actually
+    // landed in form state, not just that confirm() was called.
+    expect(await screen.findByRole('button', { name: 'settings.users.activate' })).toBeTruthy();
+
+    fireEvent.click(screen.getByText('common.save'));
+
+    await waitFor(() => expect(updateUserMock).toHaveBeenCalledOnce());
+    expect(updateUserMock.mock.calls[0][1]).toMatchObject({ isActive: false });
+  });
+
+  it('does not flip when the confirm dialog is cancelled', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderPage();
+    await openEditor();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.users.deactivate' }));
+
+    // Still on — the cancelled confirm must not have changed form state.
+    expect(screen.getByRole('button', { name: 'settings.users.deactivate' })).toBeTruthy();
+  });
+
+  it('omits isActive from the payload entirely when saving your own profile', async () => {
+    listUsersMock.mockResolvedValue([summary({ id: CALLER_ID })]);
+    getUserMock.mockResolvedValue(detail({ id: CALLER_ID }));
+    updateUserMock.mockResolvedValue(detail({ id: CALLER_ID }));
+    renderPage();
+    await openEditor();
+    // Neither the reset-password section nor the isActive toggle render for
+    // a self-target (both correctly hidden), so unlike the other tests in
+    // this block there is no on-screen element whose APPEARANCE proves
+    // getUser() has resolved and react-hook-form has reset its `values` from
+    // it. Wait on the fullName field's actual value instead — clicking Save
+    // before that lands submits the form's still-blank initial defaults and
+    // fails validation (email/fullName both "required"), which looks
+    // identical to "updateUser was never called" from the outside.
+    await screen.findByDisplayValue('Target User');
+
+    fireEvent.click(screen.getByText('common.save'));
+
+    await waitFor(() => expect(updateUserMock).toHaveBeenCalledOnce());
+    expect(updateUserMock.mock.calls[0][1]).not.toHaveProperty('isActive');
+  });
+});

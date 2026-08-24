@@ -235,15 +235,15 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700">รูปถ่ายแปลง (ไม่บังคับ)</span>
-        <span className={`text-sm font-semibold ${count > 0 ? 'text-green-700' : 'text-gray-400'}`}>
+        <span className="text-sm font-medium text-foreground">รูปถ่ายแปลง (ไม่บังคับ)</span>
+        <span className={`text-sm font-semibold ${count > 0 ? 'text-green-700' : 'text-muted-foreground'}`}>
           {count}/{MAX_PHOTO_COUNT}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {PHOTO_SLOT_LABELS.map((label, idx) => (
           <div key={label} className="space-y-1.5">
-            <p className="text-xs font-medium text-gray-600">{label}</p>
+            <p className="text-xs font-medium text-muted-foreground">{label}</p>
             {previews[idx] ? (
               <div className="relative">
                 <img
@@ -266,7 +266,7 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
                 )}
               </div>
             ) : processing[idx] ? (
-              <div className="flex h-24 w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-gray-300 text-gray-400">
+              <div className="flex h-24 w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground">
                 <Loader2 className="h-5 w-5 animate-spin text-green-600" />
                 <span className="text-[11px]">กำลังเตรียมรูป...</span>
               </div>
@@ -280,12 +280,12 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
               // OS-chooser-dependent version.
               <div className="flex h-24 w-full gap-1">
                 <button type="button" disabled={disabled} onClick={() => cameraInputRefs[idx].current?.click()}
-                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600 disabled:opacity-50">
+                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground hover:border-green-400 hover:text-green-600 disabled:opacity-50">
                   <Camera className="h-5 w-5" />
                   <span className="text-[10px]">ถ่ายรูป</span>
                 </button>
                 <button type="button" disabled={disabled} onClick={() => fileInputRefs[idx].current?.click()}
-                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-gray-300 text-gray-400 hover:border-green-400 hover:text-green-600 disabled:opacity-50">
+                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground hover:border-green-400 hover:text-green-600 disabled:opacity-50">
                   <ImagePlus className="h-5 w-5" />
                   <span className="text-[10px]">เลือกไฟล์</span>
                 </button>

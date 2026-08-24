@@ -82,7 +82,16 @@ const EMPTY: FormState = {
   latitude: null, longitude: null,
 };
 
-const inputCls = 'w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
+// Round 8-25M — dark-mode readability fix. This file used hardcoded light
+// Tailwind grays (bg-white/text-gray-800/border-gray-300 etc.) with no
+// `dark:` variants at all — unlike Plots/Suppliers/Users/Roles, which
+// already use the theme-aware semantic tokens defined in index.css
+// (bg-card/text-foreground/border-input/bg-muted, flipped by the `.dark`
+// class on <html>). AppLayout's own bg-background+text-foreground meant any
+// text here that didn't sit inside an explicit bg-white card — the page
+// title, the back button — rendered near-black text directly on the page's
+// now-near-black background in dark mode: unreadable, not just mismatched.
+const inputCls = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-muted disabled:text-muted-foreground';
 const emptyText = '—';
 
 /** Readable reason for a failed save — HTTP status + the backend's detail
@@ -117,7 +126,7 @@ function describeSubmitError(error: unknown): string {
 function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
   return (
     <div>
-      <label className="mb-1 block text-sm font-medium text-gray-700">
+      <label className="mb-1 block text-sm font-medium text-foreground">
         {label}{required && <span className="ml-1 text-red-500">*</span>}
       </label>
       {children}
@@ -390,16 +399,16 @@ export function RecordForm() {
     <div className="container mx-auto px-4 py-8 sm:px-6 lg:px-8 max-w-3xl">
       <div className="mb-6 flex items-center gap-3">
         <button onClick={() => navigate('/farmlog/records')}
-          className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground">
           <ArrowLeft className="h-5 w-5" />
         </button>
-        <h1 className="text-2xl font-bold text-gray-900">บันทึกการตรวจแปลงใหม่</h1>
+        <h1 className="text-2xl font-bold text-foreground">บันทึกการตรวจแปลงใหม่</h1>
       </div>
 
       <form onSubmit={onSubmit} className="space-y-6">
         {/* ข้อมูลพื้นฐาน */}
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-base font-semibold text-gray-800">ข้อมูลพื้นฐาน</h2>
+        <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+          <h2 className="mb-4 text-base font-semibold text-foreground">ข้อมูลพื้นฐาน</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Supplier" required>
               <select value={form.supplierId} onChange={e => { set('supplierId', e.target.value); set('plotId', ''); setSelectedPlot(null); }}
@@ -433,7 +442,7 @@ export function RecordForm() {
                   onClick={() => { setQrError(''); setQrOpen(true); }}
                   disabled={qrLookupLoading}
                   title="สแกน QR ป้ายหน้าแปลง เพื่อเลือก Supplier และแปลงอัตโนมัติ"
-                  className="flex shrink-0 items-center gap-1 rounded-md border border-gray-300 px-3 py-2 text-xs font-medium text-gray-600 shadow-sm hover:border-green-400 hover:text-green-600 disabled:opacity-50"
+                  className="flex shrink-0 items-center gap-1 rounded-md border border-input px-3 py-2 text-xs font-medium text-muted-foreground shadow-sm hover:border-green-400 hover:text-green-600 disabled:opacity-50"
                 >
                   {qrLookupLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
                   Scan QR
@@ -449,13 +458,13 @@ export function RecordForm() {
             </Field>
 
             <Field label="วันที่บันทึก">
-              <div className={`${inputCls} flex items-center bg-gray-50 text-gray-500`}>
-                {bangkokToday()} <span className="ml-2 text-xs text-gray-400">(อัตโนมัติ)</span>
+              <div className={`${inputCls} flex items-center bg-muted text-muted-foreground`}>
+                {bangkokToday()} <span className="ml-2 text-xs text-muted-foreground">(อัตโนมัติ)</span>
               </div>
             </Field>
 
             <Field label="บันทึกโดย (ผู้ใช้งานระบบ)">
-              <div className={`${inputCls} flex items-center gap-1.5 bg-gray-50 text-gray-500`}>
+              <div className={`${inputCls} flex items-center gap-1.5 bg-muted text-muted-foreground`}>
                 <UserIcon className="h-3.5 w-3.5 shrink-0" /> {filledByName || '—'}
               </div>
             </Field>
@@ -478,49 +487,49 @@ export function RecordForm() {
 
         {/* ข้อมูลแปลง (read-only, auto จาก Plot ที่เลือก) */}
         {selectedPlot && (
-          <section className="rounded-lg border border-gray-200 bg-gray-50 p-5 shadow-sm">
-            <h2 className="mb-3 text-base font-semibold text-gray-800">ข้อมูลแปลง</h2>
+          <section className="rounded-lg border border-border bg-muted p-5 shadow-sm">
+            <h2 className="mb-3 text-base font-semibold text-foreground">ข้อมูลแปลง</h2>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
               <div>
-                <dt className="text-xs text-gray-400">เลขที่แปลง</dt>
-                <dd className="font-medium text-gray-800">{selectedPlot.plotCode}</dd>
+                <dt className="text-xs text-muted-foreground">เลขที่แปลง</dt>
+                <dd className="font-medium text-foreground">{selectedPlot.plotCode}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">ชนิดพืช</dt>
-                <dd className="text-gray-700">{selectedPlot.currentCrop || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">ชนิดพืช</dt>
+                <dd className="text-foreground">{selectedPlot.currentCrop || emptyText}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">พันธุ์/สายพันธุ์</dt>
-                <dd className="text-gray-700">{selectedPlot.currentVariety || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">พันธุ์/สายพันธุ์</dt>
+                <dd className="text-foreground">{selectedPlot.currentVariety || emptyText}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">Lot No.</dt>
-                <dd className="text-gray-700">{selectedPlot.currentLotNo || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">Lot No.</dt>
+                <dd className="text-foreground">{selectedPlot.currentLotNo || emptyText}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">วันที่ปลูก</dt>
-                <dd className="text-gray-700">{selectedPlot.currentPlantingDate || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">วันที่ปลูก</dt>
+                <dd className="text-foreground">{selectedPlot.currentPlantingDate || emptyText}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">หมู่บ้าน</dt>
-                <dd className="text-gray-700">{selectedPlot.village || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">หมู่บ้าน</dt>
+                <dd className="text-foreground">{selectedPlot.village || emptyText}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">อำเภอ</dt>
-                <dd className="text-gray-700">{selectedPlot.district || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">อำเภอ</dt>
+                <dd className="text-foreground">{selectedPlot.district || emptyText}</dd>
               </div>
               <div>
-                <dt className="text-xs text-gray-400">จังหวัด</dt>
-                <dd className="text-gray-700">{selectedPlot.province || emptyText}</dd>
+                <dt className="text-xs text-muted-foreground">จังหวัด</dt>
+                <dd className="text-foreground">{selectedPlot.province || emptyText}</dd>
               </div>
               {(() => {
                 const lat = formatFixed(selectedPlot.latitude, 6);
                 const lng = formatFixed(selectedPlot.longitude, 6);
                 return lat != null && lng != null && (
                   <div className="col-span-2 sm:col-span-2">
-                    <dt className="text-xs text-gray-400">GPS แปลง</dt>
-                    <dd className="flex items-center gap-1 font-mono text-xs text-gray-700">
-                      <MapPin className="h-3 w-3 text-gray-400" />
+                    <dt className="text-xs text-muted-foreground">GPS แปลง</dt>
+                    <dd className="flex items-center gap-1 font-mono text-xs text-foreground">
+                      <MapPin className="h-3 w-3 text-muted-foreground" />
                       {lat}, {lng}
                     </dd>
                   </div>
@@ -532,8 +541,8 @@ export function RecordForm() {
 
         {/* Yield */}
         <section className="rounded-lg border border-green-200 bg-green-50/50 p-5 shadow-sm">
-          <h2 className="mb-1 text-base font-semibold text-gray-800">ผลผลิต (Yield)</h2>
-          <p className="mb-4 text-xs text-gray-500">กรอกปริมาณที่ประเมินได้เป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าหมายให้อัตโนมัติ</p>
+          <h2 className="mb-1 text-base font-semibold text-foreground">ผลผลิต (Yield)</h2>
+          <p className="mb-4 text-xs text-muted-foreground">กรอกปริมาณที่ประเมินได้เป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าหมายให้อัตโนมัติ</p>
           <YieldQuantityInput
             quantityKg={form.yieldQuantityKg}
             yieldPct={form.yieldPct}
@@ -544,7 +553,7 @@ export function RecordForm() {
             error={yieldFormError}
           />
           {selectedPlot && latestYieldPct != null && (
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-muted-foreground">
               ค่าเริ่มต้นดึงจากการตรวจล่าสุดของแปลงนี้
               {selectedPlot.lastInspectedAt
                 ? ` เมื่อ ${new Date(selectedPlot.lastInspectedAt).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}`
@@ -555,9 +564,9 @@ export function RecordForm() {
         </section>
 
         {/* การประเมินสภาพแปลง (คะแนน 1-10) — เกณฑ์ 4 ข้อตาม Protocol ของระยะ */}
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-1 text-base font-semibold text-gray-800">การประเมินสภาพแปลง (คะแนน 1–10)</h2>
-          <p className="mb-4 text-xs text-gray-500">
+        <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+          <h2 className="mb-1 text-base font-semibold text-foreground">การประเมินสภาพแปลง (คะแนน 1–10)</h2>
+          <p className="mb-4 text-xs text-muted-foreground">
             {stageProtocol
               ? `เกณฑ์ตามระยะ "${stageProtocol.growthStage}" — ต้องให้คะแนนครบทั้ง 4 ข้อ`
               : 'เกณฑ์การให้คะแนนขึ้นกับระยะการเจริญเติบโตที่เลือก'}
@@ -579,13 +588,13 @@ export function RecordForm() {
         </section>
 
         {/* GPS */}
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-base font-semibold text-gray-800">
-            พิกัด GPS ขณะตรวจ <span className="text-xs font-normal text-gray-400">(ไม่บังคับ)</span>
+        <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+          <h2 className="mb-4 text-base font-semibold text-foreground">
+            พิกัด GPS ขณะตรวจ <span className="text-xs font-normal text-muted-foreground">(ไม่บังคับ)</span>
           </h2>
           <div className="space-y-3">
             <button type="button" onClick={captureGps} disabled={gpsLoading}
-              className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50">
+              className="inline-flex items-center gap-2 rounded-md border border-input bg-card px-4 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-secondary disabled:opacity-50">
               {gpsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Navigation className="h-4 w-4 text-green-600" />}
               {gpsLoading ? 'กำลังรับตำแหน่ง GPS...' : 'บันทึก GPS ปัจจุบัน'}
             </button>
@@ -602,15 +611,15 @@ export function RecordForm() {
         </section>
 
         {/* ภาพถ่าย — 5 ช่องตายตัว ไม่บังคับ */}
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+        <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
           <PhotoSlotPicker slots={photoFiles} onChange={setPhotoFiles} disabled={false}
             onProcessingChange={setPhotoProcessing} />
         </section>
 
         {/* ฟิลด์เพิ่มเติม (custom — Step 12) */}
         {customFields.length > 0 && (
-          <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-base font-semibold text-gray-800">ฟิลด์เพิ่มเติม</h2>
+          <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+            <h2 className="mb-4 text-base font-semibold text-foreground">ฟิลด์เพิ่มเติม</h2>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {customFields.map(f => (
                 <DynamicFieldRenderer key={f.key} field={f} value={customValues[f.key] ?? null}
@@ -622,8 +631,8 @@ export function RecordForm() {
         )}
 
         {/* สรุป (text) */}
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-base font-semibold text-gray-800">สรุปและคำแนะนำ</h2>
+        <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+          <h2 className="mb-4 text-base font-semibold text-foreground">สรุปและคำแนะนำ</h2>
           <div className="space-y-4">
             <Field label="คำแนะนำ">
               <textarea value={form.recommendation} onChange={e => set('recommendation', e.target.value)}
@@ -640,7 +649,7 @@ export function RecordForm() {
 
         <div className="flex justify-end gap-3">
           <button type="button" onClick={() => navigate('/farmlog/records')}
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            className="rounded-md border border-input px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary">
             ยกเลิก
           </button>
           <button type="submit" disabled={submitting}

@@ -480,6 +480,50 @@ describe('PlotImportModal — workflow help copy (round 8-2.7.1)', () => {
     )).toBeTruthy();
   });
 
+  // Round 8-27C — the per-column rules moved into a collapsed <details> so
+  // the default view is short enough that the file picker and Confirm button
+  // stay reachable. Nothing was deleted; it is one click away.
+  it('collapses the per-column rules by default, keeping the 4 actions visible', () => {
+    renderModal();
+
+    expect(screen.getByText(/การกระทำหลัก 4 แบบ/)).toBeTruthy();
+    const details = document.querySelector('details');
+    expect(details).toBeTruthy();
+    expect(details!.hasAttribute('open')).toBe(false);
+  });
+
+  it('keeps every per-column rule available inside the collapsed section', () => {
+    renderModal();
+
+    const details = document.querySelector('details')!;
+    const text = details.textContent ?? '';
+    for (const rule of [
+      'reactivate_plot_with_cycle',
+      'กรณีพิเศษ/ไฟล์เก่า',
+      'Lot No ระบบ',
+      'Supplier Lot No',
+      'Oracle Supplier Code',
+      'เบอร์เข้าตรวจ',
+      'currentPlotStatus',
+      'นำเข้ารอบใหม่',
+    ]) {
+      expect(text).toContain(rule);
+    }
+  });
+
+  it('keeps the rules that apply to EVERY file out of the collapsed section', () => {
+    renderModal();
+
+    const details = document.querySelector('details')!;
+    // The auto-detect warning and the "use Excel ตามตัวกรอง instead" pointer
+    // decide what a user does BEFORE they open the file — burying them would
+    // defeat the point of the box.
+    expect(details.textContent).not.toContain('ระบบจะตรวจสถานะแปลงให้เอง');
+    expect(details.textContent).not.toContain('YYYY-MM-DD');
+    expect(screen.getByText(/ระบบจะตรวจสถานะแปลงให้เอง/)).toBeTruthy();
+    expect(screen.getByText(/YYYY-MM-DD/)).toBeTruthy();
+  });
+
   it('puts start_new_cycle and close_and_start_new_cycle under a "กรณีพิเศษ/ไฟล์เก่า" note, not among the three common workflows', () => {
     renderModal();
 
@@ -1921,7 +1965,9 @@ describe('PlotImportModal — Oracle reference fields (round 8-21B)', () => {
     renderModal();
 
     expect(
-      screen.getAllByText(/ต่างจาก poNumber\/pCode\/supplierLotNo ด้านบนที่เว้นว่างแล้วคงค่าเดิม/).length,
+      // Round 8-27C dropped "ด้านบน" — the columns it contrasts with are no
+      // longer above this note, they sit beside it in the collapsed section.
+      screen.getAllByText(/ต่างจาก poNumber\/pCode\/supplierLotNo ที่เว้นว่างแล้วคงค่าเดิม/).length,
     ).toBeGreaterThan(0);
   });
 });

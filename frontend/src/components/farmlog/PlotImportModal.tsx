@@ -552,83 +552,102 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
             <ul className="mt-1.5 list-disc space-y-1 pl-4">
               <li><span className="font-mono">create_plot_with_cycle</span> — สร้างแปลงพร้อมรอบแรก</li>
               <li><span className="font-mono">update_current_cycle</span> — แก้รอบปลูกปัจจุบัน</li>
-              <li><span className="font-mono">start_next_cycle</span> — เริ่มรอบถัดไป (เฉพาะแปลงที่ใช้งานอยู่)</li>
-              <li><span className="font-mono">reactivate_plot_with_cycle</span> — เปิดใช้งานแปลง + เริ่มรอบปลูกใหม่ (เฉพาะแปลงที่ปิดใช้งาน)</li>
+              <li><span className="font-mono">start_next_cycle</span> — เริ่มรอบถัดไป (แปลงที่ใช้งานอยู่)</li>
+              <li><span className="font-mono">reactivate_plot_with_cycle</span> — เปิดแปลงที่ปิดอยู่ + เริ่มรอบใหม่</li>
             </ul>
             <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-800">
               ระบบจะตรวจสถานะแปลงให้เอง หากไม่มีรอบเปิดอยู่จะเริ่มรอบใหม่ทันที
               หากมีรอบเปิดอยู่จะปิดรอบเดิมเป็นเก็บเกี่ยวแล้วและเริ่มรอบใหม่ในครั้งเดียว
             </p>
-            <p className="mt-2 rounded-md border border-blue-300 bg-blue-50 px-2 py-1.5 text-blue-800">
-              แปลงที่ปิดใช้งานอยู่: ใช้ <span className="font-mono">reactivate_plot_with_cycle</span> เท่านั้น
-              (ใช้ <span className="font-mono">start_next_cycle</span> กับแปลงปิดใช้งานไม่ได้) —
-              เมื่อยืนยันนำเข้าระบบจะเปิดแปลงกลับมาใช้งานและเริ่มรอบปลูกใหม่ในครั้งเดียว
-            </p>
             <p className="mt-2">
-              <span className="font-medium text-foreground">กรณีพิเศษ/ไฟล์เก่า:</span>{' '}
-              <span className="font-mono">start_new_cycle</span> และ{' '}
-              <span className="font-mono">close_and_start_new_cycle</span> ยังใช้งานได้เหมือนเดิม
-              (ไม่จำเป็นต้องเลือกเองแล้วสำหรับงานประจำวัน — ใช้ start_next_cycle แทนได้)
-            </p>
-            <p className="mt-1.5">
-              ต้องระบุชื่อรอบปลูก (cycleLabel) เมื่อใช้ start_next_cycle · วันที่ปลูกใช้รูปแบบ YYYY-MM-DD ·
-              1 แถวต่อแปลงต่อไฟล์
-            </p>
-            {/* Round 8-12B — the Auto Lot V2 contract, stated where the user
-                is about to fill the file in. */}
-            <p className="mt-2 rounded-md border border-border bg-background px-2 py-1.5">
-              <span className="font-medium text-foreground">Lot No ระบบ (lotNo):</span>{' '}
-              เว้น <span className="font-mono">lotNo</span> ว่าง เพื่อให้ระบบสร้างจาก
-              ชื่อรอบปลูก + รหัส Supplier + P.Code + เลขรัน
-              (เช่น <span className="font-mono">2605-SUP010-WM-141-003</span>) —
-              ต้องกรอก <span className="font-mono">cycleLabel</span> และ{' '}
-              <span className="font-mono">pCode</span> ด้วย มิฉะนั้นแถวนั้นจะไม่ผ่านการตรวจสอบ ·
-              กรอก <span className="font-mono">lotNo</span> เอง = ใช้ค่าที่กรอก (ไม่สร้างให้)
-            </p>
-            <p className="mt-2 rounded-md border border-border bg-background px-2 py-1.5">
-              <span className="font-medium text-foreground">Supplier Lot No (supplierLotNo):</span>{' '}
-              กรอกได้หาก Supplier มีเลข Lot ของตนเอง เว้นว่างได้
-              และไม่กระทบเลข Lot ที่ระบบสร้าง
-            </p>
-            {/* Round 8-21B — deliberately spells out the DIFFERENT blank-cell
-                rule for these three columns vs. every other optional column
-                in this same box (poNumber/pCode/supplierLotNo above all
-                preserve on blank). */}
-            <p className="mt-2 rounded-md border border-border bg-background px-2 py-1.5">
-              <span className="font-medium text-foreground">
-                Oracle Supplier Code / Oracle Invoice / Ref Account (oracleSupplierCode/oracleInvoice/refAccount):
-              </span>{' '}
-              ข้อมูลอ้างอิงระดับรอบปลูก ไม่บังคับ เว้นว่างได้ — สำหรับ{' '}
-              <span className="font-mono">update_current_cycle</span> ช่องที่เว้นว่าง (แต่คอลัมน์ยังอยู่ในไฟล์)
-              จะล้างค่าเดิม ต่างจาก poNumber/pCode/supplierLotNo ด้านบนที่เว้นว่างแล้วคงค่าเดิม
-            </p>
-            <p className="mt-2 rounded-md border border-border bg-background px-2 py-1.5">
-              <span className="font-medium text-foreground">เบอร์เข้าตรวจ (primaryPhone/additionalPhones):</span>{' '}
-              เว้นว่างทั้ง 2 ช่องในแปลงที่มีอยู่แล้ว = คงเบอร์เดิมไว้ ไม่แก้ไข ·
-              ระบุ primaryPhone = แทนที่ชุดเบอร์ทั้งหมดของแปลงนั้นด้วยค่าที่ให้
-              (additionalPhones ว่าง = ล้างเบอร์เสริมทั้งหมด) ·
-              ต้องการล้างเบอร์ทั้งหมดให้ใช้หน้าจัดการเบอร์เข้าตรวจของแปลงแทน
+              วันที่ปลูกใช้รูปแบบ <span className="font-mono">YYYY-MM-DD</span> · 1 แถวต่อแปลงต่อไฟล์ ·
+              เว้น <span className="font-mono">lotNo</span> ว่าง = ระบบสร้าง Lot ให้
+              (ต้องมี <span className="font-mono">cycleLabel</span> และ <span className="font-mono">pCode</span>)
             </p>
             {/* Round 8-6B Part F — points at the filtered/contextual template
                 (round 8-6A) without changing what this button does: it still
                 always downloads the generic blank template with no filter. */}
-            <p className="mt-2 rounded-md border border-border bg-background px-2 py-1.5">
+            <p className="mt-1.5">
               <span className="font-medium text-foreground">ต้องการไฟล์ที่มีข้อมูลแปลงปัจจุบัน?</span>{' '}
-              ให้เลือก Supplier/จังหวัดในหน้าแปลง แล้วกด &quot;Excel ตามตัวกรอง&quot; แทนปุ่มด้านล่างนี้
-              (ปุ่มนี้ดาวน์โหลดเทมเพลตเปล่าเสมอ)
+              ให้เลือก Supplier/จังหวัดในหน้าแปลง แล้วกด &quot;Excel ตามตัวกรอง&quot; —
+              ปุ่มด้านล่างนี้ดาวน์โหลดเทมเพลตเปล่าเสมอ
             </p>
-            <p className="mt-1.5">
-              ไฟล์จาก &quot;Excel ตามตัวกรอง&quot; มี 4 ชีต: ชีต{' '}
-              <span className="font-mono">นำเข้ารอบใหม่</span> = ชีตที่ระบบอ่าน (อัปโหลดกลับมาที่นี่ — รวมทั้งแปลงที่ใช้งานและปิดใช้งานตามตัวกรองสถานะแปลง) · ชีต{' '}
-              <span className="font-mono">ข้อมูลปัจจุบัน</span> = ใช้เปรียบเทียบก่อนแก้ (ระบบไม่อ่าน) · ชีต{' '}
-              <span className="font-mono">รายการที่ไม่รวม</span> = แปลง/Supplier ที่ถูกตัดออกพร้อมเหตุผล (ระบบไม่อ่าน) · ชีต{' '}
-              <span className="font-mono">ตัวอย่าง</span> = ข้อมูลสีแดง ระบบไม่อ่านชีตนี้
-              (เทมเพลตเปล่าจากปุ่มด้านล่างมีชีตเดียว)
-            </p>
-            <p className="mt-1.5">
-              คอลัมน์ <span className="font-mono">currentPlotStatus</span> ไว้อ้างอิงเท่านั้น —
-              แก้ค่าในช่องนี้ไม่ทำให้สถานะแปลงเปลี่ยน คอลัมน์ <span className="font-mono">action</span> เท่านั้นที่กำหนดว่าระบบจะทำอะไร
-            </p>
+
+            {/* Round 8-27C — the per-column rules below were each added for a
+                real reason (several from bugs), so none of them was deleted:
+                they were collapsed. Wide open by default they were ~10
+                paragraphs of dense Thai that pushed the file picker and the
+                Confirm button off-screen, which made the common case — "grab
+                the template, upload, confirm" — the hardest thing to reach.
+                A <details> keeps every rule one click away while the default
+                view is the four actions plus the three lines that apply to
+                every file. Everything here is ALSO on row 2 of the template
+                itself (services/plot_import.py's TEMPLATE_COLUMN_DESCRIPTIONS),
+                where a user filling the file in actually reads it. */}
+            <details className="mt-2 rounded-md border border-border bg-background">
+              <summary className="cursor-pointer select-none px-2 py-1.5 font-medium text-foreground">
+                กฎการกรอกแต่ละคอลัมน์ (คลิกเพื่อดู)
+              </summary>
+              <div className="space-y-2 border-t border-border px-2 py-2">
+                <p className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1.5 text-blue-800">
+                  แปลงที่ปิดใช้งานอยู่: ใช้ <span className="font-mono">reactivate_plot_with_cycle</span> เท่านั้น
+                  (ใช้ <span className="font-mono">start_next_cycle</span> กับแปลงปิดใช้งานไม่ได้) —
+                  เมื่อยืนยันนำเข้าระบบจะเปิดแปลงกลับมาใช้งานและเริ่มรอบปลูกใหม่ในครั้งเดียว
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">กรณีพิเศษ/ไฟล์เก่า:</span>{' '}
+                  <span className="font-mono">start_new_cycle</span> และ{' '}
+                  <span className="font-mono">close_and_start_new_cycle</span> ยังใช้งานได้เหมือนเดิม
+                  (ไม่จำเป็นต้องเลือกเองแล้วสำหรับงานประจำวัน — ใช้ start_next_cycle แทนได้)
+                </p>
+                <p>ต้องระบุชื่อรอบปลูก (cycleLabel) เมื่อใช้ start_next_cycle</p>
+                {/* Round 8-12B — the Auto Lot V2 contract. */}
+                <p>
+                  <span className="font-medium text-foreground">Lot No ระบบ (lotNo):</span>{' '}
+                  เว้นว่างเพื่อให้ระบบสร้างจาก ชื่อรอบปลูก + รหัส Supplier + P.Code + เลขรัน
+                  (เช่น <span className="font-mono">2605-SUP010-WM-141-003</span>) —
+                  ต้องกรอก <span className="font-mono">cycleLabel</span> และ{' '}
+                  <span className="font-mono">pCode</span> ด้วย มิฉะนั้นแถวนั้นจะไม่ผ่านการตรวจสอบ ·
+                  กรอกเอง = ใช้ค่าที่กรอก (ไม่สร้างให้)
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">Supplier Lot No (supplierLotNo):</span>{' '}
+                  กรอกได้หาก Supplier มีเลข Lot ของตนเอง เว้นว่างได้
+                  และไม่กระทบเลข Lot ที่ระบบสร้าง
+                </p>
+                {/* Round 8-21B — deliberately spells out the DIFFERENT
+                    blank-cell rule for these three columns vs. every other
+                    optional column (poNumber/pCode/supplierLotNo all preserve
+                    on blank). */}
+                <p>
+                  <span className="font-medium text-foreground">
+                    Oracle Supplier Code / Oracle Invoice / Ref Account:
+                  </span>{' '}
+                  ไม่บังคับ เว้นว่างได้ — สำหรับ{' '}
+                  <span className="font-mono">update_current_cycle</span> ช่องที่เว้นว่าง (แต่คอลัมน์ยังอยู่ในไฟล์)
+                  จะล้างค่าเดิม ต่างจาก poNumber/pCode/supplierLotNo ที่เว้นว่างแล้วคงค่าเดิม
+                </p>
+                <p>
+                  <span className="font-medium text-foreground">เบอร์เข้าตรวจ (primaryPhone/additionalPhones):</span>{' '}
+                  เว้นว่างทั้ง 2 ช่องในแปลงที่มีอยู่แล้ว = คงเบอร์เดิมไว้ ไม่แก้ไข ·
+                  ระบุ primaryPhone = แทนที่ชุดเบอร์ทั้งหมดของแปลงนั้นด้วยค่าที่ให้
+                  (additionalPhones ว่าง = ล้างเบอร์เสริมทั้งหมด) ·
+                  ต้องการล้างเบอร์ทั้งหมดให้ใช้หน้าจัดการเบอร์เข้าตรวจของแปลงแทน
+                </p>
+                <p>
+                  ไฟล์จาก &quot;Excel ตามตัวกรอง&quot; มี 4 ชีต: ชีต{' '}
+                  <span className="font-mono">นำเข้ารอบใหม่</span> = ชีตที่ระบบอ่าน (อัปโหลดกลับมาที่นี่ — รวมทั้งแปลงที่ใช้งานและปิดใช้งานตามตัวกรองสถานะแปลง) · ชีต{' '}
+                  <span className="font-mono">ข้อมูลปัจจุบัน</span> = ใช้เปรียบเทียบก่อนแก้ (ระบบไม่อ่าน) · ชีต{' '}
+                  <span className="font-mono">รายการที่ไม่รวม</span> = แปลง/Supplier ที่ถูกตัดออกพร้อมเหตุผล (ระบบไม่อ่าน) · ชีต{' '}
+                  <span className="font-mono">ตัวอย่าง</span> = ข้อมูลสีแดง ระบบไม่อ่านชีตนี้
+                  (เทมเพลตเปล่าจากปุ่มด้านล่างมีชีตเดียว)
+                </p>
+                <p>
+                  คอลัมน์ <span className="font-mono">currentPlotStatus</span> ไว้อ้างอิงเท่านั้น —
+                  แก้ค่าในช่องนี้ไม่ทำให้สถานะแปลงเปลี่ยน คอลัมน์ <span className="font-mono">action</span> เท่านั้นที่กำหนดว่าระบบจะทำอะไร
+                </p>
+              </div>
+            </details>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">

@@ -34,6 +34,7 @@ from app.schemas.master_data_import import (
     CropVarietyImportPreviewState,
 )
 from app.services import master_data_crop_variety_import as cv_import
+from app.services import p_code_master
 from app.services.loggers.activity_logger import ActivityLogger
 from app.services.master_data_crop_variety_import_report import (
     PHASE_COMMIT,
@@ -389,6 +390,14 @@ async def create_master_data(
     existing = await repo.get_by_type_value(db, type_, value)
     if existing is not None:
         raise HTTPException(status_code=409, detail=_duplicate_master_data_detail(existing, value))
+    # Round 8-26A — a P.Code must name an existing variety, and that variety
+    # must not already own an ACTIVE one. The UNIQUE(type, value) index above
+    # covers "this P.Code value is free"; this covers "this variety is free".
+    # New rows are always created active (repo.create never sets active), so
+    # the rule always applies here — no effective-state resolution needed,
+    # unlike update below.
+    if type_ == p_code_master.P_CODE_TYPE:
+        await p_code_master.assert_p_code_assignable(db, payload.parent)
     try:
         item = await repo.create(db, payload)
     except IntegrityError as exc:
@@ -422,6 +431,23 @@ async def update_master_data(
         if existing is not None and existing.id != item.id:
             raise HTTPException(
                 status_code=409, detail=_duplicate_master_data_detail(existing, payload.value),
+            )
+    # Round 8-26A — same one-active-P.Code-per-variety rule as create, but
+    # against the EFFECTIVE state this PATCH would leave behind: `parent` and
+    # `active` are both optional and both mean "leave as-is" when omitted, so
+    # each falls back to the stored row (model_fields_set, not a None check —
+    # `parent: None` is a real value meaning "unassign"). Checked when the row
+    # ENDS UP active: turning a P.Code off is always allowed (that is exactly
+    # how a variety's P.Code gets replaced), and re-activating one is exactly
+    # when a second active row could sneak in. exclude_id keeps a plain
+    # re-save of the same row from colliding with itself.
+    if item.type == p_code_master.P_CODE_TYPE:
+        fields = payload.model_fields_set
+        effective_parent = payload.parent if "parent" in fields else item.parent
+        effective_active = payload.active if "active" in fields else item.active
+        if effective_active:
+            await p_code_master.assert_p_code_assignable(
+                db, effective_parent, exclude_id=item.id,
             )
     try:
         item = await repo.update(db, item, payload)

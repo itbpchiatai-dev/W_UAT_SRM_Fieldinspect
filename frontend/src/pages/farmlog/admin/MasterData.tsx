@@ -41,6 +41,12 @@ import { downloadBlob } from '../../../lib/downloadBlob';
 const MD_TYPES: { type: string; label: string; parentType?: string }[] = [
   { type: 'crop', label: 'ชนิดพืช' },
   { type: 'variety', label: 'พันธุ์/สายพันธุ์', parentType: 'crop' },
+  // Round 8-26A — P.Code sits one level BELOW variety (crop → variety →
+  // p_code), so its parentType is 'variety', not 'crop': on live data the
+  // crop 'พริก' already carries two different P.Codes, one per variety. The
+  // backend enforces one ACTIVE P.Code per variety (services/p_code_master.py)
+  // and surfaces a 422 here through masterDataMutationErrorMessage.
+  { type: 'p_code', label: 'P.Code', parentType: 'variety' },
   { type: 'growth_stage', label: 'ระยะการเจริญเติบโต' },
   { type: 'weather', label: 'สภาพอากาศ' },
   { type: 'province', label: 'จังหวัด' },

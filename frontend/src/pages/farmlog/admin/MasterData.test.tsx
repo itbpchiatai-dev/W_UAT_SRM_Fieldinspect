@@ -125,6 +125,7 @@ describe('MasterData — rounds 8-14E/8-14E.1: remaining tabs still visible', ()
   const remainingLabels = [
     'ชนิดพืช',
     'พันธุ์/สายพันธุ์',
+    'P.Code',
     'ระยะการเจริญเติบโต',
     'สภาพอากาศ',
     'จังหวัด',
@@ -356,5 +357,80 @@ describe('MasterData — round 8-22A: query-key contract + duplicate-value error
     fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
 
     await screen.findByText(/ปิดใช้งานอยู่.*เปิดใช้งานรายการเดิม/);
+  });
+});
+
+describe('MasterData — round 8-26A: the P.Code tab', () => {
+  async function openPCodeTab() {
+    renderPage();
+    await screen.findByText('ข้าวโพด');
+    listMasterDataMock.mockClear();
+    listMasterDataMock.mockResolvedValue([
+      masterDataItem({ id: 'md-pc', type: 'p_code', value: 'WM-111', parent: 'พริกขี้หนู' }),
+    ]);
+    fireEvent.click(screen.getByText('P.Code'));
+    await screen.findByText('WM-111');
+  }
+
+  it('fetches type=p_code when the tab is selected', async () => {
+    await openPCodeTab();
+
+    expect(listMasterDataMock).toHaveBeenCalledWith(expect.objectContaining({ type: 'p_code' }));
+  });
+
+  it('shows the owning variety in the อยู่ภายใต้ column — not the crop', async () => {
+    await openPCodeTab();
+
+    expect(screen.getByText('อยู่ภายใต้')).toBeTruthy();
+    expect(screen.getByText('พริกขี้หนู')).toBeTruthy();
+  });
+
+  it('the add form offers varieties as the parent, so a P.Code is filed under a variety', async () => {
+    await openPCodeTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มตัวเลือก' }));
+    await screen.findByRole('heading', { name: 'เพิ่มตัวเลือก' });
+
+    // The parent picker is a MasterDataSelect bound to parentType — its label
+    // names the type it lists, which must be variety (crop → variety → p_code).
+    expect(screen.getByText('อยู่ภายใต้ (variety)')).toBeTruthy();
+  });
+
+  it('creates with type p_code and the chosen variety as parent', async () => {
+    createMasterDataMock.mockResolvedValue(
+      masterDataItem({ id: 'md-pc2', type: 'p_code', value: 'WM-999', parent: 'พริกจินดา' }),
+    );
+    await openPCodeTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มตัวเลือก' }));
+    await screen.findByRole('heading', { name: 'เพิ่มตัวเลือก' });
+    const [valueInput] = screen.getAllByRole('textbox');
+    fireEvent.change(valueInput, { target: { value: 'WM-999' } });
+    fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
+
+    await waitFor(() => expect(createMasterDataMock).toHaveBeenCalledOnce());
+    const [payload] = createMasterDataMock.mock.calls[0];
+    expect(payload).toMatchObject({ type: 'p_code', value: 'WM-999' });
+  });
+
+  it("surfaces the backend's 422 when a variety already owns an active P.Code", async () => {
+    createMasterDataMock.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 422',
+      response: {
+        status: 422,
+        data: { detail: 'พันธุ์ "พริกขี้หนู" มี P.Code "WM-111" อยู่แล้ว — 1 พันธุ์มีได้เพียง 1 P.Code กรุณาปิดใช้งานรายการเดิมก่อน' },
+      },
+    });
+    await openPCodeTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'เพิ่มตัวเลือก' }));
+    await screen.findByRole('heading', { name: 'เพิ่มตัวเลือก' });
+    const [valueInput] = screen.getAllByRole('textbox');
+    fireEvent.change(valueInput, { target: { value: 'WM-999' } });
+    fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
+
+    await screen.findByText(/1 พันธุ์มีได้เพียง 1 P.Code/);
+    expect(screen.queryByText('Request failed with status code 422')).toBeNull();
   });
 });

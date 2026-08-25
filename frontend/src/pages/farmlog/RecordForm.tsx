@@ -43,7 +43,6 @@ import { ProtocolScoreInputs } from '../../components/farmlog/ProtocolScoreInput
 import {
   fetchInspectionProtocols,
   findProtocolForStage,
-  missingProtocolScores,
 } from '../../api/inspectionProtocols';
 import { useAuth } from '../../hooks/useAuth';
 import { formatFixed, toNumberOrNull } from '../../lib/numeric';
@@ -315,18 +314,10 @@ export function RecordForm() {
     if (!form.supplierId) { setFormError('กรุณาเลือก Supplier'); return; }
     if (!form.plotId) { setFormError('กรุณาเลือกแปลง'); return; }
 
-    // Protocol score contract — block before the backend would 422, only
-    // when the selected stage has a protocol; a non-protocol/no stage
-    // imposes no score requirement, same as the backend.
-    if (missingProtocolScores(stageProtocol, {
-      fieldPrepScore: form.fieldPrepScore,
-      weatherScore: form.weatherScore,
-      careScore: form.careScore,
-      varietyResistanceScore: form.varietyResistanceScore,
-    }).length > 0) {
-      setFormError('กรุณาให้คะแนนครบทั้ง 4 ช่องตามระยะการเจริญเติบโต');
-      return;
-    }
+    // Round 8-27B — the protocol scores are OPTIONAL, so there is no submit
+    // gate for them any more (the backend dropped the matching 422). An
+    // inspector who can only judge some of the criteria submits what they
+    // saw; the unscored slots are stored as nulls.
 
     // Round 8-8B, threshold relaxed round 8-8B.1 — block the same invalid-kg
     // cases the backend would still 422 on (negative, >2 decimals, numeric
@@ -574,7 +565,7 @@ export function RecordForm() {
           <h2 className="mb-1 text-base font-semibold text-foreground">การประเมินสภาพแปลง (คะแนน 1–10)</h2>
           <p className="mb-4 text-xs text-muted-foreground">
             {stageProtocol
-              ? `เกณฑ์ตามระยะ "${stageProtocol.growthStage}" — ต้องให้คะแนนครบทั้ง 4 ข้อ`
+              ? `เกณฑ์ตามระยะ "${stageProtocol.growthStage}" — ให้คะแนนเท่าที่ประเมินได้ ไม่บังคับครบทุกข้อ`
               : 'เกณฑ์การให้คะแนนขึ้นกับระยะการเจริญเติบโตที่เลือก'}
           </p>
           <ProtocolScoreInputs

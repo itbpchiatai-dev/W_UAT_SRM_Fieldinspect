@@ -827,7 +827,7 @@ describe('RecordForm — protocol-driven scores', () => {
         : Promise.resolve([]));
   });
 
-  it('renders protocol labels for the stage and requires all 4 scores before submit', async () => {
+  it('renders protocol labels for the stage and submits all 4 scores', async () => {
     createRecordMock.mockResolvedValue({ id: 'rec-p1' });
     await renderPickPlotAndStage('ระยะงอก');
 
@@ -835,11 +835,6 @@ describe('RecordForm — protocol-driven scores', () => {
     expect(await screen.findByRole('group', { name: 'การเตรียมแปลง' })).toBeTruthy();
     expect(screen.getByRole('group', { name: 'การดูแลรักษา' })).toBeTruthy();
     expect(screen.getByRole('group', { name: 'ความต้านทานของสายพันธุ์' })).toBeTruthy();
-
-    // Missing scores → blocked client-side (no 422 round trip).
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-    await waitFor(() => expect(screen.getByText(/กรุณาให้คะแนนครบทั้ง 4 ช่อง/)).toBeTruthy());
-    expect(createRecordMock).not.toHaveBeenCalled();
 
     fillScore('การเตรียมแปลง', 8);
     fillScore('สภาพอากาศ', 7);
@@ -854,6 +849,53 @@ describe('RecordForm — protocol-driven scores', () => {
     expect(payload.weatherScore).toBe(7);
     expect(payload.careScore).toBe(9);
     expect(payload.varietyResistanceScore).toBe(6);
+  });
+
+  // Round 8-27B — the scores became optional. Through 8-27A a protocol stage
+  // blocked submit until all 4 were filled, which left an inspector who could
+  // only judge some of the criteria unable to submit at all.
+  it('submits a protocol stage with NO scores at all', async () => {
+    createRecordMock.mockResolvedValue({ id: 'rec-p3' });
+    await renderPickPlotAndStage('ระยะงอก');
+    await screen.findByRole('group', { name: 'การเตรียมแปลง' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(createRecordMock).toHaveBeenCalledOnce());
+    const [payload] = createRecordMock.mock.calls[0];
+    expect(payload.growthStage).toBe('ระยะงอก');
+    expect(payload.fieldPrepScore).toBeNull();
+    expect(payload.weatherScore).toBeNull();
+    expect(payload.careScore).toBeNull();
+    expect(payload.varietyResistanceScore).toBeNull();
+  });
+
+  it('submits a PARTIALLY scored protocol stage, sending null for the blanks', async () => {
+    createRecordMock.mockResolvedValue({ id: 'rec-p4' });
+    await renderPickPlotAndStage('ระยะงอก');
+    await screen.findByRole('group', { name: 'การเตรียมแปลง' });
+
+    fillScore('การเตรียมแปลง', 8);
+    fillScore('การดูแลรักษา', 9);
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(createRecordMock).toHaveBeenCalledOnce());
+    const [payload] = createRecordMock.mock.calls[0];
+    expect(payload.fieldPrepScore).toBe(8);
+    expect(payload.careScore).toBe(9);
+    expect(payload.weatherScore).toBeNull();
+    expect(payload.varietyResistanceScore).toBeNull();
+  });
+
+  it('never shows the old "ให้คะแนนครบทั้ง 4 ช่อง" blocker', async () => {
+    createRecordMock.mockResolvedValue({ id: 'rec-p5' });
+    await renderPickPlotAndStage('ระยะงอก');
+    await screen.findByRole('group', { name: 'การเตรียมแปลง' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(createRecordMock).toHaveBeenCalledOnce());
+    expect(screen.queryByText(/ครบทั้ง 4 ช่อง/)).toBeNull();
   });
 
   it('relabels the score inputs when a different protocol stage is picked', async () => {

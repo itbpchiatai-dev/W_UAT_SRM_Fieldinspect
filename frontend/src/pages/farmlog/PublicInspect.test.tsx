@@ -1366,7 +1366,7 @@ describe('PublicInspect — protocol-driven scores (regression)', () => {
     fireEvent.click(within(group).getByRole('button', { name: String(n) }));
   }
 
-  it('shows protocol labels for the stage and requires all 4 scores before submit', async () => {
+  it('shows protocol labels for the stage and submits all 4 scores', async () => {
     mockStageOptions();
     mockGeolocation('denied');
     createJsonMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });
@@ -1376,10 +1376,6 @@ describe('PublicInspect — protocol-driven scores (regression)', () => {
 
     expect(await screen.findByRole('group', { name: 'การเตรียมแปลง' })).toBeTruthy();
     expect(screen.getByRole('group', { name: 'ความต้านทานของสายพันธุ์' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
-    await waitFor(() => expect(screen.getByText(/กรุณาให้คะแนนครบทั้ง 4 ช่อง/)).toBeTruthy());
-    expect(createJsonMock).not.toHaveBeenCalled();
 
     fillScore('การเตรียมแปลง', 8);
     fillScore('สภาพอากาศ', 7);
@@ -1392,6 +1388,60 @@ describe('PublicInspect — protocol-driven scores (regression)', () => {
     expect(payload.growthStage).toBe('ระยะงอก');
     expect(payload.fieldPrepScore).toBe(8);
     expect(payload.varietyResistanceScore).toBe(6);
+  });
+
+  // Round 8-27B — the scores became optional. A farmer in the field who can
+  // only judge some of the criteria must still be able to submit.
+  it('submits a protocol stage with NO scores at all', async () => {
+    mockStageOptions();
+    mockGeolocation('denied');
+    createJsonMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });
+    await goToFormStep();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ระยะงอก' }));
+    await screen.findByRole('group', { name: 'การเตรียมแปลง' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
+
+    await waitFor(() => expect(createJsonMock).toHaveBeenCalledOnce());
+    const [payload] = createJsonMock.mock.calls[0];
+    expect(payload.growthStage).toBe('ระยะงอก');
+    expect(payload.fieldPrepScore).toBeNull();
+    expect(payload.varietyResistanceScore).toBeNull();
+    expect(screen.queryByText(/ครบทั้ง 4 ช่อง/)).toBeNull();
+  });
+
+  it('submits a PARTIALLY scored protocol stage, sending null for the blanks', async () => {
+    mockStageOptions();
+    mockGeolocation('denied');
+    createJsonMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });
+    await goToFormStep();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ระยะงอก' }));
+    await screen.findByRole('group', { name: 'การเตรียมแปลง' });
+
+    fillScore('การเตรียมแปลง', 8);
+    fillScore('การดูแลรักษา', 9);
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
+
+    await waitFor(() => expect(createJsonMock).toHaveBeenCalledOnce());
+    const [payload] = createJsonMock.mock.calls[0];
+    expect(payload.fieldPrepScore).toBe(8);
+    expect(payload.careScore).toBe(9);
+    expect(payload.weatherScore).toBeNull();
+    expect(payload.varietyResistanceScore).toBeNull();
+  });
+
+  it('labels the protocol section as optional, not "ต้องครบ 4 ข้อ"', async () => {
+    mockStageOptions();
+    mockGeolocation('denied');
+    await goToFormStep();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ระยะงอก' }));
+    await screen.findByRole('group', { name: 'การเตรียมแปลง' });
+
+    expect(screen.getByText(/การประเมินตามระยะ .* \(ไม่บังคับ\)/)).toBeTruthy();
+    expect(screen.queryByText(/ต้องครบ 4 ข้อ/)).toBeNull();
   });
 
   it('hides score inputs and does not require scores for a non-protocol stage', async () => {

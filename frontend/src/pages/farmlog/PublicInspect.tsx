@@ -69,7 +69,6 @@ import { ProtocolScoreInputs } from '../../components/farmlog/ProtocolScoreInput
 import {
   fetchPublicInspectionProtocols,
   findProtocolForStage,
-  missingProtocolScores,
 } from '../../api/inspectionProtocols';
 import {
   INSPECTOR_TYPE_OPTIONS,
@@ -1027,15 +1026,9 @@ export function PublicInspect() {
     // before the disabled={submitting} re-render commits).
     if (submitInFlightRef.current) return;
     if (!plotInfo?.plotCycleId) return;
-    if (missingProtocolScores(stageProtocol, {
-      fieldPrepScore: fields.fieldPrepScore,
-      weatherScore: fields.weatherScore,
-      careScore: fields.careScore,
-      varietyResistanceScore: fields.varietyResistanceScore,
-    }).length > 0) {
-      setSubmitError('กรุณาให้คะแนนครบทั้ง 4 ช่องตามระยะการเจริญเติบโต');
-      return;
-    }
+    // Round 8-27B — the protocol scores are OPTIONAL now, so no submit gate
+    // for them (the backend dropped the matching 422). A farmer who can only
+    // judge some of the criteria submits what they saw.
     // Round 8-8B, threshold relaxed round 8-8B.1 — block the same invalid-kg
     // cases the backend would still 422 on (negative, >2 decimals, numeric
     // overflow, or a derived % over the 9999.9 storage ceiling) before ever
@@ -1470,7 +1463,7 @@ export function PublicInspect() {
             <section className="space-y-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
               <p className="text-sm font-medium text-gray-700">
                 {stageProtocol
-                  ? `การประเมินตามระยะ "${stageProtocol.growthStage}" (ต้องครบ 4 ข้อ)`
+                  ? `การประเมินตามระยะ "${stageProtocol.growthStage}" (ไม่บังคับ)`
                   : 'การประเมินสภาพแปลง (คะแนน 1–10)'}
               </p>
               <ProtocolScoreInputs

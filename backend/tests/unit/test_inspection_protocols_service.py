@@ -99,14 +99,29 @@ def test_build_snapshot_uses_the_maps_labels_and_the_scores() -> None:
     ]
 
 
-def test_build_snapshot_rejects_a_missing_score() -> None:
+# Round 8-27B — the scores became optional. Through 8-27A a missing score
+# raised ProtocolValidationError (-> 422), which left an inspector who could
+# only judge some of the criteria unable to submit at all. A blank is now
+# frozen as null, so the snapshot still records WHICH criteria applied and
+# WHICH were left unscored.
+def test_build_snapshot_keeps_a_missing_score_as_null() -> None:
     m = svc.default_protocol_map()
-    with pytest.raises(svc.ProtocolValidationError) as exc:
-        svc.build_snapshot("ระยะงอก", {
-            "field_prep_score": 8, "weather_score": None,
-            "care_score": 9, "variety_resistance_score": 6,
-        }, m)
-    assert "weatherScore" in str(exc.value)
+    snap = svc.build_snapshot("ระยะงอก", {
+        "field_prep_score": 8, "weather_score": None,
+        "care_score": 9, "variety_resistance_score": 6,
+    }, m)
+    by_slot = {c["slot"]: c for c in snap["criteria"]}
+    assert by_slot["weatherScore"]["score"] is None
+    # The unscored criterion keeps its label — the point of the snapshot.
+    assert by_slot["weatherScore"]["label"] == "สภาพอากาศ"
+    assert by_slot["fieldPrepScore"]["score"] == 8
+
+
+def test_build_snapshot_accepts_every_score_missing() -> None:
+    snap = svc.build_snapshot("ระยะงอก", {}, svc.default_protocol_map())
+    assert len(snap["criteria"]) == 4
+    assert all(c["score"] is None for c in snap["criteria"])
+    assert [c["label"] for c in snap["criteria"]] == list(svc.DEFAULT_PROTOCOLS["ระยะงอก"])
 
 
 def test_build_snapshot_rejects_a_stage_not_in_the_map() -> None:
@@ -144,9 +159,13 @@ def test_apply_adds_no_snapshot_for_none_or_non_protocol_stage() -> None:
     ).custom_fields
 
 
-def test_apply_raises_for_a_protocol_stage_missing_a_score() -> None:
-    with pytest.raises(svc.ProtocolValidationError):
-        svc.apply_protocol_snapshot(_protocol_record("ระยะงอก", care_score=None), svc.default_protocol_map())
+def test_apply_accepts_a_protocol_stage_missing_a_score() -> None:
+    result = svc.apply_protocol_snapshot(
+        _protocol_record("ระยะงอก", care_score=None), svc.default_protocol_map(),
+    )
+    snap = result.custom_fields[svc.SNAPSHOT_KEY]
+    by_slot = {c["slot"]: c["score"] for c in snap["criteria"]}
+    assert by_slot["careScore"] is None
 
 
 def test_apply_overwrites_a_client_supplied_snapshot() -> None:

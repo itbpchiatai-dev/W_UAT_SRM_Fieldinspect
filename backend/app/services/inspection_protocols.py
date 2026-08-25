@@ -17,11 +17,21 @@ so nothing breaks. Only stages that carry all 4 slots count as a protocol —
 a partial/misconfigured stage is treated as "no protocol" (gated
 pass-through), never a crash.
 
-Gated contract (round 5.1 decision, unchanged): a record whose growth_stage
-is None or a non-protocol value is created unchanged with NO snapshot and no
-score requirement. Only a protocol stage triggers "all 4 scores required".
-The snapshot is built solely from server-side data — a client-supplied
+Gated contract (round 5.1 decision): a record whose growth_stage is None or a
+non-protocol value is created unchanged with NO snapshot. A protocol stage
+gets a snapshot built solely from server-side data — a client-supplied
 snapshot is always stripped and never trusted.
+
+Round 8-27B — the scores themselves are OPTIONAL. Through round 8-27A a
+protocol stage required all 4; an inspector who could only judge two of the
+four criteria had no way to submit at all, which is not how a field visit
+works. A missing score is now frozen into the snapshot as `null`, so the
+record still records WHICH criteria applied and WHICH were left unscored —
+strictly more information than refusing the submission. Nothing downstream
+needed changing for this: all 4 score columns were already nullable, the
+dashboard's averages are SQL AVG() (which skips NULLs), its low-score filter
+is `<= 3` (NULL is never <= 3), and the read-side snapshot helpers already
+tolerated a null/absent score.
 """
 from __future__ import annotations
 
@@ -75,9 +85,13 @@ ProtocolMap = dict[str, list[dict]]
 
 
 class ProtocolValidationError(ValueError):
-    """A protocol stage was given but its score contract wasn't met (a
-    required score is missing). The record-create endpoints turn this into
-    a 422."""
+    """build_snapshot was asked to freeze a stage that has no protocol in the
+    map. The record-create endpoints turn this into a 422.
+
+    Round 8-27B — this no longer signals "a score is missing"; missing scores
+    are valid. apply_protocol_snapshot never reaches it (it checks
+    get_protocol_for_stage first), so it now only guards a direct caller
+    passing a non-protocol stage."""
 
 
 def default_protocol_map() -> ProtocolMap:
@@ -132,30 +146,25 @@ def build_snapshot(
 ) -> dict:
     """Freeze the protocol snapshot for a protocol `stage`, reading each
     slot's score from `scores` (keyed by snake_case RecordCreate attr).
-    Raises ProtocolValidationError if `stage` isn't a protocol stage in the
-    map, or any of the 4 scores is missing (None). Score RANGE (1-10) is
-    enforced upstream by RecordCreate's field constraints."""
+
+    Round 8-27B — an unscored slot is frozen as `score: None` rather than
+    rejected: the scores are optional now (see the module docstring). Every
+    criterion still appears, so the snapshot always records the full set of
+    criteria that applied, with nulls marking what the inspector left blank.
+
+    Still raises ProtocolValidationError if `stage` isn't a protocol stage in
+    the map — that is a caller/config error, not user input. Score RANGE
+    (1-10) is enforced upstream by RecordCreate's field constraints."""
     criteria_defs = protocol_map.get(stage)
     if not criteria_defs:
         raise ProtocolValidationError(
             f"No inspection protocol for growth stage {stage!r}"
         )
 
-    criteria: list[dict] = []
-    missing: list[str] = []
-    for c in criteria_defs:
-        slot = c["slot"]
-        attr = _SLOT_TO_ATTR[slot]
-        score = scores.get(attr)
-        if score is None:
-            missing.append(slot)
-        criteria.append({"slot": slot, "label": c["label"], "score": score})
-
-    if missing:
-        raise ProtocolValidationError(
-            f"Inspection protocol for stage {stage!r} requires all 4 scores; "
-            f"missing: {', '.join(missing)}"
-        )
+    criteria = [
+        {"slot": c["slot"], "label": c["label"], "score": scores.get(_SLOT_TO_ATTR[c["slot"]])}
+        for c in criteria_defs
+    ]
 
     return {
         "version": PROTOCOL_VERSION,
@@ -170,8 +179,9 @@ def apply_protocol_snapshot(payload: RecordCreate, protocol_map: ProtocolMap) ->
     `protocol_map` — a fresh server-built snapshot injected.
 
     Never trusts a client snapshot: SNAPSHOT_KEY is always removed first and
-    re-added solely from server-side data. Raises ProtocolValidationError
-    (→ 422 at the endpoint) when a protocol stage is missing a score."""
+    re-added solely from server-side data. Round 8-27B — a protocol stage with
+    some (or none) of its scores filled in is accepted; the snapshot records
+    the blanks as nulls."""
     custom = {k: v for k, v in payload.custom_fields.items() if k != SNAPSHOT_KEY}
 
     if get_protocol_for_stage(protocol_map, payload.growth_stage) is not None:

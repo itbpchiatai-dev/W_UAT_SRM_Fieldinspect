@@ -143,16 +143,41 @@ async def test_logged_in_create_writes_protocol_snapshot_server_side() -> None:
     assert snap["criteria"][0]["label"] == "การเตรียมแปลง"
 
 
-async def test_logged_in_create_rejects_a_protocol_stage_missing_a_score_422() -> None:
-    payload = _rec_payload(growth_stage="ระยะงอก", field_prep_score=8, weather_score=7, care_score=9)
+# Round 8-27B — a partially scored protocol stage is accepted now (it was a
+# 422 through 8-27A). The snapshot still freezes all 4 criteria; a blank one
+# carries score=None, so the record states what was NOT assessed rather than
+# the submission being refused outright.
+async def test_logged_in_create_accepts_a_protocol_stage_missing_a_score() -> None:
+    plot_id = uuid4()
+    payload = _rec_payload(
+        plot_id=plot_id, growth_stage="ระยะงอก", field_prep_score=8, weather_score=7, care_score=9,
+    )
 
-    with patch(f"{_REC_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot(supplier_id=payload.supplier_id))), \
-         patch(f"{_REC_MODULE}.repo.create_record", AsyncMock()) as mocked_create:
-        with pytest.raises(HTTPException) as exc:
-            await create_record(request=_fake_request(), payload=payload, current_user=_current_user(), db=_mock_db())
+    with patch(f"{_REC_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot(id=plot_id, supplier_id=payload.supplier_id))), \
+         patch(f"{_REC_MODULE}.repo.create_record", AsyncMock(return_value=_fake_record(plot_id=plot_id))) as mocked_create, \
+         patch(f"{_REC_MODULE}.plot_repo.sync_current_status_from_record", AsyncMock()), \
+         patch(f"{_REC_MODULE}.repo.get_record_full", AsyncMock(return_value=_fake_record())), \
+         patch(f"{_REC_MODULE}._to_read", MagicMock(return_value=SimpleNamespace())):
+        await create_record(request=_fake_request(), payload=payload, current_user=_current_user(), db=_mock_db())
 
-    assert exc.value.status_code == 422
-    mocked_create.assert_not_awaited()
+    snap = mocked_create.call_args[0][1].custom_fields[SNAPSHOT_KEY]
+    assert [c["score"] for c in snap["criteria"]] == [8, 7, 9, None]
+    assert snap["criteria"][3]["label"] == "ความต้านทานของสายพันธุ์"
+
+
+async def test_logged_in_create_accepts_a_protocol_stage_with_no_scores_at_all() -> None:
+    plot_id = uuid4()
+    payload = _rec_payload(plot_id=plot_id, growth_stage="ระยะงอก")
+
+    with patch(f"{_REC_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot(id=plot_id, supplier_id=payload.supplier_id))), \
+         patch(f"{_REC_MODULE}.repo.create_record", AsyncMock(return_value=_fake_record(plot_id=plot_id))) as mocked_create, \
+         patch(f"{_REC_MODULE}.plot_repo.sync_current_status_from_record", AsyncMock()), \
+         patch(f"{_REC_MODULE}.repo.get_record_full", AsyncMock(return_value=_fake_record())), \
+         patch(f"{_REC_MODULE}._to_read", MagicMock(return_value=SimpleNamespace())):
+        await create_record(request=_fake_request(), payload=payload, current_user=_current_user(), db=_mock_db())
+
+    snap = mocked_create.call_args[0][1].custom_fields[SNAPSHOT_KEY]
+    assert [c["score"] for c in snap["criteria"]] == [None, None, None, None]
 
 
 async def test_logged_in_create_no_snapshot_for_non_protocol_stage() -> None:
@@ -230,21 +255,29 @@ async def test_public_create_writes_protocol_snapshot_server_side() -> None:
     assert [c["score"] for c in snap["criteria"]] == [8, 7, 9, 6]
 
 
-async def test_public_create_rejects_a_protocol_stage_missing_a_score_422() -> None:
+async def test_public_create_accepts_a_protocol_stage_missing_a_score() -> None:
+    """Round 8-27B — the public flow is where this matters most: a farmer in
+    the field who can only judge some of the criteria must still be able to
+    submit what they did see."""
     supplier = _fake_supplier()
     plot = _fake_plot(supplier_id=supplier.id)
     cycle = _fake_cycle()
     payload = _pub_payload(growth_stage="ออกดอก", field_prep_score=8)
 
-    with patch(f"{_PUB_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+    with patch(f"{_PUB_MODULE}.get_external_submission_user", AsyncMock(return_value=SimpleNamespace(id=uuid4()))), \
+         patch(f"{_PUB_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_PUB_MODULE}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_PUB_MODULE}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=_fake_access())), \
-         patch(f"{_PUB_MODULE}.record_repo.create_record", AsyncMock()) as mocked_create:
-        with pytest.raises(HTTPException) as exc:
-            await _finish_creating_record(_mock_db(), payload, plot, supplier, cycle, phone_binding=_PHONE_BINDING)
+         patch(f"{_PUB_MODULE}.record_repo.create_record", AsyncMock(return_value=_fake_record(plot_id=plot.id))) as mocked_create, \
+         patch(f"{_PUB_MODULE}.plot_repo.sync_current_status_from_record", AsyncMock()):
+        await _finish_creating_record(_mock_db(), payload, plot, supplier, cycle, phone_binding=_PHONE_BINDING)
 
-    assert exc.value.status_code == 422
-    mocked_create.assert_not_awaited()
+    snap = mocked_create.call_args[0][1].custom_fields[SNAPSHOT_KEY]
+    assert [c["score"] for c in snap["criteria"]] == [8, None, None, None]
+    # Every criterion keeps its label, scored or not — that is what makes a
+    # partial snapshot worth storing at all.
+    assert snap["criteria"][0]["label"] == "ความสมบูรณ์ของดอก"
+    assert all(c["label"] for c in snap["criteria"])
 
 
 async def test_public_create_cannot_be_spoofed_by_client_custom_fields() -> None:

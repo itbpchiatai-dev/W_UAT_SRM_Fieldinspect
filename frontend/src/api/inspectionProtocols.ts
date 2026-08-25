@@ -54,19 +54,6 @@ export function findProtocolForStage(
   return protocols.stages.find((s) => s.growthStage === growthStage) ?? null;
 }
 
-/**
- * Slots whose score is still empty for a protocol stage — an empty array
- * means the score contract is satisfied (or there's no protocol, so nothing
- * is required). Lets a form block submit before the backend would 422.
- */
-export function missingProtocolScores(
-  protocol: InspectionProtocolStage | null,
-  scores: Record<string, number | null | undefined>,
-): string[] {
-  if (!protocol) return [];
-  return protocol.criteria.filter((c) => scores[c.slot] == null).map((c) => c.slot);
-}
-
 // --- Admin editor (round 5.5) ------------------------------------------------
 // The admin config carries the row id (+ order/active) so a label can be
 // PATCHed. Gated by master-data permissions on the backend

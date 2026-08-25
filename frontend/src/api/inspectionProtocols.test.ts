@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   findProtocolForStage,
-  missingProtocolScores,
   fetchInspectionProtocols,
   fetchPublicInspectionProtocols,
   type InspectionProtocolResponse,
@@ -61,25 +60,12 @@ describe('findProtocolForStage', () => {
   });
 });
 
-describe('missingProtocolScores', () => {
-  const proto = PROTOCOLS.stages[0]; // ระยะงอก, all 4 slots
-
-  it('is empty when there is no protocol (no requirement)', () => {
-    expect(missingProtocolScores(null, {})).toEqual([]);
-  });
-
-  it('is empty when every protocol slot has a score', () => {
-    expect(missingProtocolScores(proto, {
-      fieldPrepScore: 8, weatherScore: 7, careScore: 9, varietyResistanceScore: 6,
-    })).toEqual([]);
-  });
-
-  it('names exactly the slots whose score is null/undefined', () => {
-    expect(missingProtocolScores(proto, {
-      fieldPrepScore: 8, weatherScore: null, careScore: 9, varietyResistanceScore: undefined,
-    })).toEqual(['weatherScore', 'varietyResistanceScore']);
-  });
-});
+// Round 8-27B removed missingProtocolScores along with the "all 4 scores
+// required" rule it existed to enforce — the protocol scores are optional
+// now, so there is nothing left for a form to block submit on. The tests
+// that covered it went with it; the replacement guarantee ("a partially
+// scored record submits") is asserted where it matters, in
+// RecordForm.test.tsx and PublicInspect.test.tsx.
 
 describe('fetch helpers hit the right endpoints', () => {
   it('logged-in fetch calls the records.read-gated path via apiClient', async () => {

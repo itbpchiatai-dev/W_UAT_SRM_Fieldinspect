@@ -316,7 +316,10 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
 
   const templateM = useMutation({
     mutationFn: () => downloadPlotImportTemplate(),
-    onSuccess: (blob) => downloadBlob(blob, 'plot-import-template.xlsx'),
+    // The blank template filters nothing, so its excludedCount is always 0 —
+    // the "some plots aren't in this file" notice belongs to the Plots page's
+    // FILTERED download (round 8-27E), not here.
+    onSuccess: ({ blob }) => downloadBlob(blob, 'plot-import-template.xlsx'),
   });
 
   const previewM = useMutation({
@@ -642,13 +645,13 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                   (additionalPhones ว่าง = ล้างเบอร์เสริมทั้งหมด) ·
                   ต้องการล้างเบอร์ทั้งหมดให้ใช้หน้าจัดการเบอร์เข้าตรวจของแปลงแทน
                 </p>
+{/* Round 8-27E — one template shape everywhere: the blank one from the
+    button below and the filtered "Excel ตามตัวกรอง" build the SAME two
+    sheets, so this describes both. */}
                 <p>
-                  ไฟล์จาก &quot;Excel ตามตัวกรอง&quot; มี 4 ชีต: ชีต{' '}
+                  ทุกไฟล์มี 2 ชีต: ชีต{' '}
                   <span className="font-mono">นำเข้ารอบใหม่</span> = ชีตที่ระบบอ่าน (อัปโหลดกลับมาที่นี่ — รวมทั้งแปลงที่ใช้งานและปิดใช้งานตามตัวกรองสถานะแปลง) · ชีต{' '}
-                  <span className="font-mono">ข้อมูลปัจจุบัน</span> = ใช้เปรียบเทียบก่อนแก้ (ระบบไม่อ่าน) · ชีต{' '}
-                  <span className="font-mono">รายการที่ไม่รวม</span> = แปลง/Supplier ที่ถูกตัดออกพร้อมเหตุผล (ระบบไม่อ่าน) · ชีต{' '}
-                  <span className="font-mono">ตัวอย่าง</span> = ข้อมูลสีแดง ระบบไม่อ่านชีตนี้
-                  (เทมเพลตเปล่าจากปุ่มด้านล่างมีชีตเดียว)
+                  <span className="font-mono">ตัวอย่าง</span> = ข้อมูลสีแดง ระบบไม่อ่านชีตนี้ มีตัวอย่างครบทุก action
                 </p>
                 <p>
                   คอลัมน์ <span className="font-mono">currentPlotStatus</span> ไว้อ้างอิงเท่านั้น —

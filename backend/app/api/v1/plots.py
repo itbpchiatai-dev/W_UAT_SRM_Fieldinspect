@@ -359,17 +359,29 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
 
 
 def _plot_template_workbook(suppliers: list[Supplier]) -> bytes:
+    """The BLANK template — same two-sheet shape as the filtered one below,
+    just with no plot rows on Sheet 1.
+
+    Round 8-27E made this match _contextual_plot_template_workbook instead of
+    being its own single-sheet format. Two reasons, and the second is a bug:
+
+      1. There is one template now, not two. It was confusing to download
+         "the template" from two places and get two different-looking files
+         (identical columns, different sheet name, different layout).
+      2. This file used to put the worked examples on rows 3+ of the SAME
+         sheet the importer reads. Only row 2 is ever skipped
+         (plot_import._is_template_description_row), so a user who filled
+         their data in BELOW the examples and uploaded would have had the
+         example rows executed too — creating plot P101, editing P002,
+         starting a cycle on P003, reactivating P004 and closing P001's
+         cycle. The examples now live on their own sheet, which the importer
+         never reads.
+    """
     supplier_code = suppliers[0].code if suppliers else "SUP001"
-    examples = _template_example_rows(supplier_code)
-    rows: list[list[str | int | float | None]] = [list(_PLOT_TEMPLATE_HEADERS)]
-    # Row 2: Thai description of every column (skipped on import).
-    rows.append([
-        plot_import.TEMPLATE_COLUMN_DESCRIPTIONS[col] for col in _PLOT_TEMPLATE_HEADERS
+    return build_xlsx([
+        (_SHEET_NEW_CYCLE, [_header_row(), _description_row()]),
+        (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
     ])
-    # Rows 3-5: one worked example per common workflow (round 8-2.7.1).
-    for ex in examples:
-        rows.append([ex.get(col) for col in _PLOT_TEMPLATE_HEADERS])
-    return build_xlsx([("plots", rows)])
 
 
 # --- Round 8-6A: filter-aware contextual template (Backend foundation) -----
@@ -382,8 +394,6 @@ def _plot_template_workbook(suppliers: list[Supplier]) -> bytes:
 # close/open a cycle (plot_import.commit_import, unchanged by this round).
 
 _SHEET_NEW_CYCLE = "นำเข้ารอบใหม่"
-_SHEET_CURRENT_SNAPSHOT = "ข้อมูลปัจจุบัน"
-_SHEET_EXCLUDED = "รายการที่ไม่รวม"
 _SHEET_EXAMPLES = "ตัวอย่าง"
 
 # Column → style classification for Sheet 1 (Part C "Style"). Every
@@ -427,17 +437,18 @@ _STYLE_HEADER = CellStyle(bg="FFDCE6F1", bold=True)          # header row
 _STYLE_DESCRIPTION = CellStyle(bg="FFD9D9D9")                # description row
 _STYLE_REFERENCE = CellStyle(bg="FFF2F2F2")                  # identity/reference cols
 _STYLE_EDITABLE = CellStyle(bg="FFFFF9C4")                   # new-cycle editable cols
-_STYLE_EXAMPLE = CellStyle(bg="FFFFCDD2", font_color="FFB71C1C")  # example rows (Sheet 4)
+_STYLE_EXAMPLE = CellStyle(bg="FFFFCDD2", font_color="FFB71C1C")  # example rows (Sheet 2)
+
+_EXAMPLE_ONLY_NOTICE = "ข้อมูลตัวอย่างเท่านั้น — ระบบจะไม่นำเข้าชีตนี้"
+
+# The `currentPlotStatus` cell's Thai wording. Reference-only in the sheet —
+# editing it changes nothing; `action` alone decides what the importer does.
+_CURRENT_PLOT_STATUS_ACTIVE_LABEL = "ใช้งานอยู่"
+_CURRENT_PLOT_STATUS_INACTIVE_LABEL = "ปิดใช้งาน"
 # Round 8-6G — excluded-plot sheet styles: deliberately distinct from Sheet
 # 1's reference gray (FFF2F2F2) and from the bright example red, so this
 # read-only "why was this left out" sheet never looks like an editable or
 # importable one at a glance.
-_STYLE_EXCLUDED_NOTICE = CellStyle(bg="FFFFCDD2", font_color="FFB71C1C", bold=True)
-_STYLE_EXCLUDED_ROW = CellStyle(bg="FFF5F5F5")
-
-_EXAMPLE_ONLY_NOTICE = "ข้อมูลตัวอย่างเท่านั้น — ระบบจะไม่นำเข้าชีตนี้"
-_EXCLUDED_ONLY_NOTICE = "ชีตนี้เป็นข้อมูลสำหรับตรวจสอบ ระบบจะไม่นำเข้าข้อมูลจากชีตนี้"
-
 
 def _header_row() -> list[StyledCell]:
     return [StyledCell(col, _STYLE_HEADER) for col in _PLOT_TEMPLATE_HEADERS]
@@ -641,83 +652,6 @@ def _new_cycle_sheet(
 # Sheet 2 ("ข้อมูลปัจจุบัน") — its own fixed header set (Part D); this sheet is
 # never read by the importer (excel_reader.read_first_sheet only ever reads
 # the FIRST worksheet), so it has no obligation to match IMPORT_COLUMNS.
-_CURRENT_SNAPSHOT_HEADERS: list[str] = [
-    "supplierCode", "supplierName", "plotCode", "plotName", "plotIsActive",
-    "primaryPhone", "additionalPhones", "village", "district", "province",
-    "latitude", "longitude", "rai",
-    "activeCycleNo", "activeCycleStatus", "activeCycleLabel",
-    "crop", "variety", "poNumber", "pCode", "lotNo",
-    "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit",
-    # Round 8-9B.1 — informational status only (configured / not_configured).
-    "inspectionPasswordStatus",
-]
-
-
-def _current_snapshot_row_values(
-    plot: Plot, *, password_configured: bool = False,
-) -> dict[str, str | None]:
-    """One reference row per Plot (Part D) — backend truth from
-    Plot.active_cycle (never the plots.current_* mirror columns, which can
-    theoretically lag behind the active cycle for a brief window). Keeps
-    lotNo/plantingDate/cycleLabel intact (unlike Sheet 1) so the user can
-    compare old vs new before editing."""
-    cycle = plot.active_cycle
-    primary_phone, additional_phones = _plot_access_phone_fields(plot)
-    return {
-        "supplierCode": plot.supplier.code if plot.supplier is not None else None,
-        "supplierName": plot.supplier.name if plot.supplier is not None else None,
-        "plotCode": plot.plot_code,
-        "plotName": plot.name,
-        "plotIsActive": "true" if plot.is_active else "false",
-        "primaryPhone": primary_phone,
-        "additionalPhones": additional_phones,
-        "village": plot.village,
-        "district": plot.district,
-        "province": plot.province,
-        "latitude": str(plot.latitude) if plot.latitude is not None else None,
-        "longitude": str(plot.longitude) if plot.longitude is not None else None,
-        "rai": str(plot.rai) if plot.rai is not None else None,
-        "activeCycleNo": str(cycle.cycle_no) if cycle is not None else None,
-        "activeCycleStatus": cycle.status if cycle is not None else None,
-        "activeCycleLabel": cycle.cycle_label if cycle is not None else None,
-        "crop": cycle.crop if cycle is not None else None,
-        "variety": cycle.variety if cycle is not None else None,
-        "poNumber": cycle.po_number if cycle is not None else None,
-        "pCode": cycle.p_code if cycle is not None else None,
-        "lotNo": cycle.lot_no if cycle is not None else None,
-        # Round 8-12A — the cycle's current supplier lot number.
-        "supplierLotNo": cycle.supplier_lot_no if cycle is not None else None,
-        "plantingDate": (
-            cycle.planting_date.isoformat()
-            if cycle is not None and cycle.planting_date is not None else None
-        ),
-        "plantCount": str(cycle.plant_count) if cycle is not None and cycle.plant_count is not None else None,
-        "expectedYieldFull": (
-            str(cycle.expected_yield_full)
-            if cycle is not None and cycle.expected_yield_full is not None else None
-        ),
-        "expectedYieldUnit": cycle.expected_yield_unit if cycle is not None else None,
-        # Round 8-9B.1 — status ONLY (configured / not_configured). This
-        # reference sheet carries no password, hash, digest or version.
-        "inspectionPasswordStatus": _inspection_password_status(password_configured),
-    }
-
-
-def _current_snapshot_sheet(
-    plots: list[Plot], credential_status: dict[UUID, tuple[bool, int]] | None = None,
-) -> list[list[Cell]]:
-    credential_status = credential_status or {}
-    rows: list[list[Cell]] = [
-        [StyledCell(h, _STYLE_HEADER) for h in _CURRENT_SNAPSHOT_HEADERS]
-    ]
-    for plot in plots:
-        values = _current_snapshot_row_values(
-            plot, password_configured=credential_status.get(plot.id, (False, 0))[0],
-        )
-        rows.append([values.get(h) for h in _CURRENT_SNAPSHOT_HEADERS])
-    return rows
-
-
 def _examples_sheet(supplier_code: str) -> list[list[Cell]]:
     """Sheet 4 ("ตัวอย่าง", Part E) — the same 3 worked examples the generic
     template ships (create/update/start_next_cycle), moved to their own sheet
@@ -732,146 +666,43 @@ def _examples_sheet(supplier_code: str) -> list[list[Cell]]:
     return rows
 
 
-# --- Round 8-6G Part C: "รายการที่ไม่รวม" (excluded) sheet ------------------
-# Read-only, informational: explains which plots were left OUT of Sheet 1 and
-# why — an inactive plot (never allowed into an import sheet: it cannot
-# start_next_cycle), or an active plot whose Supplier itself is inactive
-# (all_suppliers mode only ever aggregates ACTIVE suppliers' plots). Never a
-# sheet the importer reads, never carries an `action` column at all, so it
-# cannot be executed by the importer even by accident.
-
-_EXCLUDED_HEADERS: list[str] = [
-    "supplierCode", "supplierName", "plotCode", "plotName", "province",
-    "plotStatus", "cycleStatus", "cycleLabel", "exclusionReason",
-    "inspectionPasswordStatus",
-]
-
-_CYCLE_STATUS_LABELS: dict[str, str] = {
-    "cancelled": "ยกเลิก",
-    "harvested": "เก็บเกี่ยวแล้ว",
-    "active": "เปิดอยู่",
-}
-_CYCLE_STATUS_NONE_LABEL = "ไม่มีรอบที่เปิดอยู่"
-
-_EXCLUSION_REASON_SUPPLIER_INACTIVE = "Supplier ปิดใช้งาน"
-_EXCLUSION_REASON_PLOT_INACTIVE = "แปลงปิดใช้งาน ไม่สามารถเริ่มรอบปลูกใหม่ได้"
-# Round 8-6J Part F — a plot excluded purely because the CALLER asked for one
-# status and this plot is the other, never because being inactive is
-# inherently disqualifying (that's only true for plotStatus='active', where
-# an inactive plot genuinely can't start_next_cycle — same wording as
-# _EXCLUSION_REASON_PLOT_INACTIVE above, kept as the plotStatus='all' has no
-# such reason at all: see _exclusion_reason).
-_EXCLUSION_REASON_STATUS_FILTER_INACTIVE = "ไม่รวมตามตัวกรองสถานะแปลง: ปิดใช้งาน"
-_EXCLUSION_REASON_STATUS_FILTER_ACTIVE = "ไม่รวมตามตัวกรองสถานะแปลง: ใช้งาน"
-
-# Round 8-6J — shared Thai labels for the currentPlotStatus column (Part C)
-# and the excluded sheet's plotStatus column (pre-existing, Part C of round
-# 8-6G) — one place so the two can never drift apart.
-_CURRENT_PLOT_STATUS_ACTIVE_LABEL = "ใช้งานอยู่"
-_CURRENT_PLOT_STATUS_INACTIVE_LABEL = "ปิดใช้งาน"
-
-
-def _latest_cycle(plot: Plot):
-    """The plot's most recent รอบปลูก regardless of status (cancelled/
-    harvested/active) — for the excluded sheet's cycleStatus/cycleLabel
-    columns only. Reads `plot.cycles` (the full history relationship), never
-    `plot.active_cycle` (filtered to status='active', which an excluded plot
-    almost never has). None when the plot has never had a cycle at all."""
-    cycles = plot.cycles or []
-    if not cycles:
-        return None
-    return max(cycles, key=lambda c: c.cycle_no)
-
-
-def _exclusion_reason(plot: Plot, plot_status: str = "all") -> str:
-    """Round 8-6J Part F — Supplier-inactive always wins (unrelated to the
-    plotStatus filter); otherwise the reason depends on which single status
-    the caller asked for. plotStatus='all' never reaches the two status-
-    filter branches at all, because _fetch_excluded_plots's own WHERE clause
-    for 'all' never selects a plot for being merely active/inactive — so
-    _EXCLUSION_REASON_PLOT_INACTIVE is a defensive fallback that should be
-    unreachable in normal operation, kept only so this function is still
-    total."""
-    if plot.supplier is not None and not plot.supplier.is_active:
-        return _EXCLUSION_REASON_SUPPLIER_INACTIVE
-    if plot_status == "active" and not plot.is_active:
-        return _EXCLUSION_REASON_STATUS_FILTER_INACTIVE
-    if plot_status == "inactive" and plot.is_active:
-        return _EXCLUSION_REASON_STATUS_FILTER_ACTIVE
-    return _EXCLUSION_REASON_PLOT_INACTIVE
-
-
-def _excluded_row_values(
-    plot: Plot, plot_status: str = "all", *, password_configured: bool = False,
-) -> dict[str, str | None]:
-    cycle = _latest_cycle(plot)
-    cycle_status = (
-        _CYCLE_STATUS_LABELS.get(cycle.status, cycle.status) if cycle is not None
-        else _CYCLE_STATUS_NONE_LABEL
-    )
-    return {
-        "supplierCode": plot.supplier.code if plot.supplier is not None else None,
-        "supplierName": plot.supplier.name if plot.supplier is not None else None,
-        "plotCode": plot.plot_code,
-        "plotName": plot.name,
-        "province": plot.province,
-        "plotStatus": _CURRENT_PLOT_STATUS_ACTIVE_LABEL if plot.is_active else _CURRENT_PLOT_STATUS_INACTIVE_LABEL,
-        "cycleStatus": cycle_status,
-        "cycleLabel": cycle.cycle_label if cycle is not None else None,
-        "exclusionReason": _exclusion_reason(plot, plot_status),
-        # Round 8-9B.1 — status only, same rule as every other sheet.
-        "inspectionPasswordStatus": _inspection_password_status(password_configured),
-    }
-
-
-def _excluded_sheet(
-    plots: list[Plot], plot_status: str = "all",
-    credential_status: dict[UUID, tuple[bool, int]] | None = None,
-) -> list[list[Cell]]:
-    credential_status = credential_status or {}
-    rows: list[list[Cell]] = [
-        [StyledCell(h, _STYLE_HEADER) for h in _EXCLUDED_HEADERS],
-        [StyledCell(_EXCLUDED_ONLY_NOTICE, _STYLE_EXCLUDED_NOTICE)],
-    ]
-    for plot in plots:
-        values = _excluded_row_values(
-            plot, plot_status,
-            password_configured=credential_status.get(plot.id, (False, 0))[0],
-        )
-        rows.append([StyledCell(values.get(h), _STYLE_EXCLUDED_ROW) for h in _EXCLUDED_HEADERS])
-    return rows
-
-
 def _contextual_plot_template_workbook(
     plots: list[Plot],
-    excluded_plots: list[Plot] | None = None,
     latest_cycles: dict[UUID, PlotCycle] | None = None,
-    plot_status: str = "all",
     credential_status: dict[UUID, tuple[bool, int]] | None = None,
 ) -> bytes:
-    """Build the round 8-6A/8-6G/8-6J/8-7A 4-sheet contextual template (Part
-    C). Sheet order is load-bearing: excel_reader.read_first_sheet only ever
-    reads whichever sheet is written as sheet1.xml, which build_xlsx always
-    assigns to the FIRST tuple in the list passed to it — so "นำเข้ารอบใหม่"
-    must stay first. `excluded_plots` defaults to none (an empty "รายการที่ไม่
-    รวม" sheet, just the header + notice rows) for any caller that hasn't
-    wired the excluded-plots query. `latest_cycles` (round 8-6J) seeds an
-    INACTIVE plot's row from its most recent historical cycle — see
-    _reactivate_row_values. `plot_status` (round 8-6J) only affects the
-    excluded sheet's exclusionReason wording — Sheet 1 itself dispatches
-    purely on each plot's own is_active (_new_cycle_sheet).
+    """Build the contextual template (rounds 8-6A/8-6G/8-6J/8-7A). Sheet
+    order is load-bearing: excel_reader.read_first_sheet only ever reads
+    whichever sheet is written as sheet1.xml, which build_xlsx always assigns
+    to the FIRST tuple in the list passed to it — so "นำเข้ารอบใหม่" must stay
+    first. `latest_cycles` (round 8-6J) seeds an INACTIVE plot's row from its
+    most recent historical cycle — see _reactivate_row_values.
 
     Round 8-10B removed the `latest_active_records` parameter along with the
     finalInspectionRecordId column it fed: the importer resolves that record
-    itself, so a template download no longer queries for it."""
+    itself, so a template download no longer queries for it.
+
+    Round 8-27E cut this from four sheets to two, and this is now the ONE
+    template shape the app produces (_plot_template_workbook builds the same
+    two sheets with no plot rows):
+
+      - "ข้อมูลปัจจุบัน" was a read-only snapshot for comparing before
+        editing, but Sheet 1's own gray reference columns already carry each
+        plot's current values — it restated them with a few extra labels.
+      - "รายการที่ไม่รวม" explained which plots were left out. Since round
+        8-6J put inactive plots INTO Sheet 1 as reactivate rows, the only
+        thing it still reported under the default plot_status='all' was
+        "this plot's Supplier is deactivated" — normally nothing at all. The
+        endpoint now returns that count in the X-Excluded-Plot-Count response
+        header and the Plots page shows it on screen, which is where someone
+        who just clicked Download is actually looking.
+    """
     supplier_code = plots[0].supplier.code if plots and plots[0].supplier is not None else "SUP001"
     return build_xlsx([
         (
             _SHEET_NEW_CYCLE,
             _new_cycle_sheet(plots, latest_cycles, credential_status),
         ),
-        (_SHEET_CURRENT_SNAPSHOT, _current_snapshot_sheet(plots, credential_status)),
-        (_SHEET_EXCLUDED, _excluded_sheet(excluded_plots or [], plot_status, credential_status)),
         (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
     ])
 
@@ -1083,8 +914,8 @@ async def _list_active_plots_all_suppliers(
     reactivate_plot_with_cycle Sheet-1 row respectively — see
     _new_cycle_sheet); 'active'/'inactive' narrow to exactly one. The
     Supplier itself must always be active regardless of plot_status — an
-    inactive Supplier's plots never appear here at all (they surface on the
-    excluded sheet instead, via _fetch_excluded_plots). Sorted by
+    inactive Supplier's plots never appear here at all (round 8-27E: they
+    are counted by _count_excluded_plots and reported on screen). Sorted by
     (Supplier.code, Plot.plot_code) at the DB level via a dedicated join
     (Part D) — never Supplier UUID, and never plot_repository.list_plots's
     own supplier_id-then-plot_code ordering, which stays untouched for every
@@ -1109,17 +940,16 @@ async def _list_active_plots_all_suppliers(
     return list(result.scalars().all())
 
 
-async def _fetch_excluded_plots(
+async def _count_excluded_plots(
     db: AsyncSession,
     *,
     supplier_id: UUID | None,
     province: str | None = None,
     q: str | None = None,
     plot_status: str = "all",
-    limit: int = _MAX_TEMPLATE_PLOTS,
-) -> list[Plot]:
-    """Plots for the "รายการที่ไม่รวม" sheet (Part C; plotStatus-aware round
-    8-6J Part F): a Supplier-inactive plot always qualifies regardless of
+) -> int:
+    """How many plots matched the caller's filters but did NOT make it into
+    the workbook: a Supplier-inactive plot always qualifies regardless of
     plot_status; ADDITIONALLY, a plot whose OWN status contradicts the
     caller's plotStatus filter (an inactive plot when plotStatus='active', or
     an active plot when plotStatus='inactive') — never merely "is inactive"
@@ -1129,26 +959,19 @@ async def _fetch_excluded_plots(
     — the caller has already confirmed there's no other filter, per Part B).
     `province`/`q` are physical-plot filters (still meaningful for an
     inactive plot; round 8-18B — `q` is plot_code/name only, never province);
-    crop/variety/cycle_label are deliberately NEVER applied
-    here — they filter on the plot's active-cycle data, which an excluded
-    plot (almost always with no active cycle) cannot meaningfully "match"
-    (Part C; round 8-18 extends this same reasoning to cycle_label).
-    Sorted the same way as the actionable query — a dedicated join, never
-    plot_repository.list_plots.
+    crop/variety/cycle_label are deliberately NEVER applied here — they
+    filter on the plot's active-cycle data, which an excluded plot (almost
+    always with no active cycle) cannot meaningfully "match" (round 8-18
+    extends this same reasoning to cycle_label).
 
-    Capped at `limit` (default the same 5,000 as the actionable-plot cap) —
-    unlike Sheet 1, silently capping this informational-only sheet is
-    acceptable: nothing here is ever imported, so a cap here can never hide
-    an importable row, only truncate how much "why was this excluded"
-    context is shown for an implausibly large result.
+    Round 8-27E — a COUNT, where this used to fetch whole Plot rows (with
+    their supplier and cycles eager-loaded) to render the "รายการที่ไม่รวม"
+    sheet. That sheet is gone; only the number is reported now, on the
+    X-Excluded-Plot-Count response header. Uncapped on purpose: a count has
+    none of the size problem a rendered sheet had, and the old 5,000 cap
+    could have under-reported.
     """
-    stmt = (
-        select(Plot)
-        .join(Supplier, Plot.supplier_id == Supplier.id)
-        .options(selectinload(Plot.supplier), selectinload(Plot.cycles))
-        .order_by(Supplier.code.asc(), Plot.plot_code.asc())
-        .limit(limit)
-    )
+    stmt = select(func.count()).select_from(Plot).join(Supplier, Plot.supplier_id == Supplier.id)
     if plot_status == "active":
         stmt = stmt.where(or_(Plot.is_active.is_(False), Supplier.is_active.is_(False)))
     elif plot_status == "inactive":
@@ -1160,11 +983,33 @@ async def _fetch_excluded_plots(
     if province:
         stmt = stmt.where(func.lower(Plot.province) == province.strip().lower())
     # Round 8-18B — the SAME plot_code/name-only helper Sheet 1 uses
-    # (repo.apply_plot_text_filter), so this sheet can't disagree with the
-    # actionable one about what `q` means.
+    # (repo.apply_plot_text_filter), so this count can't disagree with the
+    # actionable query about what `q` means.
     stmt = repo.apply_plot_text_filter(stmt, q=q)
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return int(await db.scalar(stmt) or 0)
+
+
+# Round 8-27E — how many plots matched the filters but are NOT in the file.
+# Replaces the "รายการที่ไม่รวม" sheet: a sheet nobody opens is a poor place
+# for "some of what you asked for isn't here", so the Plots page reads this
+# and says so on screen. Always present (0 when nothing was excluded) so the
+# client never has to distinguish "none" from "old server".
+_EXCLUDED_COUNT_HEADER = "X-Excluded-Plot-Count"
+
+
+def _template_response(content: bytes, *, excluded_count: int = 0) -> Response:
+    """The one place the import-template response is built, so all three
+    modes (blank / filtered / all-suppliers) can never drift on filename,
+    caching, or the excluded-count header."""
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="plot-import-template.xlsx"',
+            "Cache-Control": "no-store",
+            _EXCLUDED_COUNT_HEADER: str(excluded_count),
+        },
+    )
 
 
 @router.get("/import-template", dependencies=[
@@ -1242,15 +1087,7 @@ async def download_plot_import_template(
     has_filter = any(v is not None for v in (supplier_id, province, crop, variety, cycle_label, q))
     if not has_filter:
         suppliers = await _template_suppliers(db, current_user)
-        content = _plot_template_workbook(suppliers)
-        return Response(
-            content=content,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={
-                "Content-Disposition": 'attachment; filename="plot-import-template.xlsx"',
-                "Cache-Control": "no-store",
-            },
-        )
+        return _template_response(_plot_template_workbook(suppliers))
 
     if supplier_id is None:
         raise HTTPException(
@@ -1301,11 +1138,12 @@ async def download_plot_import_template(
             detail="ไม่พบแปลงตรงตามตัวกรองที่ระบุ",
         )
 
-    # Round 8-6G Part C — the same Supplier's plots that DIDN'T make Sheet 1
+    # Round 8-27E — the same Supplier's plots that DIDN'T make Sheet 1
     # (crop/variety are deliberately never applied here — see
-    # _fetch_excluded_plots's docstring). Round 8-6J — plot_status forwarded
-    # so the exclusion reason matches what was actually asked for.
-    excluded_plots = await _fetch_excluded_plots(
+    # _count_excluded_plots's docstring). There is no "รายการที่ไม่รวม" sheet
+    # any more; the COUNT rides back on a response header and the Plots page
+    # warns on screen instead.
+    excluded_count = await _count_excluded_plots(
         db, supplier_id=supplier_id, province=province, q=q, plot_status=plot_status,
     )
     # Round 8-6J Part D — batch-load the latest historical cycle for every
@@ -1319,24 +1157,16 @@ async def download_plot_import_template(
     # Round 8-7A — batch-load the latest ACTIVE record for every ACTIVE
     # plot's active cycle (one query, never N+1), so an active-plot row can
     # be repurposed for final_plot with finalInspectionRecordId pre-filled.
-    # Round 8-9B.1 — ONE query for every plot on every sheet (Sheet 1 +
-    # snapshot + excluded), never per plot. Only the configured boolean is
-    # ever written into a cell; no password/hash/digest/version is exported.
+    # Round 8-9B.1 — ONE query for every plot on the sheet, never per plot.
+    # Only the configured boolean is ever written into a cell; no password/
+    # hash/digest/version is exported.
     credential_status = await credential_repo.get_credential_status_for_plots(
-        db, [p.id for p in [*plots, *excluded_plots]],
+        db, [p.id for p in plots],
     )
     content = _contextual_plot_template_workbook(
-        plots, excluded_plots, latest_cycles=latest_cycles, plot_status=plot_status,
-        credential_status=credential_status,
+        plots, latest_cycles=latest_cycles, credential_status=credential_status,
     )
-    return Response(
-        content=content,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": 'attachment; filename="plot-import-template.xlsx"',
-            "Cache-Control": "no-store",
-        },
-    )
+    return _template_response(content, excluded_count=excluded_count)
 
 
 async def _all_suppliers_template_response(db: AsyncSession, *, plot_status: str = "all") -> Response:
@@ -1361,30 +1191,20 @@ async def _all_suppliers_template_response(db: AsyncSession, *, plot_status: str
             detail="ไม่พบแปลงตรงตามตัวกรองสถานะแปลงของ Supplier ที่ใช้งานอยู่",
         )
 
-    excluded_plots = await _fetch_excluded_plots(db, supplier_id=None, plot_status=plot_status)
+    excluded_count = await _count_excluded_plots(db, supplier_id=None, plot_status=plot_status)
     inactive_plot_ids = [p.id for p in plots if not p.is_active]
     latest_cycles = (
         await plot_cycle_repo.get_latest_cycles_for_plots(db, inactive_plot_ids)
         if inactive_plot_ids else {}
     )
-    # Round 8-9B.1 — ONE query for every plot on every sheet (Sheet 1 +
-    # snapshot + excluded), never per plot. Only the configured boolean is
-    # ever written into a cell; no password/hash/digest/version is exported.
+    # Round 8-9B.1 — ONE query for every plot on the sheet, never per plot.
     credential_status = await credential_repo.get_credential_status_for_plots(
-        db, [p.id for p in [*plots, *excluded_plots]],
+        db, [p.id for p in plots],
     )
     content = _contextual_plot_template_workbook(
-        plots, excluded_plots, latest_cycles=latest_cycles, plot_status=plot_status,
-        credential_status=credential_status,
+        plots, latest_cycles=latest_cycles, credential_status=credential_status,
     )
-    return Response(
-        content=content,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": 'attachment; filename="plot-import-template.xlsx"',
-            "Cache-Control": "no-store",
-        },
-    )
+    return _template_response(content, excluded_count=excluded_count)
 
 
 # --- Plot + cycle Excel import (round 7.5) --------------------------------

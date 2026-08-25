@@ -62,6 +62,13 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+        # Round 8-27E — a browser hides every non-simple RESPONSE header from
+        # JS unless it is listed here. The Plots page reads
+        # X-Excluded-Plot-Count off the template download to warn how many
+        # matching plots aren't in the file. Same-origin deploys never needed
+        # this (no CORS at all), but a split-origin dev setup would silently
+        # read 0 — a wrong "nothing was excluded", not an error.
+        expose_headers=["Content-Disposition", "X-Excluded-Plot-Count"],
         max_age=600,
     )
 

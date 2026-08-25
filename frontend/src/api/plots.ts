@@ -675,9 +675,19 @@ export interface PlotImportTemplateParams {
  * uses below, rather than a second parser, since this is also a
  * blob-response GET that can come back as a JSON error body.
  */
+/** Round 8-27E — the workbook plus how many matching plots were left OUT of
+ * it. The backend used to explain that on a "รายการที่ไม่รวม" sheet; a sheet
+ * is a poor place to say "part of what you asked for isn't here", so it now
+ * rides back on the X-Excluded-Plot-Count header and the Plots page says it
+ * on screen. Always sent (0 when nothing was excluded). */
+export interface PlotImportTemplateDownload {
+  blob: Blob;
+  excludedCount: number;
+}
+
 export async function downloadPlotImportTemplate(
   params?: PlotImportTemplateParams,
-): Promise<Blob> {
+): Promise<PlotImportTemplateDownload> {
   // Build with keys OMITTED (not just undefined-valued) for anything unset —
   // stricter than relying on axios's own undefined-drops-from-querystring
   // behavior, and keeps `params` entirely absent from the request config when
@@ -707,7 +717,13 @@ export async function downloadPlotImportTemplate(
       responseType: 'blob',
       ...(hasQuery ? { params: query } : {}),
     });
-    return res.data;
+    // A missing/garbled header reads as 0 rather than NaN — the count is a
+    // nice-to-have notice, never a reason to fail a successful download.
+    const raw = Number(res.headers?.['x-excluded-plot-count']);
+    return {
+      blob: res.data,
+      excludedCount: Number.isFinite(raw) && raw > 0 ? raw : 0,
+    };
   } catch (error) {
     if (axios.isAxiosError(error) && error.response) {
       const blob = error.response.data as Blob;

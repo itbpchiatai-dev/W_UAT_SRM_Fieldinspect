@@ -768,7 +768,28 @@ describe('downloadPlotImportTemplate (round 8-6B)', () => {
     expect(getSpy).toHaveBeenCalledWith('/api/v1/plots/import-template', {
       responseType: 'blob',
     });
-    expect(result).toBe(blob);
+    expect(result.blob).toBe(blob);
+  });
+
+  // Round 8-27E — the "รายการที่ไม่รวม" sheet became a response header, so
+  // the helper returns the count alongside the workbook.
+  it('reads the excluded-plot count off the response header', async () => {
+    vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: new Blob(['x']), headers: { 'x-excluded-plot-count': '7' },
+    });
+
+    const result = await downloadPlotImportTemplate();
+
+    expect(result.excludedCount).toBe(7);
+  });
+
+  it('treats a missing or unparseable excluded-plot count as 0, never NaN', async () => {
+    // The count is a notice, never a reason to fail a download that worked.
+    for (const headers of [undefined, {}, { 'x-excluded-plot-count': 'abc' }, { 'x-excluded-plot-count': '-3' }]) {
+      vi.spyOn(apiClient, 'get').mockResolvedValue({ data: new Blob(['x']), headers });
+      const result = await downloadPlotImportTemplate();
+      expect(result.excludedCount).toBe(0);
+    }
   });
 
   it('calling with an empty object also keeps the generic (no-params) request', async () => {

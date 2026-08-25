@@ -38,6 +38,12 @@ def _db_with_supplier(supplier) -> MagicMock:
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=supplier)
     db.execute = AsyncMock(return_value=result)
+    # Round 8-27E — _count_excluded_plots reads db.scalar(); tests that don't
+    # patch it out otherwise await a bare MagicMock. 0 = nothing excluded,
+    # which is the uninteresting default for every test in this module (the
+    # count's own behaviour lives in
+    # test_plot_import_template_excluded_and_all_suppliers.py).
+    db.scalar = AsyncMock(return_value=0)
     return db
 
 
@@ -163,7 +169,7 @@ async def test_plot_status_forwarded_to_list_plots_for_filtered_template(status)
     sid = uuid4()
     with patch(f"{_P}.get_supplier_scope_filter", AsyncMock(return_value=[])), \
          patch(f"{_P}.repo.list_plots", AsyncMock(return_value=[MagicMock()])) as mk_list, \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"CTX")):
         await download_plot_import_template(
             current_user=_user(), db=_db_with_supplier(_fake_supplier(sid)),

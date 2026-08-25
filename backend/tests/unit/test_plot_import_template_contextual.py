@@ -1,7 +1,11 @@
-"""Round 8-6A — the filter-aware CONTEXTUAL plot-import template: a 3-sheet
-workbook ("นำเข้ารอบใหม่" / "ข้อมูลปัจจุบัน" / "ตัวอย่าง") built from real,
-active Plot rows instead of the generic blank form (test_plot_import_template
-.py, unchanged). No DB needed — the builders take plain Plot-shaped objects.
+"""Round 8-6A — the filter-aware CONTEXTUAL plot-import template, built from
+real Plot rows. Round 8-27E cut it to TWO sheets ("นำเข้ารอบใหม่" /
+"ตัวอย่าง") and made the blank template (test_plot_import_template.py) build
+the same two, so the app now ships ONE template shape. The dropped sheets:
+"ข้อมูลปัจจุบัน" restated values Sheet 1's own gray reference columns already
+carry, and "รายการที่ไม่รวม" is now an X-Excluded-Plot-Count response header
+the Plots page shows on screen. No DB needed — the builders take plain
+Plot-shaped objects.
 """
 from __future__ import annotations
 
@@ -14,19 +18,15 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 from app.api.v1.plots import (
-    _CURRENT_SNAPSHOT_HEADERS,
     _EDITABLE_COLUMNS,
     _PLOT_TEMPLATE_HEADERS,
     _REFERENCE_COLUMNS,
-    _SHEET_CURRENT_SNAPSHOT,
     _SHEET_EXAMPLES,
-    _SHEET_EXCLUDED,
     _SHEET_NEW_CYCLE,
     _STYLE_EDITABLE,
     _STYLE_EXAMPLE,
     _STYLE_REFERENCE,
     _contextual_plot_template_workbook,
-    _current_snapshot_row_values,
     _new_cycle_row_values,
     _new_cycle_sheet,
 )
@@ -91,18 +91,16 @@ def _rows_by_number(plots: list) -> tuple[list[str], dict[int, dict[str, str]]]:
 
 # --- item 12/13: 3 sheets, correct order, sheet1 headers --------------------
 
-def test_workbook_has_exactly_four_sheets_in_order() -> None:
-    """Round 8-6G Part C adds "รายการที่ไม่รวม" as sheet 3, pushing "ตัวอย่าง"
-    to sheet 4 — see test_plot_import_template_excluded_and_all_suppliers.py
-    for the excluded sheet's own dedicated coverage."""
+def test_workbook_has_exactly_two_sheets_in_order() -> None:
+    """Round 8-27E — the import sheet and the examples sheet, nothing else.
+    Sheet 1 must stay first: excel_reader.read_first_sheet only ever reads
+    sheet1.xml."""
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     workbook = parts["xl/workbook.xml"]
-    assert workbook.count("<sheet ") == 4
+    assert workbook.count("<sheet ") == 2
     # Sheet order in workbook.xml reflects the order build_xlsx was given.
     names_in_order = re.findall(r'<sheet name="([^"]+)"', workbook)
-    assert names_in_order == [
-        _SHEET_NEW_CYCLE, _SHEET_CURRENT_SNAPSHOT, _SHEET_EXCLUDED, _SHEET_EXAMPLES,
-    ]
+    assert names_in_order == [_SHEET_NEW_CYCLE, _SHEET_EXAMPLES]
 
 
 def test_first_sheet_is_new_cycle_sheet_headers_match_import_columns() -> None:
@@ -188,50 +186,13 @@ def test_plot_without_active_cycle_has_blank_cycle_fields_and_still_start_next_c
     assert values["cycleLabel"] != closed.cycle_label
 
 
-def test_current_snapshot_without_active_cycle_has_blank_cycle_fields() -> None:
-    plot = _plot(active_cycle=None, cycles=[_cycle(status="harvested")])
-    values = _current_snapshot_row_values(plot)
-    for field in ("activeCycleNo", "activeCycleStatus", "activeCycleLabel",
-                  "crop", "variety", "poNumber", "pCode", "lotNo",
-                  "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit"):
-        assert values[field] is None, field
-    # Physical-plot fields are still populated regardless.
-    assert values["plotCode"] == plot.plot_code
-
-
-# --- item 20: Sheet 2 keeps current lotNo/plantingDate/cycleLabel intact ----
-
-def test_current_snapshot_row_keeps_lot_no_and_planting_date() -> None:
-    plot = _plot(active_cycle=_cycle(lot_no="CURRENT-LOT-07", planting_date=datetime.date(2026, 3, 15),
-                                      cycle_label="mar2026"))
-    values = _current_snapshot_row_values(plot)
-    assert values["lotNo"] == "CURRENT-LOT-07"
-    assert values["plantingDate"] == "2026-03-15"
-    assert values["activeCycleLabel"] == "mar2026"
-
-
-def test_current_snapshot_sheet_headers_and_row_order_match_sheet_one() -> None:
-    parts = _unzip(_contextual_plot_template_workbook(
-        [_plot(plot_code="P001"), _plot(plot_code="P002")]
-    ))
-    sheet2 = parts["xl/worksheets/sheet2.xml"]
-    for h in _CURRENT_SNAPSHOT_HEADERS:
-        assert h in sheet2
-    assert '<t>P001</t>' in sheet2
-    assert '<t>P002</t>' in sheet2
-
-
-def test_current_snapshot_uses_active_cycle_relationship_not_plot_mirror() -> None:
-    """Deliberately give the plot MIRROR columns a different value than
-    active_cycle's — the snapshot must read from active_cycle, never the
-    mirror (Part D: "ห้ามใช้ plot mirror เป็น primary source")."""
-    plot = _plot(
-        active_cycle=_cycle(crop="พริก", lot_no="FROM-ACTIVE-CYCLE"),
-        current_crop="MIRROR-STALE-VALUE", current_lot_no="MIRROR-STALE-LOT",
-    )
-    values = _current_snapshot_row_values(plot)
-    assert values["crop"] == "พริก"
-    assert values["lotNo"] == "FROM-ACTIVE-CYCLE"
+# Round 8-27E removed the "ข้อมูลปัจจุบัน" sheet and the four tests that
+# covered it. What it showed is not lost: Sheet 1's own gray reference
+# columns carry each plot's current values, and the rule those tests really
+# protected — read from active_cycle, never the plot's mirror columns — is
+# still asserted for Sheet 1 by test_new_cycle_row_copies_active_cycle_plan_
+# fields and test_plot_without_active_cycle_has_blank_cycle_fields_and_still_
+# start_next_cycle above.
 
 
 # --- item 22: additionalPhones comma-separated, deterministic --------------
@@ -264,10 +225,10 @@ def test_inactive_phones_excluded_from_new_cycle_row() -> None:
 def test_examples_sheet_has_the_three_common_actions() -> None:
     _headers, by_no = _rows_by_number([_plot()])
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
-    sheet4 = parts["xl/worksheets/sheet4.xml"]
+    sheet2 = parts["xl/worksheets/sheet2.xml"]
     for action in ("create_plot_with_cycle", "update_current_cycle", "start_next_cycle"):
-        assert action in sheet4
-    assert "ข้อมูลตัวอย่างเท่านั้น" in sheet4
+        assert action in sheet2
+    assert "ข้อมูลตัวอย่างเท่านั้น" in sheet2
 
 
 def test_examples_sheet_is_not_sheet_one() -> None:
@@ -314,9 +275,9 @@ def _col_letter(n: int) -> str:
 def test_example_row_cells_reference_the_red_fill_in_styles_xml() -> None:
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
-    sheet4 = parts["xl/worksheets/sheet4.xml"]
+    sheet2 = parts["xl/worksheets/sheet2.xml"]
     # Row 4 = first example row (row1 header, row2 description, row3 notice).
-    style_idx = _cell_style_index(sheet4, "A4")
+    style_idx = _cell_style_index(sheet2, "A4")
     assert style_idx is not None
     assert fill_by_style[style_idx] == _STYLE_EXAMPLE.bg
 
@@ -400,11 +361,11 @@ def test_examples_sheet_every_import_column_has_red_fill_including_blanks() -> N
     the reactivate example, so the range grew by one."""
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
-    sheet4 = parts["xl/worksheets/sheet4.xml"]
+    sheet2 = parts["xl/worksheets/sheet2.xml"]
     for example_row in (4, 5, 6, 7, 8):
         for col_index in range(1, len(IMPORT_COLUMNS) + 1):
             ref = f"{_col_letter(col_index)}{example_row}"
-            style_idx = _cell_style_index(sheet4, ref)
+            style_idx = _cell_style_index(sheet2, ref)
             assert style_idx is not None, f"row {example_row} col {col_index} missing entirely"
             assert fill_by_style[style_idx] == _STYLE_EXAMPLE.bg, (example_row, col_index)
 
@@ -477,4 +438,6 @@ def test_generic_template_builder_is_untouched_by_this_module() -> None:
     for its full regression suite."""
     from app.api.v1.plots import _plot_template_workbook
     parts = _unzip(_plot_template_workbook([_supplier()]))
-    assert parts["xl/workbook.xml"].count("<sheet ") == 1
+    # Round 8-27E — the blank template now builds the SAME two sheets as the
+    # contextual one; that is the point of the round, not a leak from it.
+    assert parts["xl/workbook.xml"].count("<sheet ") == 2

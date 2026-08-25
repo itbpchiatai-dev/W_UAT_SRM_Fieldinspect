@@ -820,7 +820,7 @@ describe('PlotImportModal — misc', () => {
   });
 
   it('downloads the template without touching preview/commit', async () => {
-    templateMock.mockResolvedValue(new Blob(['x']));
+    templateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderModal();
 
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลดเทมเพลต' }));
@@ -834,7 +834,7 @@ describe('PlotImportModal — misc', () => {
   // --- round 8-6B Part H items 31/32/33/35: generic template regression ---
 
   it('generic download calls downloadPlotImportTemplate() with NO argument (item 31)', async () => {
-    templateMock.mockResolvedValue(new Blob(['x']));
+    templateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderModal();
 
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลดเทมเพลต' }));
@@ -862,17 +862,19 @@ describe('PlotImportModal — misc', () => {
     expect(screen.getByText(/เลือก Supplier\/จังหวัดในหน้าแปลง/)).toBeTruthy();
   });
 
-  it('explains the 4-sheet workbook structure (นำเข้ารอบใหม่/ข้อมูลปัจจุบัน/รายการที่ไม่รวม/ตัวอย่าง, round 8-6J)', () => {
+  // Round 8-27E — two sheets, and the SAME two whether the file came from
+  // this modal's blank-template button or the Plots page's filtered download.
+  it('explains the 2-sheet workbook structure (นำเข้ารอบใหม่ / ตัวอย่าง)', () => {
     renderModal();
 
     expect(screen.getByText(/นำเข้ารอบใหม่/)).toBeTruthy();
-    expect(screen.getByText(/ข้อมูลปัจจุบัน/)).toBeTruthy();
-    expect(screen.getByText(/รายการที่ไม่รวม/)).toBeTruthy();
     expect(screen.getAllByText(/ตัวอย่าง/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/ข้อมูลปัจจุบัน/)).toBeNull();
+    expect(screen.queryByText(/รายการที่ไม่รวม/)).toBeNull();
   });
 
   it('downloading the template never auto-commits or auto-uploads (item 35)', async () => {
-    templateMock.mockResolvedValue(new Blob(['x']));
+    templateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderModal();
 
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลดเทมเพลต' }));

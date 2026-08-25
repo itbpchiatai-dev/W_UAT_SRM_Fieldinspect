@@ -18,13 +18,10 @@ from app.api.v1.plots import (
     _CURRENT_PLOT_STATUS_ACTIVE_LABEL,
     _CURRENT_PLOT_STATUS_INACTIVE_LABEL,
     _EDITABLE_COLUMNS,
-    _EXCLUSION_REASON_STATUS_FILTER_ACTIVE,
-    _EXCLUSION_REASON_STATUS_FILTER_INACTIVE,
     _PLOT_TEMPLATE_HEADERS,
     _STYLE_EDITABLE,
     _STYLE_REFERENCE,
     _contextual_plot_template_workbook,
-    _excluded_row_values,
     _new_cycle_sheet,
     _reactivate_row_values,
 )
@@ -242,21 +239,8 @@ def test_reactivate_row_blank_editable_columns_still_carry_yellow_style():
             assert cell.style == _STYLE_REFERENCE, col
 
 
-# --- item 18: excluded sheet reports the RIGHT status-filter reason --------
-
-def test_excluded_row_reason_when_plot_status_active_excludes_inactive_plot():
-    plot = _plot(is_active=False)
-    values = _excluded_row_values(plot, "active")
-    assert values["exclusionReason"] == _EXCLUSION_REASON_STATUS_FILTER_INACTIVE
-
-
-def test_excluded_row_reason_when_plot_status_inactive_excludes_active_plot():
-    plot = _plot(is_active=True)
-    values = _excluded_row_values(plot, "inactive")
-    assert values["exclusionReason"] == _EXCLUSION_REASON_STATUS_FILTER_ACTIVE
-
-
-def test_excluded_row_supplier_inactive_reason_wins_over_status_filter():
-    plot = _plot(is_active=False, supplier=_supplier(is_active=False))
-    values = _excluded_row_values(plot, "active")
-    assert values["exclusionReason"] == "Supplier ปิดใช้งาน"
+# Round 8-27E removed the "รายการที่ไม่รวม" sheet and the three
+# exclusion-reason tests that lived here. The plot_status-dependent rule they
+# covered — which plots count as excluded for a given filter — is still
+# asserted, on the query itself, by
+# test_plot_import_template_excluded_and_all_suppliers.py.

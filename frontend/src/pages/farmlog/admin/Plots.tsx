@@ -483,8 +483,12 @@ function DownloadTemplateMenu({
               </span>
             </button>
           )}
+          {/* Round 8-27E — the "รายการที่ไม่รวม" sheet is gone; anything left
+              out of the file is reported on screen after the download instead
+              (see templateExcludedCount). */}
           <div className="border-t border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
-            แปลงที่ปิดใช้งานจะอยู่ในชีต &quot;รายการที่ไม่รวม&quot; และจะไม่ถูกนำเข้า
+            ไฟล์มี 2 ชีต: &quot;นำเข้ารอบใหม่&quot; (ชีตที่ระบบอ่าน) และ &quot;ตัวอย่าง&quot;
+            — ถ้ามีแปลงที่ไม่ได้อยู่ในไฟล์ ระบบจะแจ้งหลังดาวน์โหลด
           </div>
         </div>
       ) : null}
@@ -694,6 +698,13 @@ export function Plots() {
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
+  // Round 8-27E — replaces the workbook's old "รายการที่ไม่รวม" sheet. How
+  // many plots matched the filters but are NOT in the downloaded file (their
+  // Supplier is deactivated, or their own status contradicts the status
+  // filter). Shown here rather than inside the file, because the moment a
+  // user needs to know part of their request is missing is right after they
+  // click Download — not several sheets into a workbook they may never open.
+  const [templateExcludedCount, setTemplateExcludedCount] = useState(0);
   const [printItems, setPrintItems] = useState<PlotQrLabelData[] | null>(null);
   const [supplierPrintLoading, setSupplierPrintLoading] = useState(false);
   const [supplierPrintError, setSupplierPrintError] = useState('');
@@ -1028,8 +1039,9 @@ export function Plots() {
     // 2nd onSuccess arg — use that snapshot, never the live filter state
     // (which the user may have already changed while the request was in
     // flight).
-    onSuccess: (blob, submittedParams) => {
+    onSuccess: ({ blob, excludedCount }, submittedParams) => {
       setTemplateError(null);
+      setTemplateExcludedCount(excludedCount);
       // Round 8-6G — all_suppliers has its own fixed filename (no
       // Supplier/province to embed); still read from submittedParams, never
       // live filter state, for the same click-time-snapshot reason as the
@@ -1045,6 +1057,9 @@ export function Plots() {
       // ready-to-show Thai message — no separate blob-parsing helper needed
       // here (see api/plots.ts's extractErrorDetailFromBlob).
       setTemplateError(error instanceof Error ? error.message : 'ดาวน์โหลด Excel ไม่สำเร็จ');
+      // A failed download excluded nothing — clear any notice from a previous
+      // one so it can't be read as belonging to this attempt.
+      setTemplateExcludedCount(0);
     },
   });
 
@@ -1246,6 +1261,23 @@ export function Plots() {
         <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0 break-words">{templateError}</span>
+        </div>
+      )}
+
+      {templateExcludedCount > 0 && (
+        <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <span className="min-w-0 break-words">
+            มี {templateExcludedCount.toLocaleString()} แปลงที่ตรงตัวกรอง แต่ไม่ได้อยู่ในไฟล์
+            — แปลงหรือ Supplier ที่ปิดใช้งาน หรือไม่ตรงกับตัวกรองสถานะแปลงที่เลือก
+          </span>
+          <button
+            type="button"
+            onClick={() => setTemplateExcludedCount(0)}
+            aria-label="ปิดข้อความแจ้งเตือน"
+            className="shrink-0 text-amber-700 hover:text-amber-900"
+          >
+            ✕
+          </button>
         </div>
       )}
 

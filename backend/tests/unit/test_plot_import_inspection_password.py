@@ -852,14 +852,18 @@ def test_example_passwords_live_only_in_the_example_rows() -> None:
         assert pin.isdigit() and 4 <= len(pin) <= 20
 
 
-def test_current_snapshot_and_excluded_sheets_carry_status_only() -> None:
-    from app.api.v1.plots import _current_snapshot_row_values, _excluded_row_values
+def test_sheet_one_row_carries_password_status_only() -> None:
+    """Round 8-27E — the "ข้อมูลปัจจุบัน" and "รายการที่ไม่รวม" sheets this
+    test also covered are gone, so Sheet 1 is the only place a password
+    status can now be exported. The guarantee is unchanged: a status word,
+    never the password/hash/digest itself."""
+    from app.api.v1.plots import _new_cycle_row_values
 
     plot = _template_plot()
-    snap = _current_snapshot_row_values(plot, password_configured=True)
-    excl = _excluded_row_values(plot, "all", password_configured=False)
-    assert snap["inspectionPasswordStatus"] == "configured"
-    assert excl["inspectionPasswordStatus"] == "not_configured"
-    for values in (snap, excl):
-        assert "newInspectionPassword" not in values
+    configured = _new_cycle_row_values(plot, password_configured=True)
+    unconfigured = _new_cycle_row_values(plot, password_configured=False)
+    assert configured["inspectionPasswordStatus"] == "configured"
+    assert unconfigured["inspectionPasswordStatus"] == "not_configured"
+    for values in (configured, unconfigured):
+        assert not values.get("newInspectionPassword")
         assert not any("hash" in k.lower() or "digest" in k.lower() for k in values)

@@ -1473,7 +1473,7 @@ describe('Plots list — searchable province/crop/variety filters (round 8-18A)'
 
   it('Excel Template download still receives province/crop/variety from the searchable comboboxes', async () => {
     mockCropVarietyMasterData();
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByText('แปลงทดสอบ');
 
@@ -1568,7 +1568,7 @@ describe('Plots list — "รอบปลูกปัจจุบัน" filter 
   });
 
   it('forwards cycleLabel to the Excel template download and shows it in the filter summary', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByText('แปลงทดสอบ');
 
@@ -1678,7 +1678,7 @@ describe('Plots list — "วันที่เริ่ม...ถึง" plantin
   });
 
   it('is NEVER forwarded to the Excel template download — list-only, same precedent as the access-number search box', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByText('แปลงทดสอบ');
 
@@ -2181,7 +2181,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('with a Supplier selected, sends supplierId (item 14)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
 
@@ -2196,7 +2196,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('sends the currently-selected plot status filter (round 8-6J)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
     const statusSelect = await screen.findByLabelText('กรองสถานะแปลง') as HTMLSelectElement;
@@ -2210,7 +2210,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('Supplier + province are both sent (item 15)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     listPlotProvincesMock.mockResolvedValue(['เชียงใหม่']);
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
@@ -2224,7 +2224,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('crop + variety are both sent (item 16)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     listMasterDataMock.mockImplementation(({ type }: { type: string }) => {
       if (type === 'crop') return Promise.resolve([masterDataItem({ id: 'c-1', type: 'crop', value: 'พริก' })]);
       if (type === 'variety') return Promise.resolve([masterDataItem({ id: 'v-1', type: 'variety', value: 'พริกขี้หนู', parent: 'พริก' })]);
@@ -2243,7 +2243,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('sends the APPLIED search (q), not unapplied searchText (items 17/18)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
 
@@ -2266,7 +2266,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('never sends page/pageSize/limit/offset (item 19)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
 
@@ -2353,7 +2353,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('a successful download uses a filename built from the Supplier CODE (item 25)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
 
@@ -2365,7 +2365,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   });
 
   it('the selected province is included in the filename (item 26)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     listPlotProvincesMock.mockResolvedValue(['เชียงใหม่']);
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
@@ -2381,7 +2381,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
     listSuppliersMock.mockResolvedValue([
       { id: 'sup-1', code: 'SUP/001:*?', name: 'Supplier One', isActive: true, contactName: null, contactEmail: null },
     ]);
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP/001:*?');
 
@@ -2397,7 +2397,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
     // supplierById only knows suppliers from the active-suppliers query;
     // this simulates a filter value that isn't in that map (defensive path).
     listSuppliersMock.mockResolvedValue([]);
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
     // No supplier is selectable, so directly exercise the filename builder's
@@ -2633,7 +2633,7 @@ describe('Excel ตามตัวกรอง — request-state race + error cl
   });
 
   it('the q shown in the summary matches the q sent to the API (item 16)', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
     fireEvent.change(screen.getByLabelText(NAME_CODE_LABEL), { target: { value: 'P003' } });
@@ -2738,7 +2738,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   it('"ทุก Supplier" sends only template_mode=all_suppliers, ignoring any filter selected in the UI (items 6/7)', async () => {
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await selectSupplierFilter('SUP001'); // a filter IS selected in the UI...
     openDownloadMenu();
@@ -2760,7 +2760,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   it('"ทุก Supplier" forwards a non-default plotStatus too (round 8-6J)', async () => {
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     const statusSelect = await screen.findByLabelText('กรองสถานะแปลง') as HTMLSelectElement;
     fireEvent.change(statusSelect, { target: { value: 'inactive' } });
@@ -2776,7 +2776,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   it('"ทุก Supplier" uses the fixed filename plot-next-cycle-ALL-SUPPLIERS.xlsx (item 8)', async () => {
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
     openDownloadMenu();
@@ -2845,11 +2845,15 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   // --- item 11: "รายการที่ไม่รวม" is mentioned in the menu ------------------
 
-  it('the menu explains inactive plots go to "รายการที่ไม่รวม" and are never imported (item 11)', async () => {
+  // Round 8-27E — the "รายการที่ไม่รวม" sheet is gone; the menu now describes
+  // the 2-sheet file and points at the on-screen notice instead.
+  it('the menu describes the 2-sheet file and the after-download notice (item 11)', async () => {
     renderPlotsPage();
     await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
     openDownloadMenu();
-    expect(screen.getByText(/รายการที่ไม่รวม/)).toBeTruthy();
+    expect(screen.getByText(/2 ชีต/)).toBeTruthy();
+    expect(screen.getByText(/ระบบจะแจ้งหลังดาวน์โหลด/)).toBeTruthy();
+    expect(screen.queryByText(/รายการที่ไม่รวม/)).toBeNull();
   });
 
   // --- item 12: keyboard support + no fixed-overflow width on mobile -------
@@ -2879,7 +2883,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   it('downloading (either mode) never calls the preview or commit APIs (item 13)', async () => {
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
     openDownloadMenu();
@@ -3512,7 +3516,7 @@ describe('Plots list — secure phone search (round 8-17A.2)', () => {
   });
 
   it('template download excludes the phone and shows an explanatory note', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByText('แปลงทดสอบ');
 
@@ -3724,7 +3728,7 @@ describe('Plots list — split identity/access-number search (round 8-18B)', () 
   // --- Excel template ---
 
   it('the Excel template receives q from the name/code box but never the access number', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByText('แปลงทดสอบ');
 
@@ -3991,7 +3995,7 @@ describe('Plots list — partial identity/access-number search (round 8-18B.1)',
   });
 
   it('the Excel template gets the partial q but never the partial number', async () => {
-    downloadPlotImportTemplateMock.mockResolvedValue(new Blob(['x']));
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
     await screen.findByText('แปลงเมล่อน');
 
@@ -4034,5 +4038,63 @@ describe('Plots list — public inspect shortcut (round 8-25I)', () => {
     // rel="noopener noreferrer" — a target="_blank" link without it lets the
     // opened page reach back into this window via window.opener.
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+});
+
+describe('Plots — round 8-27E: excluded plots are reported on screen, not in a sheet', () => {
+  function clickFilteredDownload() {
+    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+  }
+
+  async function download() {
+    listPlotsMock.mockResolvedValue([]);
+    renderPlotsPage();
+    // The filtered download refuses to call the API without a Supplier
+    // selected (round 8-6B item 12), so pick one first.
+    fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
+    fireEvent.click(await screen.findByText('SUP001'));
+    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    clickFilteredDownload();
+  }
+
+  it('warns how many matching plots are missing from the downloaded file', async () => {
+    // The workbook used to carry a "รายการที่ไม่รวม" sheet for this. A sheet
+    // is a poor place to say "part of what you asked for isn't here" — the
+    // moment the user needs to know is right after they click Download.
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 4 });
+    await download();
+
+    expect(await screen.findByText(/มี 4 แปลงที่ตรงตัวกรอง แต่ไม่ได้อยู่ในไฟล์/)).toBeTruthy();
+  });
+
+  it('says nothing when every matching plot made it into the file', async () => {
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
+    await download();
+
+    await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalled());
+    expect(screen.queryByText(/ไม่ได้อยู่ในไฟล์/)).toBeNull();
+  });
+
+  it('the notice can be dismissed', async () => {
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 2 });
+    await download();
+    await screen.findByText(/ไม่ได้อยู่ในไฟล์/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ปิดข้อความแจ้งเตือน' }));
+
+    expect(screen.queryByText(/ไม่ได้อยู่ในไฟล์/)).toBeNull();
+  });
+
+  it('a failed download never leaves a stale notice from an earlier one', async () => {
+    downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 5 });
+    await download();
+    await screen.findByText(/ไม่ได้อยู่ในไฟล์/);
+
+    downloadPlotImportTemplateMock.mockRejectedValue(new Error('ดาวน์โหลด Excel ไม่สำเร็จ'));
+    clickFilteredDownload();
+
+    await screen.findByText('ดาวน์โหลด Excel ไม่สำเร็จ');
+    expect(screen.queryByText(/ไม่ได้อยู่ในไฟล์/)).toBeNull();
   });
 });

@@ -253,7 +253,7 @@ async def test_template_cycle_label_forwarded_to_list_plots():
     sid = uuid4()
     with patch(f"{_P}.get_supplier_scope_filter", AsyncMock(return_value=[])), \
          patch(f"{_P}.repo.list_plots", AsyncMock(return_value=[MagicMock()])) as mk_list, \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"CTX")):
         await download_plot_import_template(
             current_user=_user(), db=_db_with_supplier(_fake_supplier(sid)),
@@ -269,7 +269,7 @@ async def test_template_cycle_label_never_forwarded_to_excluded_plots():
     sid = uuid4()
     with patch(f"{_P}.get_supplier_scope_filter", AsyncMock(return_value=[])), \
          patch(f"{_P}.repo.list_plots", AsyncMock(return_value=[MagicMock()])), \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])) as mk_excluded, \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)) as mk_excluded, \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"CTX")):
         await download_plot_import_template(
             current_user=_user(), db=_db_with_supplier(_fake_supplier(sid)),

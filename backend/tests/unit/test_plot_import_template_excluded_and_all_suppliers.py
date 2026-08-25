@@ -1,5 +1,13 @@
-"""Round 8-6G — "รายการที่ไม่รวม" (excluded-plot) sheet + template_mode=
-all_suppliers. No real DB: workbook builders take plain Plot/Supplier-shaped
+"""Round 8-6G — excluded-plot reporting + template_mode=all_suppliers.
+
+Round 8-27E deleted the "รายการที่ไม่รวม" sheet: under the default
+plot_status it only ever reported "this plot's Supplier is deactivated", and
+a sheet is a poor place to tell someone that part of what they asked for is
+missing. The endpoint returns the COUNT on the X-Excluded-Plot-Count header
+now and the Plots page shows it on screen. The tests that rendered that
+sheet went with it; what survives is the query contract (which plots count
+as excluded, and that the filters reaching it still match Sheet 1's) plus
+all of the all_suppliers authorization/limit coverage, untouched. No real DB: workbook builders take plain Plot/Supplier-shaped
 SimpleNamespace fixtures (same style as test_plot_import_template_
 contextual.py); endpoint-level tests call download_plot_import_template
 directly with mocked db/current_user (same style as
@@ -20,13 +28,11 @@ from fastapi import HTTPException
 
 import app.api.v1.plots as plots_module
 from app.api.v1.plots import (
-    _EXCLUDED_HEADERS,
+    _EXCLUDED_COUNT_HEADER,
     _SHEET_EXAMPLES,
-    _SHEET_EXCLUDED,
     _SHEET_NEW_CYCLE,
     _contextual_plot_template_workbook,
-    _excluded_row_values,
-    _fetch_excluded_plots,
+    _count_excluded_plots,
     download_plot_import_template,
 )
 from app.services.excel_reader import read_first_sheet
@@ -87,106 +93,29 @@ def _fake_supplier_lookup_db(supplier) -> MagicMock:
     return db
 
 
-# --- item 2: excluded-row reason/label mapping ------------------------------
-
-def test_excluded_plot_shows_plot_inactive_reason() -> None:
-    plot = _plot(
-        plot_code="P002", is_active=False,
-        cycles=[_cycle(cycle_no=1, status="cancelled", cycle_label=None)],
-    )
-    values = _excluded_row_values(plot)
-    assert values["plotCode"] == "P002"
-    assert values["plotStatus"] == "ปิดใช้งาน"
-    assert values["cycleStatus"] == "ยกเลิก"
-    assert values["cycleLabel"] is None
-    assert values["exclusionReason"] == "แปลงปิดใช้งาน ไม่สามารถเริ่มรอบปลูกใหม่ได้"
-
-
-def test_excluded_plot_under_inactive_supplier_shows_supplier_reason() -> None:
-    plot = _plot(is_active=True, supplier=_supplier(is_active=False))
-    values = _excluded_row_values(plot)
-    assert values["exclusionReason"] == "Supplier ปิดใช้งาน"
-    # The PLOT itself is active; it's the Supplier that's inactive.
-    assert values["plotStatus"] == "ใช้งานอยู่"
-
-
-def test_excluded_plot_with_no_cycle_history_shows_no_open_cycle_label() -> None:
-    plot = _plot(is_active=False, cycles=[])
-    values = _excluded_row_values(plot)
-    assert values["cycleStatus"] == "ไม่มีรอบที่เปิดอยู่"
-    assert values["cycleLabel"] is None
-
-
-def test_excluded_row_picks_the_latest_cycle_by_cycle_no() -> None:
-    plot = _plot(is_active=False, cycles=[
-        _cycle(cycle_no=1, status="harvested", cycle_label="old2025"),
-        _cycle(cycle_no=2, status="cancelled", cycle_label="latest2026"),
-    ])
-    values = _excluded_row_values(plot)
-    assert values["cycleStatus"] == "ยกเลิก"
-    assert values["cycleLabel"] == "latest2026"
-
-
-def test_excluded_row_never_exposes_internal_id_or_secret_fields() -> None:
-    plot = _plot(is_active=False)
-    plot.id = uuid4()
-    plot.qr_key = "should-never-appear"
-    values = _excluded_row_values(plot)
-    assert set(values.keys()) == set(_EXCLUDED_HEADERS)
-    assert str(plot.id) not in values.values()
-    assert "should-never-appear" not in values.values()
-    assert "action" not in _EXCLUDED_HEADERS
-
-
-def test_fetch_excluded_plots_never_accepts_crop_or_variety_params() -> None:
-    """Part C — crop/variety filter on active-cycle data, which an excluded
-    plot (almost always with no active cycle) cannot meaningfully "match".
+def test_count_excluded_plots_never_accepts_crop_or_variety_params() -> None:
+    """crop/variety filter on active-cycle data, which an excluded plot
+    (almost always with no active cycle) cannot meaningfully "match".
     Confirmed at the signature level so a future edit can't quietly
     reintroduce it."""
-    sig = inspect.signature(_fetch_excluded_plots)
+    sig = inspect.signature(_count_excluded_plots)
     assert "crop" not in sig.parameters
     assert "variety" not in sig.parameters
 
 
 # --- item 2 (continued): SUP010-shaped fixture — Sheet 1 vs excluded --------
 
-def test_sheet_one_and_excluded_sheet_partition_active_and_inactive_plots() -> None:
-    """A SUP010-shaped fixture: 9 active plots + 1 inactive (P002) — Sheet 1
-    must contain exactly the 9 active plots, never P002; the excluded sheet
-    must contain exactly P002 with a clear, human-readable reason (Acceptance
-    criteria)."""
+def test_sheet_one_contains_only_the_plots_it_was_given() -> None:
+    """A SUP010-shaped fixture. An excluded plot can no longer leak into the
+    importable sheet for the strongest possible reason: the builder never
+    receives one at all."""
     active_plots = [_plot(plot_code=f"P{i:03d}") for i in range(1, 11) if i != 2]
     assert len(active_plots) == 9
-    excluded = [_plot(
-        plot_code="P002", is_active=False,
-        cycles=[_cycle(cycle_no=1, status="cancelled", cycle_label=None)],
-    )]
 
-    content = _contextual_plot_template_workbook(active_plots, excluded)
-    _headers, rows = read_first_sheet(content)
+    _headers, rows = read_first_sheet(_contextual_plot_template_workbook(active_plots))
     data_rows = [v for n, v in rows if n > 2]
     assert len(data_rows) == 9
     assert all(v.get("plotCode") != "P002" for v in data_rows)
-
-    parts = _unzip(content)
-    sheet3 = parts["xl/worksheets/sheet3.xml"]
-    assert "P002" in sheet3
-    assert "แปลงปิดใช้งาน" in sheet3
-
-
-def test_excluded_sheet_has_the_required_notice_and_no_action_column() -> None:
-    content = _contextual_plot_template_workbook([_plot()], [_plot(plot_code="P002", is_active=False)])
-    parts = _unzip(content)
-    sheet3 = parts["xl/worksheets/sheet3.xml"]
-    assert "ชีตนี้เป็นข้อมูลสำหรับตรวจสอบ ระบบจะไม่นำเข้าข้อมูลจากชีตนี้" in sheet3
-    assert "action" not in _EXCLUDED_HEADERS
-
-
-def test_excluded_sheet_is_empty_but_present_when_nothing_was_excluded() -> None:
-    content = _contextual_plot_template_workbook([_plot()], None)
-    parts = _unzip(content)
-    workbook = parts["xl/workbook.xml"]
-    assert _SHEET_EXCLUDED in workbook
 
 
 # --- item 3: all-suppliers mode aggregates active plots across suppliers ---
@@ -197,7 +126,7 @@ async def test_all_suppliers_mode_aggregates_active_plots_across_suppliers() -> 
         _plot(plot_code="P001", supplier=_supplier(code="SUP002")),
     ]
     with patch(f"{_P}._list_active_plots_all_suppliers", AsyncMock(return_value=plots)) as mk_list, \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
 \
          patch(f"{_P}.credential_repo.get_credential_status_for_plots", AsyncMock(return_value={})), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"ALL")):
@@ -210,32 +139,53 @@ async def test_all_suppliers_mode_aggregates_active_plots_across_suppliers() -> 
     mk_list.assert_awaited_once()
 
 
-async def test_all_suppliers_mode_inactive_plots_go_to_excluded_not_sheet_one() -> None:
-    """Wiring test: whatever _list_active_plots_all_suppliers/
-    _fetch_excluded_plots (both mocked here) return becomes Sheet 1 / the
-    excluded sheet respectively — the real partitioning logic (plotStatus-
-    aware since round 8-6J) is these two functions' own responsibility,
-    covered by their dedicated tests elsewhere."""
+async def test_all_suppliers_mode_excluded_plots_are_reported_not_rendered() -> None:
+    """Round 8-27E — excluded plots never reach the workbook builder now;
+    only their COUNT leaves the endpoint, on a response header."""
     active = [_plot(plot_code="P001")]
-    excluded = [_plot(plot_code="P002", is_active=False)]
     with patch(f"{_P}._list_active_plots_all_suppliers", AsyncMock(return_value=active)), \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=excluded)) as mk_excluded, \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=3)) as mk_excluded, \
          patch(f"{_P}.plot_cycle_repo.get_latest_active_records_for_cycles", AsyncMock(return_value={})), \
          patch(f"{_P}.credential_repo.get_credential_status_for_plots", AsyncMock(return_value={})), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"ALL")) as mk_build:
-        await download_plot_import_template(
+        resp = await download_plot_import_template(
             current_user=_user(roles=["internal:admin"]), db=MagicMock(),
             supplier_id=None, province=None, crop=None, variety=None, q=None,
             template_mode="all_suppliers",
         )
     mk_build.assert_called_once_with(
-        active, excluded, latest_cycles={}, plot_status="all",
+        active, latest_cycles={},
         # Round 8-10B — latest_active_records is gone: it only ever fed the
         # retired finalInspectionRecordId column, so a template download no
         # longer queries for it at all.
         credential_status={},   # round 8-9B.1 — batch-loaded, never per plot
     )
     assert mk_excluded.call_args.kwargs["supplier_id"] is None
+    assert resp.headers[_EXCLUDED_COUNT_HEADER] == "3"
+
+
+async def test_the_excluded_count_header_is_always_present_even_at_zero() -> None:
+    """A client must never have to tell "nothing excluded" apart from "old
+    server that doesn't send the header"."""
+    with patch(f"{_P}._list_active_plots_all_suppliers", AsyncMock(return_value=[_plot()])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
+         patch(f"{_P}.credential_repo.get_credential_status_for_plots", AsyncMock(return_value={})), \
+         patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"ALL")):
+        resp = await download_plot_import_template(
+            current_user=_user(roles=["internal:admin"]), db=MagicMock(),
+            supplier_id=None, province=None, crop=None, variety=None, q=None,
+            template_mode="all_suppliers",
+        )
+    assert resp.headers[_EXCLUDED_COUNT_HEADER] == "0"
+
+
+async def test_the_blank_template_also_reports_a_zero_excluded_count() -> None:
+    with patch(f"{_P}._template_suppliers", AsyncMock(return_value=[])):
+        resp = await download_plot_import_template(
+            current_user=_user(roles=["internal:admin"]), db=MagicMock(),
+            supplier_id=None, province=None, crop=None, variety=None, q=None,
+        )
+    assert resp.headers[_EXCLUDED_COUNT_HEADER] == "0"
 
 
 # --- items 4/5: non-'all' scope callers get 403, never a scoped result -----
@@ -276,7 +226,7 @@ async def test_supplier_staff_calling_all_suppliers_mode_is_403() -> None:
 
 async def test_all_suppliers_mode_forwards_plot_status_to_list_and_excluded() -> None:
     with patch(f"{_P}._list_active_plots_all_suppliers", AsyncMock(return_value=[_plot()])) as mk_list, \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])) as mk_excluded, \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)) as mk_excluded, \
          patch(f"{_P}.plot_cycle_repo.get_latest_active_records_for_cycles", AsyncMock(return_value={})), \
          patch(f"{_P}.credential_repo.get_credential_status_for_plots", AsyncMock(return_value={})), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"ALL")):
@@ -341,12 +291,6 @@ def test_all_suppliers_query_orders_by_supplier_code_then_plot_code_not_uuid() -
     assert "Plot.supplier_id.asc()" not in src
 
 
-def test_excluded_plots_query_orders_by_supplier_code_then_plot_code_not_uuid() -> None:
-    src = inspect.getsource(plots_module._fetch_excluded_plots)
-    assert ".order_by(Supplier.code.asc(), Plot.plot_code.asc())" in src
-    assert "Plot.supplier_id.asc()" not in src
-
-
 # --- item 9: >5,000 actionable plots (all_suppliers) -> 422, no truncate ---
 
 async def test_all_suppliers_over_5000_actionable_plots_is_422_not_truncated() -> None:
@@ -367,7 +311,7 @@ async def test_all_suppliers_over_5000_actionable_plots_is_422_not_truncated() -
 async def test_all_suppliers_exactly_5000_actionable_plots_is_allowed() -> None:
     exactly_cap = [MagicMock() for _ in range(5000)]
     with patch(f"{_P}._list_active_plots_all_suppliers", AsyncMock(return_value=exactly_cap)), \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
          patch(f"{_P}.plot_cycle_repo.get_latest_active_records_for_cycles", AsyncMock(return_value={})), \
          patch(f"{_P}.credential_repo.get_credential_status_for_plots", AsyncMock(return_value={})), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"ALL")):
@@ -402,10 +346,15 @@ def test_all_suppliers_query_eager_loads_supplier_active_cycle_access_phones() -
     assert "selectinload(Plot.access_phones)" in src
 
 
-def test_excluded_plots_query_eager_loads_supplier_and_cycles() -> None:
-    src = inspect.getsource(plots_module._fetch_excluded_plots)
-    assert "selectinload(Plot.supplier)" in src
-    assert "selectinload(Plot.cycles)" in src
+def test_excluded_plots_query_is_a_count_with_no_eager_loads() -> None:
+    """Round 8-27E — nothing renders these rows any more, so loading whole
+    Plot objects (with supplier + every cycle) only to discard them would be
+    pure waste. It counts instead, and is uncapped: the old 5,000 cap existed
+    for the size of the rendered sheet and could have under-reported."""
+    src = inspect.getsource(plots_module._count_excluded_plots)
+    assert "select(func.count())" in src
+    assert "selectinload" not in src
+    assert "limit" not in src
 
 
 # --- item 11: download path never flushes/commits/mutates ------------------
@@ -415,7 +364,7 @@ async def test_all_suppliers_download_never_commits_or_flushes() -> None:
     db.commit = AsyncMock()
     db.flush = AsyncMock()
     with patch(f"{_P}._list_active_plots_all_suppliers", AsyncMock(return_value=[_plot()])), \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
          patch(f"{_P}.plot_cycle_repo.get_latest_active_records_for_cycles", AsyncMock(return_value={})), \
          patch(f"{_P}.credential_repo.get_credential_status_for_plots", AsyncMock(return_value={})), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"ALL")):
@@ -433,7 +382,7 @@ async def test_filtered_supplier_download_never_commits_or_flushes() -> None:
     db = _fake_supplier_lookup_db(_supplier())
     with patch(f"{_P}.get_supplier_scope_filter", AsyncMock(return_value=[])), \
          patch(f"{_P}.repo.list_plots", AsyncMock(return_value=[_plot()])), \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])), \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)), \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"CTX")):
         await download_plot_import_template(
             current_user=_user(roles=["internal:admin"]), db=db,
@@ -446,12 +395,12 @@ async def test_filtered_supplier_download_never_commits_or_flushes() -> None:
 # --- filtered-Supplier path wires _fetch_excluded_plots with matching
 #     filters (province/q), and deliberately NEVER crop/variety -------------
 
-async def test_filtered_supplier_path_fetches_excluded_plots_with_matching_filters() -> None:
+async def test_filtered_supplier_path_counts_excluded_plots_with_matching_filters() -> None:
     sid = uuid4()
     db = _fake_supplier_lookup_db(_supplier())
     with patch(f"{_P}.get_supplier_scope_filter", AsyncMock(return_value=[])), \
          patch(f"{_P}.repo.list_plots", AsyncMock(return_value=[_plot()])), \
-         patch(f"{_P}._fetch_excluded_plots", AsyncMock(return_value=[])) as mk_excluded, \
+         patch(f"{_P}._count_excluded_plots", AsyncMock(return_value=0)) as mk_excluded, \
          patch(f"{_P}._contextual_plot_template_workbook", MagicMock(return_value=b"CTX")):
         await download_plot_import_template(
             current_user=_user(roles=["internal:admin"]), db=db,
@@ -470,18 +419,15 @@ async def test_filtered_supplier_path_fetches_excluded_plots_with_matching_filte
 #     example plot codes never leak into the importable sheet --------------
 
 def test_all_suppliers_workbook_sheet_order_still_puts_new_cycle_first() -> None:
-    content = _contextual_plot_template_workbook([_plot()], [])
+    content = _contextual_plot_template_workbook([_plot()])
     parts = _unzip(content)
     workbook = parts["xl/workbook.xml"]
-    assert workbook.index(_SHEET_NEW_CYCLE) < workbook.index(_SHEET_EXCLUDED) < workbook.index(_SHEET_EXAMPLES)
+    assert workbook.index(_SHEET_NEW_CYCLE) < workbook.index(_SHEET_EXAMPLES)
 
 
-def test_importer_never_sees_excluded_or_example_plot_codes() -> None:
-    active = [_plot(plot_code="P001")]
-    excluded = [_plot(plot_code="P999", is_active=False)]
-    content = _contextual_plot_template_workbook(active, excluded)
+def test_importer_never_sees_example_plot_codes() -> None:
+    content = _contextual_plot_template_workbook([_plot(plot_code="P001")])
     _headers, rows = read_first_sheet(content)
     plot_codes = {v.get("plotCode") for n, v in rows if n > 2 and "plotCode" in v}
     assert plot_codes == {"P001"}
-    assert "P999" not in plot_codes
     assert "P101" not in plot_codes  # example plot code — never real data

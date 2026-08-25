@@ -88,15 +88,27 @@ def _md(type_, value, parent=None, active=True):
     return SimpleNamespace(type=type_, value=value, parent=parent, active=active)
 
 
-def _patch_master_data(existing_crops=None, existing_varieties=None):
-    existing_crops = existing_crops or []
-    existing_varieties = existing_varieties or []
+# Round 8-26C — every row fixture in this file carries pCode "Melon-A", and
+# a P.Code is now validated against Master Data like crop/variety are. This
+# file's subject is the CROP/VARIETY rules, so the default pool seeds that one
+# P.Code as valid under the same fixtures' variety; a test that wants to
+# exercise the P.Code rules passes its own `existing_p_codes`.
+_DEFAULT_P_CODES = [("Melon-A", "พริกขี้หนู")]
+
+
+def _patch_master_data(existing_crops=None, existing_varieties=None, existing_p_codes=None):
+    pools = {
+        "crop": existing_crops or [],
+        "variety": existing_varieties or [],
+        "p_code": existing_p_codes if existing_p_codes is not None else [
+            _md("p_code", value, parent=parent) for value, parent in _DEFAULT_P_CODES
+        ],
+    }
     call_count = {"n": 0}
 
     async def fake(db, type_, values):
         call_count["n"] += 1
-        pool = existing_crops if type_ == "crop" else existing_varieties
-        return [m for m in pool if m.value in values]
+        return [m for m in pools.get(type_, []) if m.value in values]
 
     return (
         patch(
@@ -279,10 +291,10 @@ async def test_commit_blocked_when_any_row_has_master_data_error() -> None:
 
 # --- batch query strategy: exactly 2 queries per file, never per-row --------
 
-async def test_master_data_lookup_batches_into_exactly_two_queries() -> None:
+async def test_master_data_lookup_batches_into_one_query_per_type() -> None:
     """5 rows, several distinct crop/variety values — list_by_type_values
-    must be called exactly twice (once for crop, once for variety) for the
-    WHOLE file, never once per row (N+1)."""
+    must be called once per TYPE for the WHOLE file, never once per row
+    (N+1). Three types since round 8-26C added p_code."""
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(crop="เมล่อน", variety="ญี่ปุ่น")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
@@ -302,4 +314,4 @@ async def test_master_data_lookup_batches_into_exactly_two_queries() -> None:
     ]
     with p_sup, p_plot, p_active, p_md:
         await build_preview(object(), _xlsx(rows), ctx=_ctx())
-    assert call_count["n"] == 2
+    assert call_count["n"] == 3

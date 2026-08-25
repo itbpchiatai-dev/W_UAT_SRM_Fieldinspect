@@ -1693,15 +1693,27 @@ async def _apply_master_data_crop_variety_checks(db: AsyncSession, states: list[
         return
     crop_values = {s.parsed.crop for s in relevant if s.parsed.crop}
     variety_values = {s.parsed.variety for s in relevant if s.parsed.variety}
-    lookup = await master_data_validation.load_crop_variety_lookup(db, crop_values, variety_values)
+    # Round 8-26C — pCode joins the same batch (one more query for the whole
+    # file, never one per row). An update_current_cycle row with a BLANK
+    # pCode cell preserves the cycle's existing value (see _execute_row), so
+    # the value actually validated is the effective one, not the raw cell —
+    # otherwise a blank cell would read as "clearing to None" and a legacy
+    # P.Code would look changed on every untouched row.
+    p_code_values = {s.parsed.p_code for s in relevant if s.parsed.p_code}
+    lookup = await master_data_validation.load_crop_variety_lookup(
+        db, crop_values, variety_values, p_code_values,
+    )
     for s in relevant:
         p = s.parsed
         is_update = p.action == ACTION_UPDATE
+        effective_p_code = p.p_code or (s.active_cycle_p_code if is_update else None)
         s.errors.extend(
             master_data_validation.crop_variety_errors(
                 lookup, p.crop, p.variety,
                 current_crop=s.active_cycle_crop if is_update else None,
                 current_variety=s.active_cycle_variety if is_update else None,
+                p_code=effective_p_code,
+                current_p_code=s.active_cycle_p_code if is_update else None,
             )
         )
 

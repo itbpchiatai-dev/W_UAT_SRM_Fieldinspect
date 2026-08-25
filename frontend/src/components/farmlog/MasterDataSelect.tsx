@@ -27,6 +27,11 @@ export function MasterDataSelect({ type, value, onChange, parent, disabled, plac
   return (
     <select
       className={inputCls}
+      // Callers wrap this in a <label> that carries no htmlFor, so without
+      // this the select has no accessible name at all. The placeholder is
+      // the field's own wording ("— เลือกพันธุ์ —"), which is what a screen
+      // reader should announce; `type` is the last-resort fallback.
+      aria-label={placeholder ?? `เลือก${type}`}
       value={value ?? ''}
       disabled={disabled || isLoading}
       onChange={(e) => onChange(e.target.value || null)}

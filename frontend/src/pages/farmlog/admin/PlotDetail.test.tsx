@@ -66,12 +66,54 @@ vi.mock('../../../api/records', async (importOriginal) => {
   };
 });
 
-// The cycle modals' MasterDataSelect fields query this — stub empty so it
-// never hits the real apiClient (these tests never need real options).
+// The cycle modals' MasterDataSelect fields query this — never the real
+// apiClient. Round 8-26C: it can no longer return an empty list, because
+// P.Code stopped being a typed field and is DERIVED from the chosen พันธุ์,
+// so a cycle form can only be filled in by picking real options. One crop,
+// two varieties, one P.Code each (พริกจินดา's is Melon-Z, used by the
+// reactivate test that needs a second distinct value).
+const MD_P_CODE_BY_VARIETY: Record<string, string> = {
+  'พริกขี้หนู': 'Melon-A',
+  'พริกจินดา': 'Melon-Z',
+};
+
+function masterDataRow(type: string, value: string, parent: string | null) {
+  return {
+    id: `md-${type}-${value}`, type, value, parent, orderIndex: 0, active: true,
+    createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+  };
+}
+
 vi.mock('../../../api/masterdata', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/masterdata')>();
-  return { ...actual, listMasterData: () => Promise.resolve([]) };
+  return {
+    ...actual,
+    listMasterData: ({ type, parent }: { type: string; parent?: string }) => {
+      if (type === 'crop') return Promise.resolve([masterDataRow('crop', 'พริก', null)]);
+      if (type === 'variety') {
+        return Promise.resolve(
+          Object.keys(MD_P_CODE_BY_VARIETY).map((v) => masterDataRow('variety', v, 'พริก')),
+        );
+      }
+      if (type === 'p_code') {
+        const code = parent ? MD_P_CODE_BY_VARIETY[parent] : undefined;
+        return Promise.resolve(code ? [masterDataRow('p_code', code, parent!)] : []);
+      }
+      return Promise.resolve([]);
+    },
+  };
 });
+
+/** Round 8-26C — fills the cycle form's crop/variety and waits for the
+ * derived P.Code to land. Replaces the old "type into the P.Code box" step:
+ * that box is read-only now. */
+async function pickCropAndVariety(variety = 'พริกขี้หนู') {
+  fireEvent.change(await screen.findByLabelText('— เลือกชนิดพืช —'), { target: { value: 'พริก' } });
+  fireEvent.change(await screen.findByLabelText('— เลือกพันธุ์ —'), { target: { value: variety } });
+  await waitFor(() => expect(
+    (screen.getByLabelText('P.Code') as HTMLInputElement).value,
+  ).toBe(MD_P_CODE_BY_VARIETY[variety]));
+}
 
 // null = every permission allowed (the default the existing tests rely on);
 // a Set restricts to exactly those keys (for the gating tests below).
@@ -934,7 +976,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     // cycle; either one opens the same StartCycleModal.
     fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' }))[0]);
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -957,7 +999,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     const labelInput = await screen.findByPlaceholderText('เช่น jun2026 หรือ may2026');
     fireEvent.change(labelInput, { target: { value: 'jul2026' } });
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // (cycleLabel was already set above — Auto Lot needs it, and this test is
     // specifically about that field reaching the payload.)
     fireEvent.click(await screen.findByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -1124,7 +1166,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' }))[0]);
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -1405,7 +1447,7 @@ describe('PlotDetail — cycle rollover (round 7.9C)', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันจบรอบ + เริ่มรอบใหม่' }));
@@ -1442,7 +1484,7 @@ describe('PlotDetail — cycle rollover (round 7.9C)', () => {
     renderPage(qc);
     fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันจบรอบ + เริ่มรอบใหม่' }));
@@ -1466,7 +1508,7 @@ describe('PlotDetail — cycle rollover (round 7.9C)', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันจบรอบ + เริ่มรอบใหม่' }));
@@ -1667,7 +1709,7 @@ describe('PlotDetail — reactivation (round 8-6I)', () => {
     await screen.findByPlaceholderText('เช่น PO25001');
 
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25009' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-Z' } });
+    await pickCropAndVariety('พริกจินดา');
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(screen.getByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูก' }));

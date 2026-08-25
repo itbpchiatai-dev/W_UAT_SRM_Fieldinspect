@@ -61,6 +61,9 @@ def _cycle(**o):
         crop="เมล่อน", variety="ญี่ปุ่น", cycle_label=None, lot_no="L1",
         planting_date=datetime.date(2026, 5, 1), plant_count=100,
         expected_yield_full=None, expected_yield_unit="kg",
+        # Round 8-26C — update_cycle now reads cycle.p_code to resolve the
+        # effective/current P.Code pair, so the fixture has to carry it.
+        p_code=None,
         started_at=_NOW, closed_at=None, closed_by_id=None, close_reason=None,
         created_at=_NOW, updated_at=_NOW,
     )

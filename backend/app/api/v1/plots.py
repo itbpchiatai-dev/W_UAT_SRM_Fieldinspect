@@ -1728,7 +1728,9 @@ async def create_plot_with_cycle(
     nc = payload.cycle
     # Round 8-15D — a brand-new cycle's crop/variety (if given) must exist and
     # be active in Master Data; a variety must belong to the chosen crop.
-    await master_data_validation.assert_crop_variety_valid(db, nc.crop, nc.variety)
+    await master_data_validation.assert_crop_variety_valid(
+        db, nc.crop, nc.variety, p_code=nc.p_code,
+    )
     started_at = (
         datetime.combine(nc.planting_date, time.min, tzinfo=timezone.utc)
         if nc.planting_date is not None
@@ -2214,7 +2216,9 @@ async def start_plot_cycle(
 
     # Round 8-15D — new cycle's crop/variety (if given) must exist and be
     # active in Master Data; a variety must belong to the chosen crop.
-    await master_data_validation.assert_crop_variety_valid(db, payload.crop, payload.variety)
+    await master_data_validation.assert_crop_variety_valid(
+        db, payload.crop, payload.variety, p_code=payload.p_code,
+    )
     started_at = (
         datetime.combine(payload.planting_date, time.min, tzinfo=timezone.utc)
         if payload.planting_date is not None
@@ -2327,6 +2331,11 @@ async def update_plot_cycle(
         fields.get("variety", cycle.variety),
         current_crop=cycle.crop,
         current_variety=cycle.variety,
+        # Round 8-26C — same effective-value shape. p_code has its OWN
+        # unchanged-is-allowed check inside, so editing a legacy cycle that
+        # carries a free-text P.Code never demands the user fix it.
+        p_code=fields.get("p_code", cycle.p_code),
+        current_p_code=cycle.p_code,
     )
     try:
         await plot_cycle_repo.update_cycle(db, plot, cycle, fields)
@@ -2458,7 +2467,9 @@ async def rollover_plot_cycle(
     nc = payload.new_cycle
     # Round 8-15D — the fresh cycle opened by rollover is a NEW cycle, so its
     # crop/variety (if given) must exist and be active in Master Data.
-    await master_data_validation.assert_crop_variety_valid(db, nc.crop, nc.variety)
+    await master_data_validation.assert_crop_variety_valid(
+        db, nc.crop, nc.variety, p_code=nc.p_code,
+    )
     started_at = (
         datetime.combine(nc.planting_date, time.min, tzinfo=timezone.utc)
         if nc.planting_date is not None
@@ -2688,7 +2699,9 @@ async def reactivate_plot_with_cycle(
 
     # Round 8-15D — reactivation starts a brand-new cycle, so its
     # crop/variety (if given) must exist and be active in Master Data.
-    await master_data_validation.assert_crop_variety_valid(db, payload.crop, payload.variety)
+    await master_data_validation.assert_crop_variety_valid(
+        db, payload.crop, payload.variety, p_code=payload.p_code,
+    )
     started_at = (
         datetime.combine(payload.planting_date, time.min, tzinfo=timezone.utc)
         if payload.planting_date is not None

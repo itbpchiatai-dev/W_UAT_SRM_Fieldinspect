@@ -28,13 +28,22 @@ def _default_permissive_crop_variety(request: pytest.FixtureRequest):
         yield
         return
 
-    async def _fake_assert(db, crop, variety, *, current_crop=None, current_variety=None):
+    # Signatures mirror the real ones, including round 8-26C's p_code kwargs
+    # — a stub that silently dropped them would still pass every test while
+    # the real call site raised TypeError in production.
+    async def _fake_assert(
+        db, crop, variety, *, current_crop=None, current_variety=None,
+        p_code=None, current_p_code=None,
+    ):
         return None
 
-    async def _fake_lookup(db, crop_values, variety_values):
-        return SimpleNamespace(crops={}, varieties={})
+    async def _fake_lookup(db, crop_values, variety_values, p_code_values=None):
+        return SimpleNamespace(crops={}, varieties={}, p_codes={})
 
-    def _fake_errors(lookup, crop, variety, *, current_crop=None, current_variety=None):
+    def _fake_errors(
+        lookup, crop, variety, *, current_crop=None, current_variety=None,
+        p_code=None, current_p_code=None,
+    ):
         return []
 
     with (

@@ -158,13 +158,19 @@ def test_whitespace_only_normalizes_like_blank() -> None:
 
 # --- load_crop_variety_lookup — batching / N+1 ------------------------------
 
-async def test_load_lookup_issues_exactly_two_queries() -> None:
+async def test_load_lookup_issues_one_query_per_type() -> None:
+    """Round 8-26C made it three types (crop/variety/p_code), still ONE query
+    each no matter how many values. That an EMPTY value-set costs no query at
+    all is a separate guarantee, owned by the repository's own short-circuit
+    and covered by the next test."""
     call_count = {"n": 0}
 
     async def fake(db, type_, values):
         call_count["n"] += 1
         if type_ == "crop":
             return [_md("crop", v) for v in values]
+        if type_ == "p_code":
+            return []
         return [_md("variety", v, parent="พริก") for v in values]
 
     with patch(
@@ -174,7 +180,7 @@ async def test_load_lookup_issues_exactly_two_queries() -> None:
         lookup = await mdv.load_crop_variety_lookup(
             object(), {"พริก", "เมล่อน", "มะเขือเทศ"}, {"พริกขี้หนู", "ญี่ปุ่น"},
         )
-    assert call_count["n"] == 2  # ONE per type, regardless of value-set size
+    assert call_count["n"] == 3  # ONE per type, regardless of value-set size
     assert set(lookup.crops) == {"พริก", "เมล่อน", "มะเขือเทศ"}
     assert set(lookup.varieties) == {"พริกขี้หนู", "ญี่ปุ่น"}
 

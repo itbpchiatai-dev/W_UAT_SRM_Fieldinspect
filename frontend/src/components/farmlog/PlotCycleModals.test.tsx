@@ -5,7 +5,7 @@
  * the lotNo input. The create/start/rollover integration flows are covered by
  * Plots.test.tsx / PlotDetail.test.tsx.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -29,9 +29,61 @@ import type { PlotCycle } from '../../api/plots';
 
 // react-query is imported transitively by ./PlotCycleModals; the helpers under
 // test don't touch it, and CyclePlanFields renders standalone.
+//
+// Round 8-26C — this stub is now INTERACTIVE. P.Code stopped being a typed
+// field and is derived from the chosen พันธุ์, so a display-only stub would
+// leave no way to reach it at all. One <select> per `type`, addressed by
+// data-testid.
 vi.mock('./MasterDataSelect', () => ({
-  MasterDataSelect: ({ value }: { value: string | null }) => <div data-testid="master-select">{value}</div>,
+  MasterDataSelect: ({ type, value, onChange }: {
+    type: string; value: string | null; onChange: (v: string | null) => void;
+  }) => (
+    <select
+      data-testid={`master-select-${type}`}
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value || null)}
+    >
+      <option value="">—</option>
+      <option value="พริก">พริก</option>
+      <option value="พริกขี้หนู">พริกขี้หนู</option>
+      <option value="พริกไม่มีรหัส">พริกไม่มีรหัส</option>
+    </select>
+  ),
 }));
+
+// The variety -> active P.Code mapping the form derives from. พริกขี้หนู
+// resolves to WM-141 so the payload assertions below keep asserting the same
+// value they did when P.Code was typed by hand; พริกไม่มีรหัส deliberately
+// resolves to nothing, for the "this variety has no P.Code yet" path.
+const P_CODE_BY_VARIETY: Record<string, string> = { 'พริกขี้หนู': 'WM-141' };
+const listMasterDataMock = vi.fn();
+vi.mock('../../api/masterdata', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/masterdata')>()),
+  listMasterData: (...a: unknown[]) => listMasterDataMock(...a),
+}));
+
+beforeEach(() => {
+  listMasterDataMock.mockReset();
+  listMasterDataMock.mockImplementation(({ type, parent }: { type: string; parent?: string }) => {
+    if (type !== 'p_code') return Promise.resolve([]);
+    const value = parent ? P_CODE_BY_VARIETY[parent] : undefined;
+    return Promise.resolve(value ? [{
+      id: `pc-${value}`, type: 'p_code', value, parent: parent ?? null,
+      orderIndex: 0, active: true,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    }] : []);
+  });
+});
+
+/** Pick a พันธุ์ and wait for the derived P.Code to land in the form —
+ * replaces the old "type into the P.Code box" step everywhere below. */
+async function pickVariety(variety = 'พริกขี้หนู') {
+  fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: variety } });
+  const expected = P_CODE_BY_VARIETY[variety] ?? '';
+  await waitFor(() =>
+    expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(expected),
+  );
+}
 
 const updatePlotCycleMock = vi.fn();
 const createPlotCycleMock = vi.fn();
@@ -159,18 +211,18 @@ describe('schema required rules', () => {
     // Round 8-17A.1 — cycleLabel supplied here so this isolates the pCode
     // rule specifically (cycleLabel's OWN requirement is covered separately
     // below, under "refineEditCyclePlan"/"cycleFormSchema").
-    expect(cycleFormSchema.safeParse({ lotMode: 'auto', poNumber: '', pCode: '', cycleLabel: '2605' }).success).toBe(false);
+    expect(cycleFormSchema.safeParse({ lotMode: 'auto', poNumber: '', pCode: '', cycleLabel: '2605', variety: 'พริกขี้หนู' }).success).toBe(false);
     expect(cycleEditFormSchema.safeParse({ lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605' }).success).toBe(true);
   });
   it('round 8-13B: CREATE accepts a blank PO alone, as long as pCode is present', () => {
     const r = cycleFormSchema.safeParse({
-      lotMode: 'manual', lotNo: 'HAND-1', poNumber: '', pCode: 'X', cycleLabel: '2605',
+      lotMode: 'manual', lotNo: 'HAND-1', poNumber: '', pCode: 'X', cycleLabel: '2605', variety: 'พริกขี้หนู',
     });
     expect(r.success).toBe(true);
   });
   it('Manual lot with a blank value is rejected', () => {
     const r = cycleFormSchema.safeParse({
-      poNumber: 'PO', pCode: 'PC', cycleLabel: '2605', lotMode: 'manual', lotNo: '',
+      poNumber: 'PO', pCode: 'PC', cycleLabel: '2605', lotMode: 'manual', lotNo: '', variety: 'พริกขี้หนู',
     });
     expect(r.success).toBe(false);
   });
@@ -178,44 +230,58 @@ describe('schema required rules', () => {
 
 // --- render: the segmented control drives the lot input --------------------
 
-function Harness({ supplierCode = 'SUP010' }: { supplierCode?: string }) {
+function Harness({ supplierCode = 'SUP010', mode = 'create' as const }: {
+  supplierCode?: string; mode?: 'create' | 'edit';
+}) {
   const { register, watch, setValue, formState: { errors } } = useForm<CycleFormValues>({
     resolver: zodResolver(cycleFormSchema),
     defaultValues: {
       lotMode: 'auto', poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
+      crop: 'พริก', variety: 'พริกขี้หนู',
     },
   });
   return (
     <CyclePlanFields
       register={register} errors={errors} watch={watch} setValue={setValue}
-      supplierCode={supplierCode} mode="create"
+      supplierCode={supplierCode} mode={mode}
     />
+  );
+}
+
+/** Round 8-26C — CyclePlanFields resolves the P.Code through react-query, so
+ * a standalone render needs a provider. */
+function renderPlan(props: { supplierCode?: string; mode?: 'create' | 'edit' } = {}) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <Harness {...props} />
+    </QueryClientProvider>,
   );
 }
 
 describe('CyclePlanFields — Auto/Manual segmented control (create)', () => {
   it('defaults to Auto: shows the V2 preview, no editable lot input', () => {
-    render(<Harness />);
+    renderPlan();
     expect(screen.getByText('2605-SUP010-WM-141-###')).toBeTruthy();
     expect(screen.queryByPlaceholderText('เช่น LOT-01')).toBeNull();
   });
 
   it('switching to "กรอก Lot เอง" reveals the manual lot input', () => {
-    render(<Harness />);
+    renderPlan();
     fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
     expect(screen.getByPlaceholderText('เช่น LOT-01')).toBeTruthy();
     expect(screen.queryByText('2605-SUP010-WM-141-###')).toBeNull();
   });
 
   it('the Supplier Lot No input sits outside the Auto/Manual control and stays visible in every mode', () => {
-    render(<Harness />);
+    renderPlan();
     expect(screen.getByPlaceholderText('เช่น SUP-LOT-A123')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
     expect(screen.getByPlaceholderText('เช่น SUP-LOT-A123')).toBeTruthy();
   });
 
   it('labels the system lot so it is not confused with the supplier lot', () => {
-    render(<Harness />);
+    renderPlan();
     expect(screen.getByText('Lot No ระบบ')).toBeTruthy();
     expect(screen.getByText('Supplier Lot No')).toBeTruthy();
   });
@@ -268,7 +334,8 @@ describe('refineEditCyclePlan — edit Auto requires cycleLabel + P.Code', () =>
 });
 
 describe('cycleFormSchema (create) — Auto requires cycleLabel + P.Code', () => {
-  const base = { poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605' };
+  // variety is required on CREATE since round 8-26C (P.Code derives from it).
+  const base = { poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605', variety: 'พริกขี้หนู' };
 
   it('auto + all components -> ok', () => {
     expect(cycleFormSchema.safeParse({ ...base, lotMode: 'auto' }).success).toBe(true);
@@ -417,7 +484,7 @@ describe('EditCycleModal — Auto regenerate requires cycleLabel + P.Code, never
     const { onSaved } = renderEdit(legacyCycle());
 
     fireEvent.click(screen.getByRole('button', { name: 'สร้าง Auto Lot ใหม่' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(updatePlotCycleMock).toHaveBeenCalledTimes(1));
@@ -498,13 +565,13 @@ describe('EditCycleModal — Supplier Lot No', () => {
 
 describe('CyclePlanFields (create) — PO Number label', () => {
   it('never shows a required-marker (*) on PO Number', () => {
-    render(<Harness />);
+    renderPlan();
     expect(screen.getByText('PO Number (ไม่บังคับ)')).toBeTruthy();
     expect(screen.queryByText('PO Number *')).toBeNull();
   });
 
   it('still shows the required marker (*) on P.Code', () => {
-    render(<Harness />);
+    renderPlan();
     expect(screen.getByText('P.Code *')).toBeTruthy();
   });
 });
@@ -529,7 +596,7 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
     fireEvent.change(screen.getByPlaceholderText('เช่น LOT-01'), { target: { value: 'HAND-1' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     // Round 8-17A.1 — cycleLabel is required regardless of Auto/Manual lot.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } },
@@ -550,7 +617,7 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     renderStart();
 
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     expect(screen.getByText('2605-SUP010-WM-141-###')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -578,7 +645,7 @@ describe('RolloverCycleModal — PO Number optional (round 8-13B)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
     fireEvent.change(screen.getByPlaceholderText('เช่น LOT-01'), { target: { value: 'HAND-2' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     // Round 8-17A.1 — cycleLabel is required regardless of Auto/Manual lot.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jul2026' } },
@@ -607,7 +674,7 @@ describe('ReactivatePlotWithCycleModal — PO Number optional (round 8-13B)', ()
 
     fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
     fireEvent.change(screen.getByPlaceholderText('เช่น LOT-01'), { target: { value: 'HAND-3' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     // Round 8-17A.1 — cycleLabel is required regardless of Auto/Manual lot.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'aug2026' } },
@@ -664,7 +731,7 @@ describe('EditCycleModal — PO Number prefill / preserve / clear (round 8-13B)'
 
 describe('CyclePlanFields — Oracle reference group (round 8-21B)', () => {
   it('renders all three inputs under their own heading, none required (no *)', () => {
-    render(<Harness />);
+    renderPlan();
     expect(screen.getByText('ข้อมูลอ้างอิง Oracle')).toBeTruthy();
     expect(screen.getByText('Oracle Supplier Code')).toBeTruthy();
     expect(screen.getByText('Oracle Invoice')).toBeTruthy();
@@ -676,7 +743,7 @@ describe('CyclePlanFields — Oracle reference group (round 8-21B)', () => {
   });
 
   it('caps every input at 255 characters (maxLength attribute)', () => {
-    render(<Harness />);
+    renderPlan();
     for (const placeholder of ['เช่น ORC-SUP-001', 'เช่น INV-2026-0001', 'เช่น ACC-0001']) {
       const input = screen.getByPlaceholderText(placeholder) as HTMLInputElement;
       expect(input.maxLength).toBe(255);
@@ -721,7 +788,7 @@ describe('Oracle reference fields — validation (>255 chars rejected)', () => {
     'create schema rejects %s over 255 characters',
     (field) => {
       const r = cycleFormSchema.safeParse({
-        poNumber: '', pCode: 'C', cycleLabel: 'L', lotMode: 'auto',
+        poNumber: '', pCode: 'C', cycleLabel: 'L', lotMode: 'auto', variety: 'พริกขี้หนู',
         [field]: 'X'.repeat(256),
       });
       expect(r.success).toBe(false);
@@ -732,7 +799,7 @@ describe('Oracle reference fields — validation (>255 chars rejected)', () => {
     'create schema accepts exactly 255 characters for %s',
     (field) => {
       const r = cycleFormSchema.safeParse({
-        poNumber: '', pCode: 'C', cycleLabel: 'L', lotMode: 'auto',
+        poNumber: '', pCode: 'C', cycleLabel: 'L', lotMode: 'auto', variety: 'พริกขี้หนู',
         [field]: 'X'.repeat(255),
       });
       expect(r.success).toBe(true);
@@ -762,7 +829,7 @@ describe('StartCycleModal / RolloverCycleModal / ReactivatePlotWithCycleModal �
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } },
     );
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     fireEvent.change(
       screen.getByPlaceholderText('เช่น ORC-SUP-001'), { target: { value: '  ORC-1  ' } },
     );
@@ -790,7 +857,7 @@ describe('StartCycleModal / RolloverCycleModal / ReactivatePlotWithCycleModal �
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jul2026' } },
     );
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     fireEvent.change(
       screen.getByPlaceholderText('เช่น INV-2026-0001'), { target: { value: '  INV-9  ' } },
     );
@@ -815,7 +882,7 @@ describe('StartCycleModal / RolloverCycleModal / ReactivatePlotWithCycleModal �
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'aug2026' } },
     );
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'WM-141' } });
+    await pickVariety();
     fireEvent.change(
       screen.getByPlaceholderText('เช่น ACC-0001'), { target: { value: '  ACC-9  ' } },
     );
@@ -867,5 +934,116 @@ describe('EditCycleModal — Oracle reference fields (round 8-21B)', () => {
     // Untouched siblings still round-trip their own current value.
     expect(payload.oracleInvoice).toBe('INV-7');
     expect(payload.refAccount).toBe('ACC-7');
+  });
+});
+
+describe('CyclePlanFields — round 8-26C: P.Code derives from the พันธุ์', () => {
+  it('renders P.Code read-only — it can never be typed into', async () => {
+    renderPlan();
+
+    const input = await screen.findByLabelText('P.Code');
+    expect((input as HTMLInputElement).readOnly).toBe(true);
+  });
+
+  it('fills P.Code from the chosen พันธุ์', async () => {
+    renderPlan();
+
+    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: 'พริกขี้หนู' } });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe('WM-141'),
+    );
+  });
+
+  it('clears P.Code when the พันธุ์ is cleared', async () => {
+    renderPlan();
+    await pickVariety();
+
+    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: '' } });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(''),
+    );
+  });
+
+  it('clears P.Code when the ชนิดพืช changes, because that clears the พันธุ์', async () => {
+    renderPlan();
+    await pickVariety();
+
+    fireEvent.change(screen.getByTestId('master-select-crop'), { target: { value: 'พริก' } });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(''),
+    );
+  });
+
+  it('warns, and leaves P.Code blank, for a พันธุ์ that has no P.Code yet', async () => {
+    renderPlan();
+
+    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: 'พริกไม่มีรหัส' } });
+
+    expect(await screen.findByText(/พันธุ์นี้ยังไม่ได้กำหนด P.Code/)).toBeTruthy();
+    expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe('');
+  });
+
+  it('marks พันธุ์ as required on create', async () => {
+    renderPlan();
+
+    expect(await screen.findByText('พันธุ์/สายพันธุ์ *')).toBeTruthy();
+  });
+
+  it('does NOT mark พันธุ์ required on edit — a legacy cycle without one stays editable', async () => {
+    renderPlan({ mode: 'edit' });
+
+    expect(await screen.findByText('พันธุ์/สายพันธุ์')).toBeTruthy();
+    expect(screen.queryByText('พันธุ์/สายพันธุ์ *')).toBeNull();
+  });
+
+  it('leaves a stored P.Code untouched on edit until the user actually picks a พันธุ์', async () => {
+    // The legacy case: the form opens with a free-text P.Code that is not in
+    // Master Data. Deriving on mount would silently rewrite it — and change
+    // the Lot No a regenerate produces — for data the user never touched.
+    renderPlan({ mode: 'edit' });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe('WM-141'),
+    );
+    expect(listMasterDataMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'p_code' }),
+    );
+  });
+
+  it('derives on edit once the user does pick a พันธุ์', async () => {
+    renderPlan({ mode: 'edit' });
+
+    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: 'พริกไม่มีรหัส' } });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(''),
+    );
+  });
+});
+
+describe('cycleFormSchema — round 8-26C: พันธุ์ required on create', () => {
+  it('rejects a create with no variety', () => {
+    const r = cycleFormSchema.safeParse({
+      poNumber: '', pCode: 'WM-141', cycleLabel: '2605', lotMode: 'auto',
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('variety');
+  });
+
+  it('rejects a whitespace-only variety', () => {
+    const r = cycleFormSchema.safeParse({
+      poNumber: '', pCode: 'WM-141', cycleLabel: '2605', lotMode: 'auto', variety: '   ',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('the EDIT schema still accepts a blank variety', () => {
+    const r = cycleEditFormSchema.safeParse({
+      lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605', variety: '',
+    });
+    expect(r.success).toBe(true);
   });
 });

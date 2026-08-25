@@ -24,6 +24,44 @@ const createPlotWithCycleMock = vi.fn();
 const listSuppliersMock = vi.fn();
 const listUsersMock = vi.fn();
 const listMasterDataMock = vi.fn();
+
+// Round 8-26C — one crop, two varieties, one P.Code each (พริกจินดา's is
+// Melon-Z, for the reactivate test that needs a second distinct value).
+const MD_P_CODE_BY_VARIETY: Record<string, string> = {
+  'พริกขี้หนู': 'Melon-A',
+  'พริกจินดา': 'Melon-Z',
+};
+
+function masterDataRow(type: string, value: string, parent: string | null) {
+  return {
+    id: `md-${type}-${value}`, type, value, parent, orderIndex: 0, active: true,
+    createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+  };
+}
+
+function defaultMasterData({ type, parent }: { type: string; parent?: string }) {
+  if (type === 'crop') return Promise.resolve([masterDataRow('crop', 'พริก', null)]);
+  if (type === 'variety') {
+    return Promise.resolve(
+      Object.keys(MD_P_CODE_BY_VARIETY).map((v) => masterDataRow('variety', v, 'พริก')),
+    );
+  }
+  if (type === 'p_code') {
+    const code = parent ? MD_P_CODE_BY_VARIETY[parent] : undefined;
+    return Promise.resolve(code ? [masterDataRow('p_code', code, parent ?? null)] : []);
+  }
+  return Promise.resolve([]);
+}
+
+/** Fills the cycle form's crop/variety and waits for the derived P.Code —
+ * replaces the old "type into the P.Code box", which is read-only now. */
+async function pickCropAndVariety(variety = 'พริกขี้หนู') {
+  fireEvent.change(await screen.findByLabelText('— เลือกชนิดพืช —'), { target: { value: 'พริก' } });
+  fireEvent.change(await screen.findByLabelText('— เลือกพันธุ์ —'), { target: { value: variety } });
+  await waitFor(() => expect(
+    (screen.getByLabelText('P.Code') as HTMLInputElement).value,
+  ).toBe(MD_P_CODE_BY_VARIETY[variety]));
+}
 const getPlotAccessPhonesMock = vi.fn();
 const replacePlotAccessPhonesMock = vi.fn();
 const downloadPlotImportTemplateMock = vi.fn();
@@ -188,7 +226,10 @@ beforeEach(() => {
   listPlotCycleLabelsMock.mockResolvedValue(['jun2026', 'aug2026']);
   listUsersMock.mockResolvedValue([]);
   listMasterDataMock.mockReset();
-  listMasterDataMock.mockResolvedValue([]);
+  // Round 8-26C — the cycle form's P.Code is DERIVED from the chosen พันธุ์,
+  // so a default of [] would leave no way to fill a create-plot form at all.
+  // Tests that care about a specific master-data shape still override this.
+  listMasterDataMock.mockImplementation(defaultMasterData);
   useAuthStore.setState({ permissionKeys: new Set(['plots.read', 'plots.update', 'plots.create', 'plots.delete', 'plots.assign', 'records.create']) });
   // Round 8-6G — reset between tests so a full-scope `user` set by one test
   // (for the "ทุก Supplier" menu-item visibility checks) never leaks into
@@ -674,6 +715,10 @@ describe('Plots create modal — yield planning validation & hints (round 18)', 
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
+    // Round 8-26C — variety is required on create, and zod skips an object's
+    // superRefine when a base field fails, so the yield-unit rule under test
+    // is only reachable once the variety is filled in.
+    await pickCropAndVariety();
     const expectedYieldFullInput = container.querySelector('input[name="expectedYieldFull"]')!;
     fireEvent.change(expectedYieldFullInput, { target: { value: '1000' } });
 
@@ -752,7 +797,7 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p101' } });
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง A' } });
     fireEvent.change(container.querySelector('input[name="poNumber"]')!, { target: { value: 'PO25001' } });
-    fireEvent.change(container.querySelector('input[name="pCode"]')!, { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jun2026' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
@@ -780,7 +825,7 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p102' } });
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง B' } });
     // PO Number deliberately left blank.
-    fireEvent.change(container.querySelector('input[name="pCode"]')!, { target: { value: 'Melon-B' } });
+    await pickCropAndVariety();
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jun2026' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
@@ -788,7 +833,7 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     await waitFor(() => expect(createPlotWithCycleMock).toHaveBeenCalledOnce());
     const [payload] = createPlotWithCycleMock.mock.calls[0];
     expect(payload.cycle.poNumber).toBeNull();
-    expect(payload.cycle.pCode).toBe('Melon-B');
+    expect(payload.cycle.pCode).toBe('Melon-A');
   });
 
   it('does not close the modal and shows the backend error when createPlotWithCycle fails', async () => {
@@ -805,7 +850,7 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p101' } });
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง A' } });
     fireEvent.change(container.querySelector('input[name="poNumber"]')!, { target: { value: 'PO25001' } });
-    fireEvent.change(container.querySelector('input[name="pCode"]')!, { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — Auto Lot (the default) also needs a cycleLabel, otherwise
     // submit is blocked at the form and the request never reaches the backend.
     fireEvent.change(container.querySelector('input[name="cycleLabel"]')!, { target: { value: '2605' } });
@@ -1982,7 +2027,7 @@ describe('Plots create modal — access phones (round 8-3C)', () => {
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง A' } });
     // Round 8-5B — the first cycle's PO/pCode are required.
     fireEvent.change(container.querySelector('input[name="poNumber"]')!, { target: { value: 'PO25001' } });
-    fireEvent.change(container.querySelector('input[name="pCode"]')!, { target: { value: 'Melon-A' } });
+    await pickCropAndVariety();
     // Round 8-12B — the first cycle defaults to Auto Lot, which now also
     // requires a cycleLabel ({cycleLabel}-{supplierCode}-{pCode}-{running}).
     fireEvent.change(container.querySelector('input[name="cycleLabel"]')!, { target: { value: '2605' } });
@@ -3079,7 +3124,7 @@ describe('Plots list — plot status filter + reactivation (round 8-6I)', () => 
     fireEvent.click(screen.getByRole('menuitem', { name: 'เปิดใช้งานและเริ่มรอบปลูกใหม่' }));
     await screen.findByPlaceholderText('เช่น PO25001');
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25009' } });
-    fireEvent.change(screen.getByPlaceholderText('เช่น Melon-A'), { target: { value: 'Melon-Z' } });
+    await pickCropAndVariety('พริกจินดา');
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(screen.getByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูก' }));

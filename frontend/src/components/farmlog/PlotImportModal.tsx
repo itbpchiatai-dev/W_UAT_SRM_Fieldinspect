@@ -546,14 +546,22 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
 
         <div className="space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
+            {/* Round 8-27D — these five must stay in step with the Excel file
+                itself: services/plot_import.py's TEMPLATE_DESCRIPTION_ACTION
+                (row 2 of the sheet) and api/v1/plots.py's
+                _template_example_rows (one worked example each). Before this
+                round the three disagreed — this box said 4 and never
+                mentioned final_plot, row 2 said "3 แบบ", and the sheet showed
+                4 examples including a final_plot row nothing explained. */}
             <p className="font-medium text-foreground">
-              การกระทำหลัก 4 แบบที่ใช้บ่อย (คอลัมน์ <span className="font-mono">action</span>):
+              การกระทำหลัก 5 แบบ (คอลัมน์ <span className="font-mono">action</span>) — มีตัวอย่างครบทุกแบบในไฟล์:
             </p>
             <ul className="mt-1.5 list-disc space-y-1 pl-4">
               <li><span className="font-mono">create_plot_with_cycle</span> — สร้างแปลงพร้อมรอบแรก</li>
               <li><span className="font-mono">update_current_cycle</span> — แก้รอบปลูกปัจจุบัน</li>
               <li><span className="font-mono">start_next_cycle</span> — เริ่มรอบถัดไป (แปลงที่ใช้งานอยู่)</li>
               <li><span className="font-mono">reactivate_plot_with_cycle</span> — เปิดแปลงที่ปิดอยู่ + เริ่มรอบใหม่</li>
+              <li><span className="font-mono">final_plot</span> — ปิดรอบเป็นเก็บเกี่ยวแล้ว + บันทึกผลผลิตจริง (แปลงยังใช้งานอยู่)</li>
             </ul>
             <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-800">
               ระบบจะตรวจสถานะแปลงให้เอง หากไม่มีรอบเปิดอยู่จะเริ่มรอบใหม่ทันที

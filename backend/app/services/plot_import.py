@@ -276,11 +276,15 @@ TEMPLATE_DESCRIPTION_MARKER = "คำอธิบาย (ระบบไม่�
 # and matched by prefix, so this text can keep changing across rounds without
 # breaking the skip detection of any file (old or new) that starts with it.
 TEMPLATE_DESCRIPTION_ACTION = (
-    TEMPLATE_DESCRIPTION_MARKER + " — action หลักมี 3 แบบ: "
+    TEMPLATE_DESCRIPTION_MARKER + " — action หลักมี 5 แบบ (ดูตัวอย่างแถวถัดไป): "
     "create_plot_with_cycle = สร้างแปลงใหม่พร้อมรอบปลูกแรก, "
     "update_current_cycle = แก้ข้อมูลรอบปลูกที่กำลังเปิดอยู่ โดยไม่สร้างรอบใหม่, "
     "start_next_cycle = เริ่มรอบถัดไป ระบบจะตรวจสถานะแปลงและปิดรอบเดิมให้อัตโนมัติ"
-    "ถ้ายังมีรอบเปิดอยู่ (ต้องระบุ cycleLabel). "
+    "ถ้ายังมีรอบเปิดอยู่ (ต้องระบุ cycleLabel), "
+    "reactivate_plot_with_cycle = เปิดแปลงที่ปิดใช้งานอยู่กลับมาใช้ พร้อมเริ่มรอบใหม่ "
+    "(ใช้ start_next_cycle กับแปลงที่ปิดอยู่ไม่ได้), "
+    "final_plot = ปิดรอบปลูกปัจจุบันเป็นเก็บเกี่ยวแล้ว และบันทึกผลผลิตจริง "
+    "(ตัวแปลงยังใช้งานอยู่). "
     "start_new_cycle/close_and_start_new_cycle ยังใช้งานได้เหมือนเดิม "
     "(ไม่แสดงเป็นตัวอย่างหลักอีกต่อไป)"
 )

@@ -244,11 +244,20 @@ _PLOT_TEMPLATE_HEADERS: list[str] = plot_import.IMPORT_COLUMNS
 
 
 def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
-    """The three worked-example rows (create / update / start_next_cycle,
-    round 8-2.7.1) shared by the generic single-sheet template's rows 3-5
-    (_plot_template_workbook, unchanged) AND round 8-6A's contextual
-    workbook's separate "ตัวอย่าง" sheet (Part E) — extracted so both stay
-    byte-identical example data instead of maintaining two copies."""
+    """The worked-example rows, shared by the generic single-sheet template
+    (_plot_template_workbook) AND round 8-6A's contextual workbook's separate
+    "ตัวอย่าง" sheet (Part E) — extracted so both stay byte-identical example
+    data instead of maintaining two copies.
+
+    Round 8-27D — five rows, one per action a user actually types:
+    create / update / start_next_cycle / reactivate_plot_with_cycle /
+    final_plot. reactivate_plot_with_cycle was the gap that made this file
+    confusing: it was named in the import dialog but had no example here,
+    while final_plot had an example here but was named nowhere in the dialog,
+    and the row-2 description still said "3 แบบ" above four example rows.
+    All three now list the same five. Legacy start_new_cycle /
+    close_and_start_new_cycle stay out (see
+    test_legacy_rollover_actions_are_not_default_example_rows)."""
     return [
         {
             "action": "create_plot_with_cycle",
@@ -314,6 +323,24 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "plantingDate": "2026-08-01", "plantCount": "600",
             "expectedYieldFull": "3000", "expectedYieldUnit": "kg",
             # Blank = keep the plot's existing password (the common case).
+            "inspectionPasswordStatus": "configured",
+        },
+        {
+            # Round 8-27D — reactivate_plot_with_cycle: the ONLY action that
+            # works on a plot that has been deactivated (start_next_cycle is
+            # rejected for one). It reopens the plot and starts a fresh cycle
+            # in a single row, so it carries the same new-cycle requirements
+            # as start_next_cycle above: cycleLabel + pCode, and a variety
+            # (round 8-26C — a pCode must belong to one).
+            "action": "reactivate_plot_with_cycle",
+            "supplierCode": supplier_code, "plotCode": "P004",
+            "primaryPhone": "0811112222",
+            "crop": "เมล่อน", "variety": "เมล่อนญี่ปุ่น", "cycleLabel": "sep2026",
+            "poNumber": None, "pCode": "Melon-D",
+            "lotNo": None,
+            "supplierLotNo": None,
+            "plantingDate": "2026-09-01", "plantCount": "500",
+            "expectedYieldFull": "1500", "expectedYieldUnit": "kg",
             "inspectionPasswordStatus": "configured",
         },
         {

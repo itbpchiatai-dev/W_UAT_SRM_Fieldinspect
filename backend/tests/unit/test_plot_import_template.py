@@ -131,28 +131,46 @@ def test_row_two_action_description_explains_the_three_common_workflows() -> Non
     assert "close_and_start_new_cycle" in desc
 
 
-def test_rows_three_to_six_are_the_four_common_workflows_in_order() -> None:
+def test_rows_three_to_seven_are_the_five_common_workflows_in_order() -> None:
     """Round 8-2.7.1: the default template's worked examples are create,
     update, and start_next_cycle (the unified "advance to the next cycle"
     action) — start_new_cycle/close_and_start_new_cycle are special-cased out
     of the defaults (see test_legacy_rollover_actions_are_not_default_example_
     rows) so a working-level user never has to choose between them. Round
-    8-7A adds final_plot as the 4th worked example (row 6)."""
+    8-7A adds final_plot as a worked example. Round 8-27D adds
+    reactivate_plot_with_cycle (row 6, pushing final_plot to row 7): it was
+    named in the import dialog but had no example here, which is exactly what
+    made the file confusing to follow."""
     _headers, by_no = _rows_by_number([_fake_supplier()])
     assert by_no[3]["action"] == "create_plot_with_cycle"
     assert by_no[4]["action"] == "update_current_cycle"
     assert by_no[5]["action"] == "start_next_cycle"
-    assert by_no[6]["action"] == "final_plot"
-    assert 7 not in by_no
+    assert by_no[6]["action"] == "reactivate_plot_with_cycle"
+    assert by_no[7]["action"] == "final_plot"
+    assert 8 not in by_no
 
 
-def test_template_example_rows_are_exactly_four_common_actions() -> None:
+def test_template_example_rows_are_exactly_five_common_actions() -> None:
     _headers, by_no = _rows_by_number([_fake_supplier()])
-    example_actions = [by_no[n]["action"] for n in (3, 4, 5, 6)]
+    example_actions = [by_no[n]["action"] for n in (3, 4, 5, 6, 7)]
     assert example_actions == [
-        "create_plot_with_cycle", "update_current_cycle", "start_next_cycle", "final_plot",
+        "create_plot_with_cycle", "update_current_cycle", "start_next_cycle",
+        "reactivate_plot_with_cycle", "final_plot",
     ]
-    assert len(example_actions) == 4
+    assert len(example_actions) == 5
+
+
+def test_row_two_names_the_same_five_actions_the_example_rows_show() -> None:
+    """Round 8-27D — the file's own description row and its worked examples
+    are the two places a user looks; they disagreeing ("3 แบบ" over four
+    example rows) is what this round fixed. Pinned here so they can only
+    drift together."""
+    _headers, by_no = _rows_by_number([_fake_supplier()])
+    description = by_no[2]["action"]
+    example_actions = [by_no[n]["action"] for n in (3, 4, 5, 6, 7)]
+    assert "5 แบบ" in description
+    for action in example_actions:
+        assert action in description, action
 
 
 def test_legacy_rollover_actions_are_not_default_example_rows() -> None:

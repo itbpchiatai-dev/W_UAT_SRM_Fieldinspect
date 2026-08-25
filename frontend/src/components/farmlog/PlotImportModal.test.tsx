@@ -459,15 +459,20 @@ describe('PlotImportModal — preview', () => {
 });
 
 describe('PlotImportModal — workflow help copy (round 8-2.7.1)', () => {
-  it('shows the four common workflows as the primary help copy, including start_next_cycle and reactivate_plot_with_cycle (round 8-6J)', () => {
+  // Round 8-27D — five, and the SAME five the Excel file itself names. The
+  // dialog used to list 4 without final_plot while the sheet shipped a
+  // final_plot example row nothing explained, and its row-2 description said
+  // "3 แบบ" — three sources, three different answers.
+  it('shows the five common workflows as the primary help copy, matching the Excel file', () => {
     renderModal();
 
-    expect(screen.getByText(/การกระทำหลัก 4 แบบ/)).toBeTruthy();
+    expect(screen.getByText(/การกระทำหลัก 5 แบบ/)).toBeTruthy();
     const items = screen.getAllByRole('listitem');
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
     const actionNames = items.map((li) => li.querySelector('span.font-mono')?.textContent);
     expect(actionNames).toEqual([
-      'create_plot_with_cycle', 'update_current_cycle', 'start_next_cycle', 'reactivate_plot_with_cycle',
+      'create_plot_with_cycle', 'update_current_cycle', 'start_next_cycle',
+      'reactivate_plot_with_cycle', 'final_plot',
     ]);
   });
 
@@ -483,10 +488,10 @@ describe('PlotImportModal — workflow help copy (round 8-2.7.1)', () => {
   // Round 8-27C — the per-column rules moved into a collapsed <details> so
   // the default view is short enough that the file picker and Confirm button
   // stay reachable. Nothing was deleted; it is one click away.
-  it('collapses the per-column rules by default, keeping the 4 actions visible', () => {
+  it('collapses the per-column rules by default, keeping the 5 actions visible', () => {
     renderModal();
 
-    expect(screen.getByText(/การกระทำหลัก 4 แบบ/)).toBeTruthy();
+    expect(screen.getByText(/การกระทำหลัก 5 แบบ/)).toBeTruthy();
     const details = document.querySelector('details');
     expect(details).toBeTruthy();
     expect(details!.hasAttribute('open')).toBe(false);

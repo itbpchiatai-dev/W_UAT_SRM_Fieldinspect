@@ -392,15 +392,16 @@ def test_plot_without_active_cycle_all_editable_columns_still_yellow() -> None:
 
 
 def test_examples_sheet_every_import_column_has_red_fill_including_blanks() -> None:
-    """Rows 5/6/7 (update_current_cycle / start_next_cycle / final_plot
-    examples) leave several physical-plot columns blank (test_non_create_
-    examples_leave_physical_plot_fields_empty in test_plot_import_
-    template.py) — every one of those blanks must still be red, not just
-    the filled-in cells."""
+    """Rows 5-8 (update_current_cycle / start_next_cycle /
+    reactivate_plot_with_cycle / final_plot examples) leave several
+    physical-plot columns blank (test_non_create_examples_leave_physical_
+    plot_fields_empty in test_plot_import_template.py) — every one of those
+    blanks must still be red, not just the filled-in cells. Round 8-27D added
+    the reactivate example, so the range grew by one."""
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
     sheet4 = parts["xl/worksheets/sheet4.xml"]
-    for example_row in (4, 5, 6, 7):
+    for example_row in (4, 5, 6, 7, 8):
         for col_index in range(1, len(IMPORT_COLUMNS) + 1):
             ref = f"{_col_letter(col_index)}{example_row}"
             style_idx = _cell_style_index(sheet4, ref)

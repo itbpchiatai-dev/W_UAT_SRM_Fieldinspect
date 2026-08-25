@@ -2625,10 +2625,6 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     return screen.getByRole('menuitem', { name: 'ทุก Supplier' });
   }
 
-  function queryAllSuppliersMenuItem() {
-    return screen.queryByRole('menuitem', { name: 'ทุก Supplier' });
-  }
-
   beforeEach(() => {
     listPlotsMock.mockResolvedValue([]);
   });
@@ -2652,32 +2648,45 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     expect(allSuppliersMenuItem()).toBeTruthy();
   });
 
-  it('a Supplier Owner never sees "ทุก Supplier" (item 2)', async () => {
+  // Round 8-25P — a Supplier-side caller (canSeeVariety false) no longer
+  // sees the "ดาวน์โหลด Excel" trigger AT ALL (not just the "ทุก Supplier"
+  // item within it): the file shares one column layout with the import
+  // parser, so hiding the variety column just for this download isn't safe
+  // — the whole entry point is hidden instead. Supersedes the older,
+  // narrower "still gets the filtered option, just not ทุก Supplier"
+  // behavior these three tests used to check.
+  it('a Supplier Owner never sees "ดาวน์โหลด Excel" at all (item 2)', async () => {
     useAuthStore.setState({ user: userWithRoles('supplier:owner') });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
-    openDownloadMenu();
-    expect(filteredMenuItem()).toBeTruthy(); // still gets the filtered option
-    expect(queryAllSuppliersMenuItem()).toBeNull();
+    await screen.findByText('ไม่พบข้อมูล');
+    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
   });
 
-  it('a Field Officer never sees "ทุก Supplier" (item 3)', async () => {
+  it('a Field Officer never sees "ดาวน์โหลด Excel" at all (item 3)', async () => {
     useAuthStore.setState({ user: userWithRoles('farmlog:field_officer') });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
-    openDownloadMenu();
-    expect(queryAllSuppliersMenuItem()).toBeNull();
+    await screen.findByText('ไม่พบข้อมูล');
+    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
   });
 
-  it('no user loaded yet -> "ทุก Supplier" fails closed, not open', async () => {
+  it('no user loaded yet -> "ดาวน์โหลด Excel" fails closed, not open', async () => {
     // Round 8-25O — the shared beforeEach default changed from null to an
     // internal:admin user (crop/variety visibility needs one); this test's
     // whole premise is "no user yet", so it must set null explicitly now.
     useAuthStore.setState({ user: null });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
-    openDownloadMenu();
-    expect(queryAllSuppliersMenuItem()).toBeNull();
+    await screen.findByText('ไม่พบข้อมูล');
+    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
+  });
+
+  it('a Supplier Owner never sees "นำเข้า Excel" either, even holding plots.update', async () => {
+    useAuthStore.setState({
+      user: userWithRoles('supplier:owner'),
+      permissionKeys: new Set(['plots.read', 'plots.update', 'plots.create']),
+    });
+    renderPlotsPage();
+    await screen.findByText('ไม่พบข้อมูล');
+    expect(screen.queryByRole('button', { name: 'นำเข้า Excel' })).toBeNull();
   });
 
   // --- items 6/7: all-suppliers request sends ONLY template_mode -----------

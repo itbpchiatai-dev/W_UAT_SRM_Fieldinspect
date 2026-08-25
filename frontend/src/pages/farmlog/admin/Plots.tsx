@@ -1133,13 +1133,21 @@ export function Plots() {
             </button>
           )}
           <div className="flex flex-wrap gap-2 sm:justify-end">
-            <DownloadTemplateMenu
-              onFiltered={handleDownloadTemplate}
-              onAllSuppliers={handleDownloadAllSuppliers}
-              showAllSuppliers={hasFullSupplierScope}
-              pending={templateM.isPending}
-            />
-            {(canCreate || canUpdate) && (
+            {/* Round 8-25P — the Excel download/import share ONE column
+                layout with the import parser (plot_import.py), so the
+                variety column can't be safely dropped just for this file
+                without risking that shared contract. Simpler and safe:
+                hide both entry points from a Supplier-side caller entirely,
+                same canSeeVariety gate as the rest of round 8-25O. */}
+            {canSeeVariety && (
+              <DownloadTemplateMenu
+                onFiltered={handleDownloadTemplate}
+                onAllSuppliers={handleDownloadAllSuppliers}
+                showAllSuppliers={hasFullSupplierScope}
+                pending={templateM.isPending}
+              />
+            )}
+            {canSeeVariety && (canCreate || canUpdate) && (
               <button
                 type="button"
                 onClick={() => setImporting(true)}

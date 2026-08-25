@@ -85,6 +85,7 @@ import {
   formatYieldQuantity,
 } from '../../../lib/yield-planning';
 import { plotHasActiveCycle } from '../../../lib/plot-cycle';
+import { canViewVariety } from '../../../lib/variety-visibility';
 
 /** Supplier display for a plot row (round 6.1) — prefers the denormalised
  * supplierCode/supplierName that now come with every plot; falls back to the
@@ -189,7 +190,7 @@ function YieldCell({ plot, onPlanClick }: { plot: PlotSummary; onPlanClick?: () 
  * Line 2: "Lot: <lotNo> · ปลูก: <วันที่ไทย>"
  * Either line — or a whole part within a line — is omitted (not "null") when
  * unset; "—" only when there's genuinely nothing to show at all. */
-function PlantingCycleCell({ plot }: { plot: PlotSummary }) {
+function PlantingCycleCell({ plot, canSeeVariety }: { plot: PlotSummary; canSeeVariety: boolean }) {
   if (!plot.isActive) {
     // Round 8-6I.1 Part D — never say "รอเริ่มรอบปลูก" for an inactive
     // plot: that phrasing implies the user can start a cycle whenever
@@ -215,7 +216,9 @@ function PlantingCycleCell({ plot }: { plot: PlotSummary }) {
   // "jun2026"); fall back to "รอบที่ <activeCycleNo>" when there's no label.
   const cycleName = plot.activeCycleLabel?.trim()
     || (plot.activeCycleNo != null ? `รอบที่ ${plot.activeCycleNo}` : null);
-  const identity = [crop, variety].filter(Boolean).join(' / ');
+  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only; a Supplier-side
+  // caller never sees it here, even joined into this one identity string.
+  const identity = [crop, canSeeVariety ? variety : null].filter(Boolean).join(' / ');
   const plantingDateLabel = plantingDate
     ? new Date(plantingDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })
     : null;
@@ -712,6 +715,8 @@ export function Plots() {
   // authority regardless of what this shows.
   const currentUser = useAuthStore((s) => s.user);
   const hasFullSupplierScope = !!currentUser?.roles?.some((r) => FULL_SCOPE_ROLE_NAMES.has(r.name));
+  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
+  const canSeeVariety = canViewVariety(currentUser?.roles);
 
   useEffect(() => {
     const manage = searchParams.get('manage');
@@ -1423,15 +1428,20 @@ export function Plots() {
             placeholder="ค้นหาชนิดพืช..."
             emptyMessage="ไม่พบข้อมูล"
           />
-          <SearchableFilterCombobox
-            label="กรองพันธุ์/สายพันธุ์"
-            allLabel="ทุกพันธุ์"
-            options={varietyOptions.map((item) => item.value)}
-            value={filterVariety}
-            onChange={(variety) => { setPage(0); setFilterVariety(variety); setTemplateError(null); }}
-            placeholder="ค้นหาพันธุ์..."
-            emptyMessage="ไม่พบข้อมูล"
-          />
+          {/* Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only; the
+              filter control itself is hidden, not just its results, for a
+              Supplier-side caller. */}
+          {canSeeVariety && (
+            <SearchableFilterCombobox
+              label="กรองพันธุ์/สายพันธุ์"
+              allLabel="ทุกพันธุ์"
+              options={varietyOptions.map((item) => item.value)}
+              value={filterVariety}
+              onChange={(variety) => { setPage(0); setFilterVariety(variety); setTemplateError(null); }}
+              placeholder="ค้นหาพันธุ์..."
+              emptyMessage="ไม่พบข้อมูล"
+            />
+          )}
           {/* Round 8-18 — "รอบปลูกปัจจุบัน" (cycleLabel): matches ONLY a
               plot's ACTIVE PlotCycle, never a closed/historical one. Options
               are the real distinct labels in scope (cycleLabels query
@@ -1615,7 +1625,7 @@ export function Plots() {
                           ปิดใช้งาน
                         </span>
                       )}
-                      <PlantingCycleCell plot={p} />
+                      <PlantingCycleCell plot={p} canSeeVariety={canSeeVariety} />
                     </td>
                     <td className="hidden px-4 py-2 text-muted-foreground sm:table-cell">{p.province ?? '—'}</td>
                     <td className="hidden px-4 py-2 text-xs sm:table-cell">

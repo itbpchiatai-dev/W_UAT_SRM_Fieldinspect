@@ -14,6 +14,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PlotDetail } from './PlotDetail';
 import type { PlotCycle, PlotDetail as PlotDetailType } from '../../../api/plots';
 import type { RecordSummary } from '../../../api/records';
+import { useAuthStore } from '../../../stores/auth';
+import type { Role, User } from '../../../types/auth';
 
 const getPlotMock = vi.fn();
 const listRecordsMock = vi.fn();
@@ -286,7 +288,32 @@ beforeEach(() => {
   // about the no-active-cycle state override this per-test.
   listPlotCyclesMock.mockResolvedValue([oneCycle()]);
   allowedPerms = null;
+  // Round 8-25O — พันธุ์/สายพันธุ์ visibility needs an internal role
+  // (canViewVariety); default to internal:admin so existing crop/variety
+  // assertions keep holding. Supplier-role visibility is its own describe
+  // block below, setting a supplier:owner user explicitly per test.
+  useAuthStore.setState({ user: internalUser() });
 });
+
+function _role(name: string): Role {
+  return { id: `role-${name}`, name, displayName: name, providerScope: 'internal', isSystem: true };
+}
+
+function internalUser(): User {
+  return {
+    id: 'user-1', email: 'user@example.com', fullName: 'Test User',
+    authProvider: 'local', isActive: true, emailVerified: true,
+    roles: [_role('internal:admin')],
+  };
+}
+
+function supplierUser(): User {
+  return {
+    id: 'user-2', email: 'supplier@example.com', fullName: 'Supplier User',
+    authProvider: 'local', isActive: true, emailVerified: true,
+    roles: [_role('supplier:owner')],
+  };
+}
 
 describe('PlotDetail — current status', () => {
   it('shows a link to แก้ไขแปลง that hands off to the Plots list edit modal', async () => {
@@ -363,6 +390,23 @@ describe('PlotDetail — current status', () => {
 
     expect(await screen.findByText('ยังไม่มีการตรวจแปลงนี้')).toBeTruthy();
     expect(getRecordMock).not.toHaveBeenCalled();
+  });
+
+  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
+  it('hides the พันธุ์/สายพันธุ์ field for a supplier-role user, crop stays visible', async () => {
+    useAuthStore.setState({ user: supplierUser() });
+    listPlotCyclesMock.mockResolvedValue([]);
+    getPlotMock.mockResolvedValue(basePlot({
+      currentCrop: 'พริก', currentVariety: 'พริกขี้หนู',
+      lastInspectedByCode: 'FIELD01', lastInspectionRecordId: 'rec-1',
+    }));
+    getRecordMock.mockResolvedValue({ id: 'rec-1', photoUrls: [] });
+
+    renderPage();
+
+    expect(await screen.findByText('พริก')).toBeTruthy();
+    expect(screen.queryByText('พริกขี้หนู')).toBeNull();
+    expect(screen.queryByText('พันธุ์/สายพันธุ์')).toBeNull();
   });
 });
 

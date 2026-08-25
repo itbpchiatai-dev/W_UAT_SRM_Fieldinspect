@@ -1393,10 +1393,16 @@ export function PublicInspect() {
                   <dt className="text-xs text-gray-400">ชนิดพืช</dt>
                   <dd className="text-gray-700">{plotInfo?.currentCrop || emptyText}</dd>
                 </div>
-                <div>
-                  <dt className="text-xs text-gray-400">พันธุ์/สายพันธุ์</dt>
-                  <dd className="text-gray-700">{plotInfo?.currentVariety || emptyText}</dd>
-                </div>
+                {/* Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
+                    This flow has no login/roles at all — inspectorType is
+                    the self-declared stand-in ("เข้าตรวจในฐานะ" above), so
+                    the gate is simply "chiatai" vs anything else. */}
+                {selectedInspectorType === 'chiatai' && (
+                  <div>
+                    <dt className="text-xs text-gray-400">พันธุ์/สายพันธุ์</dt>
+                    <dd className="text-gray-700">{plotInfo?.currentVariety || emptyText}</dd>
+                  </div>
+                )}
                 <div>
                   <dt className="text-xs text-gray-400">เลขล็อต (Lot No.)</dt>
                   <dd className="text-gray-700">{plotInfo?.currentLotNo || emptyText}</dd>

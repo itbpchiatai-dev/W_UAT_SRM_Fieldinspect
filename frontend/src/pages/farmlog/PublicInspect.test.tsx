@@ -778,7 +778,13 @@ describe('PublicInspect — QR entry', () => {
 
 describe('PublicInspect — inspection form (read-only Plot/Cycle, phone hidden)', () => {
   it('shows read-only Supplier/Plot/Cycle/crop/variety/lot/planting-date/yield-plan', async () => {
-    await goToFormStep();
+    // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only; this test
+    // asserts it IS shown, so it must go through as "Chiatai" specifically
+    // (goToFormStep's default role is "เกษตรกร", which now hides it — see
+    // the dedicated hide test below).
+    renderPublicInspect();
+    await enterPhoneAndLookup();
+    await pickRoleAndPlot('Chiatai');
 
     expect(screen.getByText(/SUP001 — Supplier One/)).toBeTruthy();
     expect(screen.getByText(/PLOT001 — Plot One/)).toBeTruthy();
@@ -788,6 +794,14 @@ describe('PublicInspect — inspection form (read-only Plot/Cycle, phone hidden)
     expect(screen.getByText('LOT-01')).toBeTruthy();
     expect(screen.getByText('2026-01-01')).toBeTruthy();
     expect(screen.getByText(/500\.00/)).toBeTruthy();
+  });
+
+  it('hides พันธุ์/สายพันธุ์ for เกษตรกร/บริษัทผู้ผลิต — only Chiatai sees it', async () => {
+    await goToFormStep(); // default role is "เกษตรกร"
+
+    expect(screen.getByText('พริก')).toBeTruthy();
+    expect(screen.queryByText('พริกขี้หนู')).toBeNull();
+    expect(screen.queryByText('พันธุ์/สายพันธุ์')).toBeNull();
   });
 
   it('round 8-3K: labels the Lot No. field clearly as "เลขล็อต (Lot No.)"', async () => {

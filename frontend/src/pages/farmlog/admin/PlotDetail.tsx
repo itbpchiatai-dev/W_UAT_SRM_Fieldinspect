@@ -21,6 +21,8 @@ import {
 import { PlotAccessPhoneModal } from '../../../components/farmlog/PlotAccessPhoneModal';
 import { PlotInspectionPasswordModal } from '../../../components/farmlog/PlotInspectionPasswordModal';
 import { useHasPermission } from '../../../hooks/useHasPermission';
+import { useAuth } from '../../../hooks/useAuth';
+import { canViewVariety } from '../../../lib/variety-visibility';
 import {
   formattedPhoneSnapshot, hasPhoneAttribution, inspectorTypeLabel, phoneTypeLabel, submittedByLine,
 } from '../../../lib/inspection-attribution';
@@ -268,6 +270,7 @@ function CurrentCycleSection({
   onEdit,
   onCloseCycle,
   onRollover,
+  canSeeVariety,
 }: {
   plot: PlotDetailData;
   activeCycle: PlotCycle | null;
@@ -277,6 +280,7 @@ function CurrentCycleSection({
   onEdit: () => void;
   onCloseCycle: () => void;
   onRollover: () => void;
+  canSeeVariety: boolean;
 }) {
   if (!activeCycle) {
     return (
@@ -326,7 +330,7 @@ function CurrentCycleSection({
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
         <Field label="ชนิดพืช" value={activeCycle.crop} />
-        <Field label="พันธุ์/สายพันธุ์" value={activeCycle.variety} />
+        {canSeeVariety && <Field label="พันธุ์/สายพันธุ์" value={activeCycle.variety} />}
         <Field label="PO Number" value={activeCycle.poNumber} />
         <Field label="P.Code" value={activeCycle.pCode} />
         <Field label="Lot No ระบบ"
@@ -516,7 +520,9 @@ const CYCLE_HISTORY_COLUMNS: { key: string; label: string; className?: string }[
  * The 10/25/50/100 selector slices an already-fetched array, so it issues no
  * request and cannot disturb the current-cycle section above it.
  */
-function CycleHistorySection({ cycles, canReadRecords }: { cycles: PlotCycle[]; canReadRecords: boolean }) {
+function CycleHistorySection({
+  cycles, canReadRecords, canSeeVariety,
+}: { cycles: PlotCycle[]; canReadRecords: boolean; canSeeVariety: boolean }) {
   const [displayLimit, setDisplayLimit] = useState<number>(CYCLE_HISTORY_DEFAULT_LIMIT);
   const visible = cycles.slice(0, displayLimit);
   // The fetch is capped at CYCLE_HISTORY_MAX, so a full page means "at least
@@ -568,7 +574,10 @@ function CycleHistorySection({ cycles, canReadRecords }: { cycles: PlotCycle[]; 
                     scope="col"
                     className={`whitespace-nowrap px-3 py-2 font-medium ${col.className ?? ''}`}
                   >
-                    {col.label}
+                    {/* Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-
+                        only; this column's header and cell values both drop
+                        it together for a Supplier-side caller. */}
+                    {col.key === 'crop' && !canSeeVariety ? 'พืช' : col.label}
                   </th>
                 ))}
               </tr>
@@ -590,7 +599,7 @@ function CycleHistorySection({ cycles, canReadRecords }: { cycles: PlotCycle[]; 
                     </span>
                   </td>
                   <td className="px-3 py-2 text-gray-600">
-                    <Cell value={[c.crop, c.variety].filter(Boolean).join(' / ') || null} />
+                    <Cell value={[c.crop, canSeeVariety ? c.variety : null].filter(Boolean).join(' / ') || null} />
                   </td>
                   <td className="px-3 py-2 text-gray-600"><Cell value={c.poNumber} /></td>
                   <td className="px-3 py-2 text-gray-600"><Cell value={c.pCode} /></td>
@@ -640,8 +649,10 @@ function CycleHistorySection({ cycles, canReadRecords }: { cycles: PlotCycle[]; 
 function CurrentStatusSection({
   lastInspectionRecordId,
   fields,
+  canSeeVariety,
 }: {
   lastInspectionRecordId: string | null;
+  canSeeVariety: boolean;
   fields: {
     crop: string | null;
     variety: string | null;
@@ -694,7 +705,7 @@ function CurrentStatusSection({
         <div className="space-y-4">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
             <Field label="ชนิดพืช" value={fields.crop} />
-            <Field label="พันธุ์/สายพันธุ์" value={fields.variety} />
+            {canSeeVariety && <Field label="พันธุ์/สายพันธุ์" value={fields.variety} />}
             <Field label="วันที่ปลูก" value={fields.plantingDate} />
             <Field label="ระยะการเจริญเติบโต" value={fields.stage} />
             {quantityKg != null ? (
@@ -1077,6 +1088,9 @@ export function PlotDetail() {
   // Round 8-6I Part F — activation privilege, same permission the backend's
   // deactivate/reactivate endpoints require (plots.delete).
   const canReactivate = useHasPermission('plots.delete');
+  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
+  const { user } = useAuth();
+  const canSeeVariety = canViewVariety(user?.roles);
   const [page, setPage] = useState(0);
   const [historyPageSize, setHistoryPageSize] = useState<number>(HISTORY_PAGE_SIZE_DEFAULT);
   const [printItems, setPrintItems] = useState<PlotQrLabelData[] | null>(null);
@@ -1329,6 +1343,7 @@ export function PlotDetail() {
           onEdit={() => activeCycle && setEditingCycle(activeCycle)}
           onCloseCycle={() => activeCycle && setClosingCycle(activeCycle)}
           onRollover={() => activeCycle && setRollingOverCycle(activeCycle)}
+          canSeeVariety={canSeeVariety}
         />
 
         <YieldPlanningSection
@@ -1341,6 +1356,7 @@ export function PlotDetail() {
 
         <CurrentStatusSection
           lastInspectionRecordId={plot.lastInspectionRecordId}
+          canSeeVariety={canSeeVariety}
           fields={{
             crop: plot.currentCrop,
             variety: plot.currentVariety,
@@ -1418,7 +1434,7 @@ export function PlotDetail() {
           </section>
         )}
 
-        <CycleHistorySection cycles={cycles} canReadRecords={canReadRecords} />
+        <CycleHistorySection cycles={cycles} canReadRecords={canReadRecords} canSeeVariety={canSeeVariety} />
       </div>
 
       {printItems && (

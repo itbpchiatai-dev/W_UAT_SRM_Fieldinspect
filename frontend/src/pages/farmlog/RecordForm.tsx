@@ -50,6 +50,7 @@ import { formatFixed, toNumberOrNull } from '../../lib/numeric';
 import { bangkokToday } from '../../lib/business-date';
 import { YieldQuantityInput } from '../../components/farmlog/YieldQuantityInput';
 import { computeInitialYieldValue, targetToKg, validateYieldQuantityKg } from '../../lib/yield-planning';
+import { canViewVariety } from '../../lib/variety-visibility';
 
 interface FormState {
   supplierId: string;
@@ -393,6 +394,9 @@ export function RecordForm() {
   }
 
   const submitting = createM.isPending || photoProcessing;
+  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only; a Supplier-side
+  // logged-in user (supplier:*/farmlog:field_officer) never sees it here.
+  const canSeeVariety = canViewVariety(user?.roles);
   const filledByName = user?.fullName || user?.email || '';
 
   return (
@@ -498,10 +502,12 @@ export function RecordForm() {
                 <dt className="text-xs text-muted-foreground">ชนิดพืช</dt>
                 <dd className="text-foreground">{selectedPlot.currentCrop || emptyText}</dd>
               </div>
-              <div>
-                <dt className="text-xs text-muted-foreground">พันธุ์/สายพันธุ์</dt>
-                <dd className="text-foreground">{selectedPlot.currentVariety || emptyText}</dd>
-              </div>
+              {canSeeVariety && (
+                <div>
+                  <dt className="text-xs text-muted-foreground">พันธุ์/สายพันธุ์</dt>
+                  <dd className="text-foreground">{selectedPlot.currentVariety || emptyText}</dd>
+                </div>
+              )}
               <div>
                 <dt className="text-xs text-muted-foreground">Lot No.</dt>
                 <dd className="text-foreground">{selectedPlot.currentLotNo || emptyText}</dd>

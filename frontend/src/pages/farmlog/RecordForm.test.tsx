@@ -12,6 +12,27 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RecordForm } from './RecordForm';
 import { useAuthStore } from '../../stores/auth';
 import { bangkokToday } from '../../lib/business-date';
+import type { Role, User } from '../../types/auth';
+
+function _role(name: string): Role {
+  return { id: `role-${name}`, name, displayName: name, providerScope: 'internal', isSystem: true };
+}
+
+function internalUser(): User {
+  return {
+    id: 'user-1', email: 'user@example.com', fullName: 'Test User',
+    authProvider: 'local', isActive: true, emailVerified: true,
+    roles: [_role('internal:admin')],
+  };
+}
+
+function supplierUser(): User {
+  return {
+    id: 'user-2', email: 'supplier@example.com', fullName: 'Supplier User',
+    authProvider: 'local', isActive: true, emailVerified: true,
+    roles: [_role('supplier:owner')],
+  };
+}
 
 const listSuppliersMock = vi.fn();
 const listPlotsMock = vi.fn();
@@ -171,6 +192,10 @@ beforeEach(() => {
   fetchProtocolsMock.mockReset();
   fetchProtocolsMock.mockResolvedValue(PROTOCOLS);
   useAuthStore.setState({ permissionKeys: new Set<string>() });
+  // Round 8-25O — พันธุ์/สายพันธุ์ visibility needs an internal role
+  // (canViewVariety); default to internal:admin so existing crop/variety
+  // assertions keep holding. Supplier-role visibility is tested explicitly.
+  useAuthStore.setState({ user: internalUser() });
   listFieldDefinitionsMock.mockResolvedValue([]);
   listSuppliersMock.mockResolvedValue([
     { id: 'sup-1', code: 'SUP001', name: 'Supplier One', isActive: true, contactName: null, contactEmail: null },
@@ -293,6 +318,35 @@ describe('RecordForm — plot master crop/variety are read-only in inspection fl
     // let the field worker choose a different crop/variety for this record.
     expect(screen.queryByRole('button', { name: 'เมล่อน' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'พริกขี้หนู', pressed: true })).toBeNull();
+  });
+
+  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
+  it('hides พันธุ์/สายพันธุ์ for a supplier-role user, crop stays visible', async () => {
+    useAuthStore.setState({ user: supplierUser() });
+    listPlotsMock.mockResolvedValue([
+      {
+        id: 'plot-1', supplierId: 'sup-1', plotCode: 'SUP001-P001', name: 'แปลงพริก',
+        village: null, district: null, province: null,
+        latitude: null, longitude: null,
+        isActive: true, assignedCount: 0,
+        currentCrop: 'พริก',
+        currentVariety: 'พริกขี้หนู',
+        currentLotNo: 'LOT-01',
+        currentPlantingDate: '2026-07-01',
+      },
+    ]);
+
+    renderNewRecordForm();
+
+    await screen.findByText('Supplier One');
+    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    const plotPickerTrigger = await screen.findByText('— เลือกแปลง —');
+    fireEvent.click(plotPickerTrigger);
+    fireEvent.click(await screen.findByText('SUP001-P001'));
+
+    expect(await screen.findByText('พริก')).toBeTruthy();
+    expect(screen.queryByText('พริกขี้หนู')).toBeNull();
+    expect(screen.queryByText('พันธุ์/สายพันธุ์')).toBeNull();
   });
 });
 

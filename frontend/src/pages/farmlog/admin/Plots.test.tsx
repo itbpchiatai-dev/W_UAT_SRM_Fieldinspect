@@ -192,8 +192,11 @@ beforeEach(() => {
   useAuthStore.setState({ permissionKeys: new Set(['plots.read', 'plots.update', 'plots.create', 'plots.delete', 'plots.assign', 'records.create']) });
   // Round 8-6G — reset between tests so a full-scope `user` set by one test
   // (for the "ทุก Supplier" menu-item visibility checks) never leaks into
-  // an unrelated test that runs after it.
-  useAuthStore.setState({ user: null });
+  // an unrelated test that runs after it. Round 8-25O — defaults to an
+  // internal:admin user (not null): most existing tests assume crop/variety
+  // is visible, which now requires an internal role (canViewVariety);
+  // supplier-role-specific behavior is set explicitly per test (below).
+  useAuthStore.setState({ user: userWithRoles('internal:admin') });
 });
 
 function _role(name: string): Role {
@@ -2667,7 +2670,11 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
   });
 
   it('no user loaded yet -> "ทุก Supplier" fails closed, not open', async () => {
-    renderPlotsPage(); // useAuthStore's `user` is null (shared beforeEach reset)
+    // Round 8-25O — the shared beforeEach default changed from null to an
+    // internal:admin user (crop/variety visibility needs one); this test's
+    // whole premise is "no user yet", so it must set null explicitly now.
+    useAuthStore.setState({ user: null });
+    renderPlotsPage();
     await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
     openDownloadMenu();
     expect(queryAllSuppliersMenuItem()).toBeNull();

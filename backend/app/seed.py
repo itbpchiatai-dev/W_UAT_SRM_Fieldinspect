@@ -198,7 +198,12 @@ DEFAULT_MENUS: list[tuple[str, str, str, str | None, str, str | None, int, str]]
     # FarmLog section
     ("farmlog",                "FarmLog",       "FarmLog",       "Leaf",         "/farmlog",                     None,       20, ""),
     ("farmlog.admin",          "จัดการข้อมูล", "Admin",          "Database",     "/farmlog/admin",               "farmlog",  10, "suppliers.read"),
-    ("farmlog.admin.suppliers","Suppliers",     "Suppliers",     "Building2",    "/farmlog/admin/suppliers",     "farmlog.admin", 10, "suppliers.read"),
+    # Round 8-25Q — gated on suppliers.update (not suppliers.read): the
+    # Suppliers admin CRUD page/menu is internal:admin/super_admin only.
+    # suppliers.read stays broader (also needed to populate the Supplier
+    # dropdown on Plots/RecordForm, which supplier:owner/farmlog:field_officer
+    # legitimately need) — see migration 0052.
+    ("farmlog.admin.suppliers","Suppliers",     "Suppliers",     "Building2",    "/farmlog/admin/suppliers",     "farmlog.admin", 10, "suppliers.update"),
     ("farmlog.admin.plots",    "แปลง",          "Plots",         "MapPin",       "/farmlog/admin/plots",         "farmlog.admin", 20, "plots.read"),
     ("farmlog.admin.fields",   "ฟิลด์ฟอร์ม",    "Field Master",  "SlidersHorizontal", "/farmlog/admin/fields",   "farmlog.admin", 30, "fielddefs.read"),
     ("farmlog.admin.masterdata","Master Data",   "Master Data",   "ListChecks",   "/farmlog/admin/masterdata",    "farmlog.admin", 40, "masterdata.read"),

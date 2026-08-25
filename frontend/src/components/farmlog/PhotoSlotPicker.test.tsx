@@ -475,3 +475,54 @@ describe('PhotoSlotPicker — 34: non-blocking fallback warning', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
   });
 });
+
+describe('PhotoSlotPicker — round 8-27A: slot layout', () => {
+  it('gives every empty slot its own visible ถ่ายรูป and เลือกไฟล์ button', () => {
+    render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
+
+    expect(screen.getAllByRole('button', { name: 'ถ่ายรูป' })).toHaveLength(MAX_PHOTO_COUNT);
+    expect(screen.getAllByRole('button', { name: 'เลือกไฟล์' })).toHaveLength(MAX_PHOTO_COUNT);
+  });
+
+  it('stacks the two buttons rather than splitting the slot in half', () => {
+    // The half-and-half version wrapped "เลือกไฟล์" mid-word once five
+    // columns squeezed each slot to ~90px. Both buttons must be full-width
+    // siblings in a column, so neither label can wrap again.
+    render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
+
+    const camera = screen.getAllByRole('button', { name: 'ถ่ายรูป' })[0];
+    const file = screen.getAllByRole('button', { name: 'เลือกไฟล์' })[0];
+    expect(camera.parentElement).toBe(file.parentElement);
+    expect(camera.parentElement?.className).toContain('flex-col');
+    expect(camera.className).toContain('w-full');
+    expect(file.className).toContain('w-full');
+  });
+
+  it('does not pack five columns in before the lg breakpoint', () => {
+    const { container } = render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
+
+    const grid = container.querySelector('[class*="grid-cols"]')!;
+    expect(grid.className).toContain('lg:grid-cols-5');
+    expect(grid.className).not.toContain('sm:grid-cols-5');
+  });
+
+  it('reserves the same label height in every slot so the boxes line up', () => {
+    // "ดอก/ผล" is one line and "ปัญหา/ความเสียหาย" is two; without a floor
+    // on the label height the taller one pushed its own box down and left
+    // the row ragged.
+    render(<PhotoSlotPicker slots={emptyPhotoSlots()} onChange={() => {}} />);
+
+    for (const label of PHOTO_SLOT_LABELS) {
+      expect(screen.getByText(label).className).toContain('min-h-');
+    }
+  });
+
+  it('still shows the remove button and no pickers once a slot is filled', () => {
+    const slots = emptyPhotoSlots();
+    slots[0] = jpegFile('filled.jpg');
+    render(<PhotoSlotPicker slots={slots} onChange={() => {}} />);
+
+    expect(screen.getByRole('button', { name: `ลบรูป ${PHOTO_SLOT_LABELS[0]}` })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'ถ่ายรูป' })).toHaveLength(MAX_PHOTO_COUNT - 1);
+  });
+});

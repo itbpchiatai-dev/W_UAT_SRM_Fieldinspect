@@ -240,10 +240,24 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
           {count}/{MAX_PHOTO_COUNT}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      {/* Round 8-27A — 5 columns only from `lg` up. At `sm` (640px) five
+          columns leave each slot ~90px wide, which is what made this section
+          look scrambled: the two action buttons split that in half and their
+          labels wrapped mid-word. Three columns on a tablet keeps every slot
+          wide enough for a full-width button. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {PHOTO_SLOT_LABELS.map((label, idx) => (
-          <div key={label} className="space-y-1.5">
-            <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          <div
+            key={label}
+            className="flex flex-col gap-2 rounded-lg border border-border bg-background p-2"
+          >
+            {/* Fixed-height label box. The labels are 1 or 2 lines
+                ("ดอก/ผล" vs "ปัญหา/ความเสียหาย"), and letting a 2-line one
+                push its own slot down is what left the row ragged — every
+                slot's image area now starts at the same height. */}
+            <p className="flex min-h-[2.25rem] items-start text-xs font-medium leading-tight text-foreground">
+              {label}
+            </p>
             {previews[idx] ? (
               <div className="relative">
                 <img
@@ -266,7 +280,7 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
                 )}
               </div>
             ) : processing[idx] ? (
-              <div className="flex h-24 w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground">
+              <div className="flex h-24 w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border bg-card text-muted-foreground">
                 <Loader2 className="h-5 w-5 animate-spin text-green-600" />
                 <span className="text-[11px]">กำลังเตรียมรูป...</span>
               </div>
@@ -278,16 +292,22 @@ export function PhotoSlotPicker({ slots, onChange, disabled, onProcessingChange 
               // capture on ITS hidden input) — see the refs' comment above
               // for why this replaced the single-button, single-input,
               // OS-chooser-dependent version.
-              <div className="flex h-24 w-full gap-1">
+              //
+              // Round 8-27A stacks them instead of splitting the slot in
+              // half. Both stay full-width, so neither label can wrap, and
+              // the split matches how the two are actually used in the
+              // field: ถ่ายรูป is the big primary tap target on a phone,
+              // เลือกไฟล์ the smaller secondary underneath.
+              <div className="flex flex-col gap-1.5">
                 <button type="button" disabled={disabled} onClick={() => cameraInputRefs[idx].current?.click()}
-                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground hover:border-green-400 hover:text-green-600 disabled:opacity-50">
-                  <Camera className="h-5 w-5" />
-                  <span className="text-[10px]">ถ่ายรูป</span>
+                  className="flex h-24 w-full flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-green-400 hover:text-green-600 disabled:opacity-50">
+                  <Camera className="h-6 w-6" />
+                  <span className="text-[11px] font-medium">ถ่ายรูป</span>
                 </button>
                 <button type="button" disabled={disabled} onClick={() => fileInputRefs[idx].current?.click()}
-                  className="flex flex-1 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-muted-foreground hover:border-green-400 hover:text-green-600 disabled:opacity-50">
-                  <ImagePlus className="h-5 w-5" />
-                  <span className="text-[10px]">เลือกไฟล์</span>
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50">
+                  <ImagePlus className="h-3.5 w-3.5 shrink-0" />
+                  เลือกไฟล์
                 </button>
               </div>
             )}

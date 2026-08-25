@@ -103,15 +103,23 @@ export type CropVarietyImportAction =
   | 'deactivate_variety'
   | 'none';
 
+/** Round 8-26B — the P.Code plan is a SEPARATE per-row action from the
+ * crop/variety one above: a single row can create a crop, a variety AND a
+ * P.Code at once, so folding them into one union would need a
+ * combinatorial set. 'none' is shared by both. */
+export type CropVarietyImportPCodeAction = 'create_p_code' | 'activate_p_code' | 'none';
+
 export interface CropVarietyImportRowResult {
   rowNumber: number;
   crop: string | null;
   variety: string | null;
+  pCode: string | null;
   // Raw Thai cell text ("เปิดใช้งาน"/"ปิดใช้งาน"/null) — never a boolean; see
   // CropVarietyImportPreviewStateRow.varietyStatus for the normalized flag.
   varietyStatus: string | null;
   rowStatus: 'READY' | 'SKIPPED' | 'ERROR';
   action: CropVarietyImportAction;
+  pCodeAction: CropVarietyImportPCodeAction;
   errorMessage: string;
 }
 
@@ -124,6 +132,8 @@ export interface CropVarietyImportSummary {
   varietiesToCreate: number;
   varietiesToActivate: number;
   varietiesToDeactivate: number;
+  pCodesToCreate: number;
+  pCodesToActivate: number;
 }
 
 /** One row's normalized plan + the live master_data snapshot it was
@@ -141,6 +151,15 @@ export interface CropVarietyImportPreviewStateRow {
   varietyExisted: boolean;
   varietyWasActive: boolean | null;
   varietyParentAtPreview: string | null;
+  pCode: string | null;
+  pCodeAction: CropVarietyImportPCodeAction;
+  pCodeExisted: boolean;
+  pCodeWasActive: boolean | null;
+  pCodeParentAtPreview: string | null;
+  // The variety's active P.Code as of Preview, recorded even when this file
+  // never names it — that is what turns "someone else claimed the slot in
+  // the meantime" into a clean 409 rather than a late row error.
+  varietyActivePCodeAtPreview: string | null;
 }
 
 /** Read-only optimistic-concurrency expectation from Preview — echoed back

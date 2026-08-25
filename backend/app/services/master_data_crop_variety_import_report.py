@@ -7,7 +7,10 @@ unrelated (Plot Import's 22+ columns vs this feature's 3).
 
 Adds `importStatus` and `errorMessage` (plus `rowNumber`, required so every
 error is traceable to an exact Excel row) as the result columns appended
-after the 3 input columns (crop/variety/varietyStatus).
+after the input columns (crop/variety/pCode/varietyStatus — pCode added in
+round 8-26B). ALL_COLUMNS is derived from the importer's own IMPORT_COLUMNS,
+so a future column flows through here automatically — except _COL_WIDTHS,
+which is positional and has to grow with it.
 
 Status vocabulary:
   Preview workbook   — READY / SKIPPED / ERROR
@@ -117,7 +120,10 @@ _S_STATUS = {
     STATUS_COMPLETED: 5,
 }
 
-_COL_WIDTHS = [22, 22, 16, 12, 14, 60]
+# One entry per column of ALL_COLUMNS (4 input + 3 result since round
+# 8-26B added pCode) — a short list silently leaves the tail columns at
+# Excel's default width.
+_COL_WIDTHS = [22, 22, 18, 16, 12, 14, 60]
 
 _STYLES_XML = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -156,12 +162,15 @@ _LABEL_CROPS_TO_CREATE = "สร้างชนิดพืชใหม่ (จ�
 _LABEL_VARIETIES_TO_CREATE = "สร้างพันธุ์ใหม่"
 _LABEL_VARIETIES_TO_ACTIVATE = "เปิดใช้งานพันธุ์"
 _LABEL_VARIETIES_TO_DEACTIVATE = "ปิดใช้งานพันธุ์"
+_LABEL_P_CODES_TO_CREATE = "สร้าง P.Code ใหม่"
+_LABEL_P_CODES_TO_ACTIVATE = "เปิดใช้งาน P.Code"
 
 
 def _summarize(
     row_views: list[dict[str, Any]], *, completed: bool,
     crops_to_create: int, varieties_to_create: int,
     varieties_to_activate: int, varieties_to_deactivate: int,
+    p_codes_to_create: int, p_codes_to_activate: int,
 ) -> dict[str, Any]:
     statuses = [map_row_status(v, completed=completed) for v in row_views]
     counts = {s: statuses.count(s) for s in (STATUS_READY, STATUS_SKIPPED, STATUS_ERROR, STATUS_COMPLETED)}
@@ -173,6 +182,8 @@ def _summarize(
         "varieties_to_create": varieties_to_create,
         "varieties_to_activate": varieties_to_activate,
         "varieties_to_deactivate": varieties_to_deactivate,
+        "p_codes_to_create": p_codes_to_create,
+        "p_codes_to_activate": p_codes_to_activate,
     }
 
 
@@ -226,6 +237,8 @@ def _summary_sheet_xml(
         (_LABEL_VARIETIES_TO_CREATE, summary["varieties_to_create"]),
         (_LABEL_VARIETIES_TO_ACTIVATE, summary["varieties_to_activate"]),
         (_LABEL_VARIETIES_TO_DEACTIVATE, summary["varieties_to_deactivate"]),
+        (_LABEL_P_CODES_TO_CREATE, summary["p_codes_to_create"]),
+        (_LABEL_P_CODES_TO_ACTIVATE, summary["p_codes_to_activate"]),
     ]
     rows_xml = []
     for r, (label, value) in enumerate(pairs, start=1):
@@ -314,6 +327,8 @@ def build_crop_variety_import_result_workbook(
     varieties_to_create: int = 0,
     varieties_to_activate: int = 0,
     varieties_to_deactivate: int = 0,
+    p_codes_to_create: int = 0,
+    p_codes_to_activate: int = 0,
 ) -> bytes:
     """Pure builder → XLSX bytes (no temp file, no DB). `row_views` are the
     neutral dicts from master_data_crop_variety_import.row_view. `phase` is
@@ -333,6 +348,7 @@ def build_crop_variety_import_result_workbook(
         row_views, completed=completed,
         crops_to_create=crops_to_create, varieties_to_create=varieties_to_create,
         varieties_to_activate=varieties_to_activate, varieties_to_deactivate=varieties_to_deactivate,
+        p_codes_to_create=p_codes_to_create, p_codes_to_activate=p_codes_to_activate,
     )
     sheet1 = _result_sheet_xml(row_views, summary["statuses"])
     sheet2 = _summary_sheet_xml(

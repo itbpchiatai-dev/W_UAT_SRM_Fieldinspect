@@ -53,6 +53,8 @@ function previewState(overrides: Partial<CropVarietyImportPreviewState> = {}): C
       rowNumber: 3, crop: 'พริก', variety: 'พริกขี้หนู', varietyStatus: true,
       action: 'create_crop_and_variety', cropExisted: false, cropWasActive: null,
       varietyExisted: false, varietyWasActive: null, varietyParentAtPreview: null,
+      pCode: null, pCodeAction: 'none', pCodeExisted: false, pCodeWasActive: null,
+      pCodeParentAtPreview: null, varietyActivePCodeAtPreview: null,
     }],
     ...overrides,
   };

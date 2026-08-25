@@ -21,7 +21,7 @@ def _md(type_, value, parent=None, active=True, order=0):
     return SimpleNamespace(type=type_, value=value, parent=parent, active=active, order_index=order)
 
 
-def _patch_list_items(crops, varieties):
+def _patch_list_items(crops, varieties, p_codes=None):
     async def fake(db, type=None, parent=None, active_only=False):
         if type == "crop":
             assert active_only is True  # item 6: only ACTIVE crops are ever fetched
@@ -29,16 +29,22 @@ def _patch_list_items(crops, varieties):
         if type == "variety":
             assert active_only is False  # item 4: both active AND inactive varieties
             return varieties
+        if type == cv_import.P_CODE_TYPE:
+            # Round 8-26B: only ACTIVE P.Codes are pre-filled, so a
+            # deactivated one is never resurrected by an untouched round-trip.
+            assert active_only is True
+            return p_codes or []
         return []
     return patch(f"{_M}.list_items", AsyncMock(side_effect=fake))
 
 
-async def test_header_has_exactly_three_columns_in_order():
-    """Item 1: row 1 header."""
+async def test_header_has_exactly_four_columns_in_order():
+    """Item 1: row 1 header. Round 8-26B inserted pCode between variety and
+    varietyStatus — the layout the user asked for."""
     with _patch_list_items([], []):
         content = await cv_import.build_template(db=AsyncMock())
     headers, _rows = read_first_sheet(content)
-    assert headers == ["crop", "variety", "varietyStatus"]
+    assert headers == ["crop", "variety", "pCode", "varietyStatus"]
 
 
 async def test_row_two_is_a_skipped_description_row():
@@ -110,7 +116,7 @@ async def test_variety_status_dropdown_present_with_exact_two_options():
     root = ET.fromstring(sheet_xml)
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     validations = root.findall(f"{ns}dataValidations/{ns}dataValidation")
-    status_rule = next(v for v in validations if v.get("sqref", "").startswith("C"))
+    status_rule = next(v for v in validations if v.get("sqref", "").startswith("D"))
     assert status_rule.get("showErrorMessage") == "1"
 
 
@@ -261,7 +267,7 @@ async def test_status_dropdown_behavior_unchanged_by_this_round():
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     status_rule = next(
         v for v in root.findall(f"{ns}dataValidations/{ns}dataValidation")
-        if v.get("sqref", "").startswith("C")
+        if v.get("sqref", "").startswith("D")
     )
     assert status_rule.get("showErrorMessage") == "1"
     assert status_rule.find(f"{ns}formula1").text == '"เปิดใช้งาน,ปิดใช้งาน"'
@@ -281,7 +287,7 @@ async def test_no_active_crops_means_no_reference_sheet_or_defined_name():
     # And the workbook is still a valid, openable single-sheet .zip/.xlsx —
     # read_first_sheet must parse it without error.
     headers, _rows = read_first_sheet(content)
-    assert headers == ["crop", "variety", "varietyStatus"]
+    assert headers == ["crop", "variety", "pCode", "varietyStatus"]
 
 
 async def test_generic_build_xlsx_caller_without_hidden_sheets_is_unaffected():
@@ -318,7 +324,7 @@ async def test_generated_workbook_parses_back_and_first_sheet_is_still_the_data_
     with _patch_list_items(crops, []):
         content = await cv_import.build_template(db=AsyncMock())
     headers, rows = read_first_sheet(content)
-    assert headers == ["crop", "variety", "varietyStatus"]
+    assert headers == ["crop", "variety", "pCode", "varietyStatus"]
     # read_first_sheet always reads sheet1.xml — must be the DATA sheet
     # (พืชและพันธุ์), never the hidden reference sheet, regardless of the
     # reference sheet's presence.

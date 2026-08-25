@@ -29,6 +29,7 @@ import {
   previewCropVarietyImport,
   MasterDataImportReportError,
   type CropVarietyImportAction,
+  type CropVarietyImportPCodeAction,
   type CropVarietyImportPreview,
   type CropVarietyImportReportFile,
   type CropVarietyImportRowResult,
@@ -43,6 +44,23 @@ const ACTION_LABEL: Record<CropVarietyImportAction, string> = {
   deactivate_variety: 'ปิดใช้งานพันธุ์',
   none: 'ไม่มีการเปลี่ยนแปลง',
 };
+
+// Round 8-26B — rendered alongside ACTION_LABEL, not merged into it: the two
+// actions are independent, so a row can legitimately show both.
+const P_CODE_ACTION_LABEL: Record<CropVarietyImportPCodeAction, string> = {
+  create_p_code: 'สร้าง P.Code',
+  activate_p_code: 'เปิดใช้งาน P.Code',
+  none: '',
+};
+
+/** One row's plan as one readable phrase. A row that changes both its
+ * crop/variety AND its P.Code shows both, joined — never only the first. */
+function actionLabel(row: CropVarietyImportRowResult): string {
+  const parts: string[] = [];
+  if (row.action !== 'none') parts.push(ACTION_LABEL[row.action] ?? row.action);
+  if (row.pCodeAction !== 'none') parts.push(P_CODE_ACTION_LABEL[row.pCodeAction] ?? row.pCodeAction);
+  return parts.length > 0 ? parts.join(' + ') : ACTION_LABEL.none;
+}
 
 function rowBadge(row: CropVarietyImportRowResult): { label: string; className: string } {
   if (row.rowStatus === 'ERROR') return { label: 'ผิดพลาด', className: 'bg-destructive/15 text-destructive' };
@@ -232,6 +250,7 @@ export function MasterDataCropVarietyImportModal({
             <ul className="mt-1.5 list-disc space-y-1 pl-4">
               <li><span className="font-mono">crop</span> — ชนิดพืช จำเป็นทุกแถว พิมพ์ชนิดใหม่ได้</li>
               <li><span className="font-mono">variety</span> — พันธุ์/สายพันธุ์ ไม่บังคับ (เว้นว่าง = แถวนี้มีแค่ชนิดพืช)</li>
+              <li><span className="font-mono">pCode</span> — รหัสสินค้าของพันธุ์ ไม่บังคับ (เว้นว่าง = คงค่าเดิม ไม่ลบ) · 1 พันธุ์มีได้ 1 P.Code</li>
               <li><span className="font-mono">varietyStatus</span> — &apos;เปิดใช้งาน&apos;/&apos;ปิดใช้งาน&apos; เว้นว่าง = เปิดใช้งาน</li>
             </ul>
             <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-800">
@@ -292,7 +311,8 @@ export function MasterDataCropVarietyImportModal({
                   <p className="font-medium">นำเข้าสำเร็จ</p>
                   <p className="mt-1 text-xs">
                     สร้างชนิดพืช {summary.cropsToCreate} · สร้างพันธุ์ {summary.varietiesToCreate} ·
-                    เปิดใช้งานพันธุ์ {summary.varietiesToActivate} · ปิดใช้งานพันธุ์ {summary.varietiesToDeactivate}
+                    เปิดใช้งานพันธุ์ {summary.varietiesToActivate} · ปิดใช้งานพันธุ์ {summary.varietiesToDeactivate} ·
+                    สร้าง P.Code {summary.pCodesToCreate} · เปิดใช้งาน P.Code {summary.pCodesToActivate}
                   </p>
                 </div>
               </div>
@@ -321,6 +341,8 @@ export function MasterDataCropVarietyImportModal({
                 <span className="text-muted-foreground">สร้างพันธุ์ {summary.varietiesToCreate}</span>
                 <span className="text-muted-foreground">เปิดใช้งานพันธุ์ {summary.varietiesToActivate}</span>
                 <span className="text-muted-foreground">ปิดใช้งานพันธุ์ {summary.varietiesToDeactivate}</span>
+                <span className="text-muted-foreground">สร้าง P.Code {summary.pCodesToCreate}</span>
+                <span className="text-muted-foreground">เปิดใช้งาน P.Code {summary.pCodesToActivate}</span>
               </div>
               <div className="flex flex-wrap gap-3 text-sm">
                 <span className="font-medium text-green-700">พร้อมนำเข้า {summary.readyRows}</span>
@@ -359,7 +381,7 @@ export function MasterDataCropVarietyImportModal({
                 <table className="min-w-full divide-y divide-border text-sm">
                   <thead className="sticky top-0 bg-muted/60">
                     <tr>
-                      {['แถว Excel', 'ชนิดพืช', 'พันธุ์/สายพันธุ์', 'สถานะพันธุ์', 'การดำเนินการ', 'ผลตรวจ', 'รายละเอียดข้อผิดพลาด'].map((h) => (
+                      {['แถว Excel', 'ชนิดพืช', 'พันธุ์/สายพันธุ์', 'P.Code', 'สถานะพันธุ์', 'การดำเนินการ', 'ผลตรวจ', 'รายละเอียดข้อผิดพลาด'].map((h) => (
                         <th key={h} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-muted-foreground">{h}</th>
                       ))}
                     </tr>
@@ -372,8 +394,9 @@ export function MasterDataCropVarietyImportModal({
                           <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{r.rowNumber}</td>
                           <td className="whitespace-nowrap px-3 py-2">{r.crop ?? '—'}</td>
                           <td className="whitespace-nowrap px-3 py-2">{r.variety ?? '—'}</td>
+                          <td className="whitespace-nowrap px-3 py-2">{r.pCode ?? '—'}</td>
                           <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{r.varietyStatus ?? '—'}</td>
-                          <td className="whitespace-nowrap px-3 py-2">{ACTION_LABEL[r.action] ?? r.action}</td>
+                          <td className="whitespace-nowrap px-3 py-2">{actionLabel(r)}</td>
                           <td className="whitespace-nowrap px-3 py-2">
                             <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>
                               {badge.label}

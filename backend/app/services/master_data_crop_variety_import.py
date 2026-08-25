@@ -1,7 +1,8 @@
 """Master Data crop/variety Excel import (round 8-15A) — parse, validate,
 commit. Backend foundation only — no frontend UI this round.
 
-Single worksheet "พืชและพันธุ์", 3 columns: crop / variety / varietyStatus.
+Single worksheet "พืชและพันธุ์", 4 columns: crop / variety / pCode /
+varietyStatus (round 8-26B added pCode; it was 3 columns through 8-15A).
 Row 1 = header, row 2 = a Thai description row the parser skips (same
 TEMPLATE_DESCRIPTION_MARKER convention as services/plot_import.py), row 3+ =
 data. No spreadsheet-parser dependency — rows come from services/
@@ -28,6 +29,23 @@ Business rules (see the round 8-15A brief for the full spec):
           unchanged status is SKIPPED (no write); a changed status is READY
           to activate/deactivate — never renamed, never hard-deleted.
 
+  pCode — optional (round 8-26B). A P.Code belongs to the row's VARIETY
+          (crop → variety → p_code; see services/p_code_master.py for why
+          variety and not crop), so a pCode with a blank variety is an
+          error, exactly like varietyStatus. Blank pCode means LEAVE THE
+          VARIETY'S EXISTING P.CODE ALONE — never "remove it": the same
+          blank-preserves rule plot_import.py already uses for its own
+          poNumber/pCode cells, and removal has to stay an App-only action
+          because a P.Code is embedded verbatim in every Lot No generated
+          from it. A P.Code already bound to a DIFFERENT variety is a hard
+          error, never re-parented (same rule as variety-under-a-new-crop).
+          A variety may own only ONE ACTIVE P.Code: naming a NEW one while
+          the variety still has an active one is an error telling the user
+          to deactivate the old row first. Re-typing a DEACTIVATED P.Code
+          whose variety's slot is now free ACTIVATES it (rather than
+          silently doing nothing, which is what a plain skip would look
+          like to someone who just typed a value and pressed import).
+
   Duplicates (all caught within the SAME uploaded file, every affected row
   reported, never silently merged):
     - the same (crop, variety) pair appearing on more than one row
@@ -36,8 +54,14 @@ Business rules (see the round 8-15A brief for the full spec):
       (this mirrors the DB's own unique (type, value) index on master_data —
       a variety value can only ever belong to ONE crop, in the file just as
       in the table)
+    - the same pCode value on more than one row (same DB index, same
+      reasoning — a P.Code value belongs to exactly one variety)
   A crop value appearing on MANY rows because it owns many varieties is
   normal, not a duplicate.
+
+Execution order on commit is crops → varieties → p_codes, so a single row
+that introduces all three at once resolves its own parents. That order is a
+BUSINESS requirement, not a DB one: `parent` carries no foreign key.
 
 Preview never flushes/commits/updates/deletes anything — pure read + compute.
 Commit re-parses and re-validates the SAME uploaded file server-side (never
@@ -71,10 +95,19 @@ from app.schemas.master_data_import import (
     CropVarietyImportSummary,
 )
 from app.services.excel_reader import ExcelParseError, read_first_sheet
+from app.services.p_code_master import P_CODE_TYPE
 
 # --- Sheet/column contract -------------------------------------------------
 SHEET_NAME = "พืชและพันธุ์"
-IMPORT_COLUMNS: list[str] = ["crop", "variety", "varietyStatus"]
+# Round 8-26B — pCode sits between variety and varietyStatus (the layout the
+# user asked for). The reader maps by header NAME, never by position
+# (services/excel_reader.py), so position is presentation only — but the
+# header SET is compared exactly in _load_data_rows, which is why an older
+# 3-column file is rejected with "download the new template" rather than
+# silently importing with a missing column. `pCode` (not "P.code") keeps the
+# same camelCase spelling the Plot Import file already uses for its own
+# P.Code column (services/plot_import.py's IMPORT_COLUMNS).
+IMPORT_COLUMNS: list[str] = ["crop", "variety", "pCode", "varietyStatus"]
 MAX_IMPORT_ROWS = 1000  # same cap Plot Import uses (services/plot_import.py)
 
 # master_data.value is varchar(255) (app/db/models/master_data.py) — the
@@ -82,6 +115,7 @@ MAX_IMPORT_ROWS = 1000  # same cap Plot Import uses (services/plot_import.py)
 # before the DB ever sees an over-length value.
 MAX_CROP_LEN = 255
 MAX_VARIETY_LEN = 255
+MAX_P_CODE_LEN = 255
 
 STATUS_ACTIVE = "เปิดใช้งาน"
 STATUS_INACTIVE = "ปิดใช้งาน"
@@ -101,6 +135,11 @@ TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
         "พิมพ์ชนิดใหม่ได้ (ไม่ต้องเลือกจากรายการ)"
     ),
     "variety": "พันธุ์/สายพันธุ์ภายใต้ชนิดพืชในแถวเดียวกัน ไม่บังคับ — เว้นว่างหมายถึงแถวนี้มีแค่ชนิดพืช",
+    "pCode": (
+        "รหัสสินค้า (P.Code) ของพันธุ์ในแถวเดียวกัน ไม่บังคับ — เว้นว่าง = คงค่าเดิม (ไม่ลบ); "
+        "1 พันธุ์มีได้เพียง 1 P.Code ที่เปิดใช้งาน; "
+        "ระบบไม่อนุญาตให้ย้าย P.Code ไปพันธุ์อื่น หรือลบผ่านไฟล์นี้"
+    ),
     "varietyStatus": (
         f"สถานะพันธุ์: '{STATUS_ACTIVE}' หรือ '{STATUS_INACTIVE}' "
         "เว้นว่าง = เปิดใช้งาน (ต้องเว้นว่างเมื่อไม่มี variety); "
@@ -116,12 +155,27 @@ ACTION_ACTIVATE_VARIETY = "activate_variety"
 ACTION_DEACTIVATE_VARIETY = "deactivate_variety"
 ACTION_NONE = "none"  # SKIPPED — a valid row that changes nothing
 
+# Round 8-26B — the P.Code plan is a SEPARATE per-row action, not more values
+# in the vocabulary above: one row can legitimately create a crop, a variety
+# AND a P.Code at once, and folding that into a single `action` string would
+# need a combinatorial "create_crop_and_variety_and_p_code" set that grows
+# with every future column. A row is SKIPPED only when BOTH actions are none.
+ACTION_CREATE_P_CODE = "create_p_code"
+ACTION_ACTIVATE_P_CODE = "activate_p_code"
+
 ROW_STATUS_READY = "READY"
 ROW_STATUS_SKIPPED = "SKIPPED"
 ROW_STATUS_ERROR = "ERROR"
 
 _MSG_STATE_CHANGED = "ข้อมูล Master Data มีการเปลี่ยนแปลง กรุณาตรวจสอบไฟล์อีกครั้งก่อนนำเข้า"
 _MSG_CROP_INACTIVE = "ชนิดพืชนี้ปิดใช้งานอยู่ กรุณาเปิดใช้งานผ่านหน้า Master Data ก่อน"
+_MSG_P_CODE_NEEDS_VARIETY = "pCode มีค่าแต่ variety ว่าง — ต้องระบุพันธุ์ก่อนจึงจะกำหนด P.Code ได้"
+_MSG_P_CODE_DUPLICATE_IN_FILE = "pCode นี้ซ้ำกันในไฟล์ (1 P.Code ใช้ได้กับพันธุ์เดียว)"
+_MSG_P_CODE_OTHER_VARIETY = "P.Code นี้ผูกกับพันธุ์อื่นอยู่แล้ว ('{parent}') ไม่สามารถย้ายพันธุ์ได้"
+_MSG_P_CODE_SLOT_TAKEN = (
+    "พันธุ์นี้มี P.Code '{existing}' ที่เปิดใช้งานอยู่ — 1 พันธุ์มีได้เพียง 1 P.Code "
+    "กรุณาปิดใช้งานรายการเดิมผ่านหน้า Master Data ก่อน"
+)
 
 
 class CropVarietyImportFileError(ValueError):
@@ -175,6 +229,7 @@ def _is_template_description_row(raw: dict[str, str]) -> bool:
 class _Parsed:
     crop: str | None = None
     variety: str | None = None
+    p_code: str | None = None
     variety_status_raw: str | None = None
 
 
@@ -185,15 +240,22 @@ class _RowState:
     raw: dict[str, str] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     action: str = ACTION_NONE
+    p_code_action: str = ACTION_NONE
     target_active: bool | None = None
     crop_existing: MasterData | None = None
     variety_existing: MasterData | None = None
+    p_code_existing: MasterData | None = None
+    # The variety's currently-ACTIVE P.Code as of this parse, whatever it is
+    # and whether or not the file mentions it. Recorded on every row so that
+    # another admin adding/replacing a P.Code between Preview and Commit
+    # surfaces as a clean state-conflict 409 rather than only as a row error.
+    variety_active_p_code: MasterData | None = None
 
     @property
     def row_status(self) -> str:
         if self.errors:
             return ROW_STATUS_ERROR
-        if self.action == ACTION_NONE:
+        if self.action == ACTION_NONE and self.p_code_action == ACTION_NONE:
             return ROW_STATUS_SKIPPED
         return ROW_STATUS_READY
 
@@ -222,20 +284,35 @@ async def _build_row_states(db: AsyncSession, data_rows: list[tuple[int, dict[st
         p = _Parsed(
             crop=_str(raw, "crop"),
             variety=_str(raw, "variety"),
+            p_code=_str(raw, "pCode"),
             variety_status_raw=_str(raw, "varietyStatus"),
         )
         parsed_rows.append((row_no, raw, p))
 
     crop_values = {p.crop for _, _, p in parsed_rows if p.crop}
     variety_values = {p.variety for _, _, p in parsed_rows if p.variety}
+    p_code_values = {p.p_code for _, _, p in parsed_rows if p.p_code}
     existing_crops = {m.value: m for m in await repo.list_by_type_values(db, "crop", crop_values)}
     existing_varieties = {m.value: m for m in await repo.list_by_type_values(db, "variety", variety_values)}
+    existing_p_codes = {
+        m.value: m for m in await repo.list_by_type_values(db, P_CODE_TYPE, p_code_values)
+    }
+    # Keyed by PARENT, not by value: "does this variety already own an active
+    # P.Code" is a question about the owner, and the answer may be a P.Code
+    # the file never mentions. One extra query, not one per row.
+    active_p_code_by_variety: dict[str, MasterData] = {}
+    for m in await repo.list_by_type_parents(db, P_CODE_TYPE, variety_values):
+        if m.active and m.parent:
+            active_p_code_by_variety.setdefault(m.parent, m)
 
     # --- duplicate detection (within this file only) -----------------
     pair_counts: dict[tuple[str, str], int] = {}
     crop_only_counts: dict[str, int] = {}
     variety_crop_map: dict[str, set[str]] = {}
+    p_code_counts: dict[str, int] = {}
     for _, _, p in parsed_rows:
+        if p.p_code:
+            p_code_counts[p.p_code] = p_code_counts.get(p.p_code, 0) + 1
         if not p.crop:
             continue
         if p.variety:
@@ -260,6 +337,14 @@ async def _build_row_states(db: AsyncSession, data_rows: list[tuple[int, dict[st
 
         if not p.variety and p.variety_status_raw is not None:
             errors.append("variety ว่างแต่ varietyStatus มีค่า — ต้องเว้นว่าง varietyStatus เมื่อไม่มี variety")
+
+        if p.p_code:
+            if len(p.p_code) > MAX_P_CODE_LEN:
+                errors.append(f"pCode ต้องไม่เกิน {MAX_P_CODE_LEN} ตัวอักษร")
+            if not p.variety:
+                errors.append(_MSG_P_CODE_NEEDS_VARIETY)
+            if p_code_counts.get(p.p_code, 0) > 1:
+                errors.append(_MSG_P_CODE_DUPLICATE_IN_FILE)
 
         target_active: bool | None = None
         if p.variety:
@@ -296,6 +381,32 @@ async def _build_row_states(db: AsyncSession, data_rows: list[tuple[int, dict[st
         if p.variety and variety_existing is not None and variety_existing.parent != p.crop:
             errors.append(f"พันธุ์นี้ผูกกับชนิดพืชอื่นอยู่แล้ว ('{variety_existing.parent}') ไม่สามารถย้ายพืชได้")
 
+        # --- P.Code (round 8-26B) ---------------------------------------
+        p_code_existing = existing_p_codes.get(p.p_code) if p.p_code else None
+        state.p_code_existing = p_code_existing
+        slot_holder = active_p_code_by_variety.get(p.variety) if p.variety else None
+        state.variety_active_p_code = slot_holder
+        if p.p_code and p.variety:
+            if p_code_existing is not None and p_code_existing.parent != p.variety:
+                errors.append(_MSG_P_CODE_OTHER_VARIETY.format(parent=p_code_existing.parent))
+            elif p_code_existing is not None and p_code_existing.active:
+                # Already exactly what the file asks for — nothing to do.
+                state.p_code_action = ACTION_NONE
+            elif slot_holder is not None:
+                # Either a brand-new P.Code or a deactivated one being revived,
+                # but the variety's single active slot is occupied by another.
+                errors.append(_MSG_P_CODE_SLOT_TAKEN.format(existing=slot_holder.value))
+            elif p_code_existing is not None:
+                state.p_code_action = ACTION_ACTIVATE_P_CODE
+            else:
+                state.p_code_action = ACTION_CREATE_P_CODE
+
+        if errors:
+            # A row that failed anywhere executes nothing at all — clear a
+            # P.Code plan resolved above so it can never leak into the commit
+            # or make an ERROR row look READY in the summary.
+            state.p_code_action = ACTION_NONE
+
         if not errors:
             if p.variety:
                 variety_is_new = variety_existing is None
@@ -324,9 +435,11 @@ def _row_result(state: _RowState) -> CropVarietyImportRowResult:
         row_number=state.row_number,
         crop=state.parsed.crop,
         variety=state.parsed.variety,
+        p_code=state.parsed.p_code,
         variety_status=state.parsed.variety_status_raw,
         row_status=state.row_status,
         action=state.action,
+        p_code_action=state.p_code_action,
         error_message="; ".join(state.errors),
     )
 
@@ -344,6 +457,10 @@ def _summarize(states: list[_RowState]) -> CropVarietyImportSummary:
     ]
     activate = [s for s in ready if s.action == ACTION_ACTIVATE_VARIETY]
     deactivate = [s for s in ready if s.action == ACTION_DEACTIVATE_VARIETY]
+    # Counted off p_code_action, which is independent of `action` — a row can
+    # be READY purely because of its P.Code (its crop/variety unchanged).
+    p_codes_to_create = [s for s in ready if s.p_code_action == ACTION_CREATE_P_CODE]
+    p_codes_to_activate = [s for s in ready if s.p_code_action == ACTION_ACTIVATE_P_CODE]
     return CropVarietyImportSummary(
         total_rows=len(states),
         ready_rows=len(ready),
@@ -353,6 +470,8 @@ def _summarize(states: list[_RowState]) -> CropVarietyImportSummary:
         varieties_to_create=len(varieties_to_create),
         varieties_to_activate=len(activate),
         varieties_to_deactivate=len(deactivate),
+        p_codes_to_create=len(p_codes_to_create),
+        p_codes_to_activate=len(p_codes_to_activate),
     )
 
 
@@ -373,6 +492,8 @@ def _to_preview_state_row(state: _RowState) -> CropVarietyImportPreviewStateRow:
     column constraint."""
     ce = state.crop_existing
     ve = state.variety_existing
+    pe = state.p_code_existing
+    slot = state.variety_active_p_code
     return CropVarietyImportPreviewStateRow(
         row_number=state.row_number,
         crop=(state.parsed.crop or "")[:MAX_CROP_LEN],
@@ -384,6 +505,16 @@ def _to_preview_state_row(state: _RowState) -> CropVarietyImportPreviewStateRow:
         variety_existed=ve is not None,
         variety_was_active=ve.active if ve is not None else None,
         variety_parent_at_preview=ve.parent if ve is not None else None,
+        # Round 8-26B. p_code gets the same truncate-don't-raise treatment as
+        # crop/variety above, for the same reason: an over-length cell is
+        # ALREADY an unconditional row ERROR, and both Preview and Commit
+        # truncate identically, so the two always compare equal.
+        p_code=state.parsed.p_code[:MAX_P_CODE_LEN] if state.parsed.p_code else None,
+        p_code_action=state.p_code_action,
+        p_code_existed=pe is not None,
+        p_code_was_active=pe.active if pe is not None else None,
+        p_code_parent_at_preview=pe.parent if pe is not None else None,
+        variety_active_p_code_at_preview=slot.value if slot is not None else None,
     )
 
 
@@ -456,8 +587,9 @@ async def _commit_execute(
     if preview.summary.error_rows:
         raise CropVarietyImportHasErrors(preview)
 
-    # --- Execute: crops first, then varieties (business-required order;
-    # not a DB necessity since `parent` carries no FK — see module docstring).
+    # --- Execute: crops, then varieties, then p_codes (business-required
+    # order; not a DB necessity since `parent` carries no FK — see module
+    # docstring). One row introducing all three resolves its own parents.
     new_crop_values = sorted({
         s.parsed.crop for s in states
         if s.action in (ACTION_CREATE_CROP, ACTION_CREATE_CROP_AND_VARIETY) and s.parsed.crop
@@ -489,11 +621,31 @@ async def _commit_execute(
             await repo.update(db, state.variety_existing, MasterDataUpdate(active=False))
             deactivated += 1
 
+    # P.Codes last — a row that also created its variety above now has a real
+    # parent to point at. Create/activate only: a P.Code is never renamed,
+    # re-parented or deactivated through this file (see module docstring).
+    created_p_codes = 0
+    activated_p_codes = 0
+    for state in states:
+        if state.p_code_action == ACTION_CREATE_P_CODE:
+            await repo.create(
+                db,
+                MasterDataCreate(
+                    type=P_CODE_TYPE, value=state.parsed.p_code or "", parent=state.parsed.variety,
+                ),
+            )
+            created_p_codes += 1
+        elif state.p_code_action == ACTION_ACTIVATE_P_CODE and state.p_code_existing is not None:
+            await repo.update(db, state.p_code_existing, MasterDataUpdate(active=True))
+            activated_p_codes += 1
+
     result = CropVarietyImportCommitResult(
         created_crops=created_crops,
         created_varieties=created_varieties,
         activated_varieties=activated,
         deactivated_varieties=deactivated,
+        created_p_codes=created_p_codes,
+        activated_p_codes=activated_p_codes,
         skipped_rows=preview.summary.skipped_rows,
         total_rows=len(states),
     )
@@ -563,7 +715,12 @@ async def commit_row_views(
 # --- Template builder --------------------------------------------------
 
 
-def _template_rows(crops: list[MasterData], varieties_by_crop: dict[str, list[MasterData]]) -> list[list]:
+def _template_rows(
+    crops: list[MasterData],
+    varieties_by_crop: dict[str, list[MasterData]],
+    active_p_code_by_variety: dict[str, str] | None = None,
+) -> list[list]:
+    active_p_code_by_variety = active_p_code_by_variety or {}
     rows: list[list] = [
         list(IMPORT_COLUMNS),
         [TEMPLATE_COLUMN_DESCRIPTIONS[c] for c in IMPORT_COLUMNS],
@@ -571,11 +728,16 @@ def _template_rows(crops: list[MasterData], varieties_by_crop: dict[str, list[Ma
     for crop in crops:
         variety_rows = varieties_by_crop.get(crop.value, [])
         if not variety_rows:
-            rows.append([crop.value, "", ""])
+            rows.append([crop.value, "", "", ""])
             continue
         for v in variety_rows:
             status = STATUS_ACTIVE if v.active else STATUS_INACTIVE
-            rows.append([crop.value, v.value, status])
+            # Only the ACTIVE P.Code is pre-filled — a deactivated one must
+            # not come back just because the user re-uploaded the template
+            # untouched. Blank means "no active P.Code", and blank also means
+            # "leave it alone" on the way back in, so a round-trip with no
+            # edits is a no-op either way.
+            rows.append([crop.value, v.value, active_p_code_by_variety.get(v.value, ""), status])
     return rows
 
 
@@ -616,7 +778,14 @@ async def build_template(db: AsyncSession) -> bytes:
         if v.parent:
             varieties_by_crop.setdefault(v.parent, []).append(v)
 
-    rows = _template_rows(crops, varieties_by_crop)
+    # Round 8-26B — active P.Codes only (a deactivated one must not be
+    # resurrected by an untouched round-trip; see _template_rows).
+    active_p_code_by_variety: dict[str, str] = {}
+    for pc in await repo.list_items(db, type=P_CODE_TYPE, active_only=True):
+        if pc.parent:
+            active_p_code_by_variety.setdefault(pc.parent, pc.value)
+
+    rows = _template_rows(crops, varieties_by_crop, active_p_code_by_variety)
     sheets: list[tuple[str, list[list]]] = [(SHEET_NAME, rows)]
     hidden_sheets: set[str] = set()
     defined_names: list[DefinedName] = []
@@ -627,8 +796,11 @@ async def build_template(db: AsyncSession) -> bytes:
             # typing anything else is blocked by Excel itself, AND still
             # re-validated server-side. Small fixed vocabulary — an inline
             # literal list is fine here; it never approaches the 255-char cap.
+            # Column D since round 8-26B (pCode took C) — a data-validation
+            # sqref IS positional, unlike the reader's name-based header
+            # mapping, so it moves whenever the column order does.
             DataValidationRule(
-                sqref="C3:C5000", formula1=f'"{STATUS_ACTIVE},{STATUS_INACTIVE}"',
+                sqref="D3:D5000", formula1=f'"{STATUS_ACTIVE},{STATUS_INACTIVE}"',
                 show_error_message=True,
             ),
         ],

@@ -28,32 +28,65 @@ def _xlsx(rows: list[dict], *, headers: list[str] | None = None) -> bytes:
     own item-2 template test) + one data row per entry starting at row 3, the
     same shape a real downloaded-edited-reuploaded file has."""
     cols = headers or cv_import.IMPORT_COLUMNS
-    data = [cols, [cv_import.TEMPLATE_DESCRIPTION_MARKER, "คำอธิบาย", "คำอธิบาย"]]
+    # One description cell per column — derived from cols, not a fixed-length
+    # literal, so the row keeps matching when a column is added (round 8-26B
+    # added pCode).
+    data = [cols, [cv_import.TEMPLATE_DESCRIPTION_MARKER, *(["คำอธิบาย"] * (len(cols) - 1))]]
     for r in rows:
         data.append([r.get(c, "") for c in cols])
     return build_xlsx([(cv_import.SHEET_NAME, data)])
 
 
-def _row(crop=None, variety=None, status=None) -> dict:
+def _row(crop=None, variety=None, status=None, p_code=None) -> dict:
     d: dict = {}
     if crop is not None:
         d["crop"] = crop
     if variety is not None:
         d["variety"] = variety
+    if p_code is not None:
+        d["pCode"] = p_code
     if status is not None:
         d["varietyStatus"] = status
     return d
 
 
-def _patch_lookup(existing_crops=None, existing_varieties=None):
-    existing_crops = existing_crops or []
-    existing_varieties = existing_varieties or []
+def _patch_lookup(existing_crops=None, existing_varieties=None, existing_p_codes=None):
+    """Patches BOTH batch lookups the importer uses: list_by_type_values
+    (keyed by value, for crop/variety/p_code) and list_by_type_parents (keyed
+    by parent — round 8-26B, "which varieties already own an active P.Code")."""
+    pools = {
+        "crop": existing_crops or [],
+        "variety": existing_varieties or [],
+        cv_import.P_CODE_TYPE: existing_p_codes or [],
+    }
 
-    async def fake(db, type, values):
-        pool = existing_crops if type == "crop" else existing_varieties
-        return [m for m in pool if m.value in values]
+    async def fake_values(db, type, values):
+        return [m for m in pools.get(type, []) if m.value in values]
 
-    return patch(f"{_REPO}.list_by_type_values", AsyncMock(side_effect=fake))
+    async def fake_parents(db, type, parents):
+        return [m for m in pools.get(type, []) if m.parent in parents]
+
+    return _both(
+        patch(f"{_REPO}.list_by_type_values", AsyncMock(side_effect=fake_values)),
+        patch(f"{_REPO}.list_by_type_parents", AsyncMock(side_effect=fake_parents)),
+    )
+
+
+class _both:
+    """Tiny two-patch context manager — keeps every existing
+    `with _patch_lookup(...)` call site unchanged now that the importer needs
+    two repository functions patched instead of one."""
+
+    def __init__(self, *managers):
+        self._managers = managers
+
+    def __enter__(self):
+        return [m.__enter__() for m in self._managers]
+
+    def __exit__(self, *exc):
+        for m in reversed(self._managers):
+            m.__exit__(*exc)
+        return False
 
 
 def _patch_writes():

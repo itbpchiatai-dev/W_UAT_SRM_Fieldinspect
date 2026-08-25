@@ -37,8 +37,8 @@ vi.mock('../../api/masterdata', async (importOriginal) => {
 
 function row(overrides: Partial<CropVarietyImportRowResult> = {}): CropVarietyImportRowResult {
   return {
-    rowNumber: 3, crop: 'พริก', variety: 'พริกขี้หนู', varietyStatus: 'เปิดใช้งาน',
-    rowStatus: 'READY', action: 'create_crop_and_variety', errorMessage: '',
+    rowNumber: 3, crop: 'พริก', variety: 'พริกขี้หนู', pCode: null, varietyStatus: 'เปิดใช้งาน',
+    rowStatus: 'READY', action: 'create_crop_and_variety', pCodeAction: 'none', errorMessage: '',
     ...overrides,
   };
 }
@@ -50,6 +50,8 @@ function statePreview(overrides: Partial<CropVarietyImportPreviewState> = {}): C
       rowNumber: 3, crop: 'พริก', variety: 'พริกขี้หนู', varietyStatus: true,
       action: 'create_crop_and_variety', cropExisted: false, cropWasActive: null,
       varietyExisted: false, varietyWasActive: null, varietyParentAtPreview: null,
+      pCode: null, pCodeAction: 'none', pCodeExisted: false, pCodeWasActive: null,
+      pCodeParentAtPreview: null, varietyActivePCodeAtPreview: null,
     }],
     ...overrides,
   };
@@ -57,7 +59,7 @@ function statePreview(overrides: Partial<CropVarietyImportPreviewState> = {}): C
 
 function preview(overrides: Partial<CropVarietyImportPreview> = {}): CropVarietyImportPreview {
   return {
-    summary: { totalRows: 1, readyRows: 1, skippedRows: 0, errorRows: 0, cropsToCreate: 1, varietiesToCreate: 1, varietiesToActivate: 0, varietiesToDeactivate: 0 },
+    summary: { totalRows: 1, readyRows: 1, skippedRows: 0, errorRows: 0, cropsToCreate: 1, varietiesToCreate: 1, varietiesToActivate: 0, varietiesToDeactivate: 0, pCodesToCreate: 0, pCodesToActivate: 0 },
     rows: [row()],
     previewState: statePreview(),
     ...overrides,
@@ -135,7 +137,7 @@ describe('MasterDataCropVarietyImportModal — upload and preview', () => {
 
   it('shows the summary counts from the preview response', async () => {
     previewMock.mockResolvedValue(preview({
-      summary: { totalRows: 5, readyRows: 2, skippedRows: 2, errorRows: 1, cropsToCreate: 1, varietiesToCreate: 3, varietiesToActivate: 1, varietiesToDeactivate: 1 },
+      summary: { totalRows: 5, readyRows: 2, skippedRows: 2, errorRows: 1, cropsToCreate: 1, varietiesToCreate: 3, varietiesToActivate: 1, varietiesToDeactivate: 1, pCodesToCreate: 0, pCodesToActivate: 0 },
     }));
     renderModal();
 
@@ -156,7 +158,7 @@ describe('MasterDataCropVarietyImportModal — upload and preview', () => {
 
   it('renders READY/SKIPPED/ERROR row status badges and action labels', async () => {
     previewMock.mockResolvedValue(preview({
-      summary: { totalRows: 3, readyRows: 1, skippedRows: 1, errorRows: 1, cropsToCreate: 0, varietiesToCreate: 1, varietiesToActivate: 0, varietiesToDeactivate: 0 },
+      summary: { totalRows: 3, readyRows: 1, skippedRows: 1, errorRows: 1, cropsToCreate: 0, varietiesToCreate: 1, varietiesToActivate: 0, varietiesToDeactivate: 0, pCodesToCreate: 0, pCodesToActivate: 0 },
       rows: [
         row({ rowNumber: 3, rowStatus: 'READY', action: 'create_variety' }),
         row({ rowNumber: 4, rowStatus: 'SKIPPED', action: 'none', crop: 'เมล่อน', variety: null, varietyStatus: null }),
@@ -193,7 +195,7 @@ describe('MasterDataCropVarietyImportModal — upload and preview', () => {
 describe('MasterDataCropVarietyImportModal — Commit button gating', () => {
   it('ERROR row disables Commit', async () => {
     previewMock.mockResolvedValue(preview({
-      summary: { totalRows: 1, readyRows: 0, skippedRows: 0, errorRows: 1, cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0 },
+      summary: { totalRows: 1, readyRows: 0, skippedRows: 0, errorRows: 1, cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0, pCodesToCreate: 0, pCodesToActivate: 0 },
       rows: [row({ rowStatus: 'ERROR', errorMessage: 'ต้องระบุ crop' })],
     }));
     renderModal();
@@ -206,7 +208,7 @@ describe('MasterDataCropVarietyImportModal — Commit button gating', () => {
 
   it('readyRows=0 (all skipped, no errors) disables Commit and shows the no-changes message', async () => {
     previewMock.mockResolvedValue(preview({
-      summary: { totalRows: 1, readyRows: 0, skippedRows: 1, errorRows: 0, cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0 },
+      summary: { totalRows: 1, readyRows: 0, skippedRows: 1, errorRows: 0, cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0, pCodesToCreate: 0, pCodesToActivate: 0 },
       rows: [row({ rowStatus: 'SKIPPED', action: 'none' })],
     }));
     renderModal();
@@ -364,7 +366,7 @@ describe('MasterDataCropVarietyImportModal — 409/422 commit error handling', (
   it('a 422 with an embedded preview refreshes the on-screen table with the fresh errors', async () => {
     previewMock.mockResolvedValue(preview());
     const freshPreview = preview({
-      summary: { totalRows: 1, readyRows: 0, skippedRows: 0, errorRows: 1, cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0 },
+      summary: { totalRows: 1, readyRows: 0, skippedRows: 0, errorRows: 1, cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0, pCodesToCreate: 0, pCodesToActivate: 0 },
       rows: [row({ rowStatus: 'ERROR', errorMessage: 'ชนิดพืชนี้ปิดใช้งานอยู่', crop: 'ฟักทอง' })],
       previewState: null,
     });
@@ -455,5 +457,88 @@ describe('MasterDataCropVarietyImportModal — mobile-friendly table', () => {
 
     const table = await screen.findByRole('table');
     expect(table.parentElement?.className).toContain('overflow-x-auto');
+  });
+});
+
+describe('MasterDataCropVarietyImportModal — round 8-26B: the pCode column', () => {
+  it('renders a P.Code column with the row value', async () => {
+    previewMock.mockResolvedValue(preview({
+      rows: [row({ pCode: 'WM-111', pCodeAction: 'create_p_code' })],
+    }));
+    renderModal();
+
+    await doPreview();
+
+    expect(await screen.findByRole('columnheader', { name: 'P.Code' })).toBeTruthy();
+    expect(screen.getByRole('cell', { name: 'WM-111' })).toBeTruthy();
+  });
+
+  it('shows an em dash for a row with no P.Code', async () => {
+    previewMock.mockResolvedValue(preview({ rows: [row({ pCode: null })] }));
+    renderModal();
+
+    await doPreview();
+
+    await screen.findByText('พริกขี้หนู');
+    expect(screen.getAllByRole('cell').some((c) => c.textContent === '—')).toBe(true);
+  });
+
+  it('shows BOTH actions when a row changes its variety AND its P.Code', async () => {
+    // The two actions are independent — showing only the crop/variety one
+    // would hide the fact that a P.Code is about to be created.
+    previewMock.mockResolvedValue(preview({
+      rows: [row({ action: 'create_variety', pCodeAction: 'create_p_code', pCode: 'WM-111' })],
+    }));
+    renderModal();
+
+    await doPreview();
+
+    expect(await screen.findByText('สร้างพันธุ์ + สร้าง P.Code')).toBeTruthy();
+  });
+
+  it('shows the P.Code action alone when the crop/variety are unchanged', async () => {
+    previewMock.mockResolvedValue(preview({
+      rows: [row({ action: 'none', pCodeAction: 'activate_p_code', pCode: 'WM-111' })],
+    }));
+    renderModal();
+
+    await doPreview();
+
+    expect(await screen.findByText('เปิดใช้งาน P.Code')).toBeTruthy();
+  });
+
+  it('still shows "ไม่มีการเปลี่ยนแปลง" when neither action does anything', async () => {
+    previewMock.mockResolvedValue(preview({
+      rows: [row({ rowStatus: 'SKIPPED', action: 'none', pCodeAction: 'none' })],
+    }));
+    renderModal();
+
+    await doPreview();
+
+    expect(await screen.findByText('ไม่มีการเปลี่ยนแปลง')).toBeTruthy();
+  });
+
+  it('shows the P.Code counts in the preview summary', async () => {
+    previewMock.mockResolvedValue(preview({
+      summary: {
+        totalRows: 2, readyRows: 2, skippedRows: 0, errorRows: 0,
+        cropsToCreate: 0, varietiesToCreate: 0, varietiesToActivate: 0, varietiesToDeactivate: 0,
+        pCodesToCreate: 2, pCodesToActivate: 1,
+      },
+    }));
+    renderModal();
+
+    await doPreview();
+
+    const exactText = (text: string) => (_: string, el: Element | null) => el?.textContent === text;
+    expect(await screen.findByText(exactText('สร้าง P.Code 2'))).toBeTruthy();
+    expect(screen.getByText(exactText('เปิดใช้งาน P.Code 1'))).toBeTruthy();
+  });
+
+  it('documents the pCode column in the format help text', async () => {
+    renderModal();
+
+    expect(screen.getByText('pCode')).toBeTruthy();
+    expect(screen.getByText(/เว้นว่าง = คงค่าเดิม/)).toBeTruthy();
   });
 });

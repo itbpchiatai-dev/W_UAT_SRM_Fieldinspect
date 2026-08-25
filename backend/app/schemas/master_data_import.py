@@ -1,7 +1,8 @@
 """Master Data crop/variety Excel import schemas (round 8-15A; previewState
 input-boundary hardening round 8-15A.1).
 
-Single sheet ("พืชและพันธุ์"), 3 columns (crop / variety / varietyStatus).
+Single sheet ("พืชและพันธุ์"), 4 columns (crop / variety / pCode /
+varietyStatus — pCode added in round 8-26B).
 Preview is read-only; commit is all-or-nothing. See
 services/master_data_crop_variety_import.py's module docstring for the full
 business-rule contract.
@@ -40,6 +41,12 @@ CropVarietyImportAction = Literal[
     "activate_variety", "deactivate_variety", "none",
 ]
 
+# Round 8-26B — the P.Code plan is a SEPARATE per-row action from the
+# crop/variety one above (a row can create a crop, a variety AND a P.Code at
+# once), so it gets its own closed vocabulary rather than expanding that one
+# combinatorially. "none" is shared by both — a row where nothing changes.
+CropVarietyImportPCodeAction = Literal["create_p_code", "activate_p_code", "none"]
+
 
 class CropVarietyImportRowResult(CamelBaseModel):
     """One row's parsed values + validation outcome, for the preview table.
@@ -51,9 +58,11 @@ class CropVarietyImportRowResult(CamelBaseModel):
     row_number: int
     crop: str | None = None
     variety: str | None = None
+    p_code: str | None = None
     variety_status: str | None = None
     row_status: str  # "READY" | "SKIPPED" | "ERROR"
     action: str
+    p_code_action: str = "none"
     error_message: str = ""
 
 
@@ -66,6 +75,8 @@ class CropVarietyImportSummary(CamelBaseModel):
     varieties_to_create: int
     varieties_to_activate: int
     varieties_to_deactivate: int
+    p_codes_to_create: int = 0
+    p_codes_to_activate: int = 0
 
 
 class CropVarietyImportPreviewStateRow(CamelBaseModel):
@@ -101,6 +112,17 @@ class CropVarietyImportPreviewStateRow(CamelBaseModel):
     variety_existed: bool = False
     variety_was_active: bool | None = None
     variety_parent_at_preview: str | None = Field(None, max_length=255)
+    # Round 8-26B — the P.Code half of the same optimistic-concurrency
+    # binding. `variety_active_p_code_at_preview` is the variety's active
+    # P.Code as of Preview WHATEVER it is, recorded even when the file never
+    # mentions it: that is what turns "another admin gave this variety a
+    # P.Code in the meantime" into a clean 409 instead of only a row error.
+    p_code: str | None = Field(None, max_length=255)
+    p_code_action: CropVarietyImportPCodeAction = "none"
+    p_code_existed: bool = False
+    p_code_was_active: bool | None = None
+    p_code_parent_at_preview: str | None = Field(None, max_length=255)
+    variety_active_p_code_at_preview: str | None = Field(None, max_length=255)
 
 
 class CropVarietyImportPreviewState(CamelBaseModel):
@@ -139,5 +161,7 @@ class CropVarietyImportCommitResult(CamelBaseModel):
     created_varieties: int
     activated_varieties: int
     deactivated_varieties: int
+    created_p_codes: int = 0
+    activated_p_codes: int = 0
     skipped_rows: int
     total_rows: int

@@ -59,6 +59,20 @@ async def list_by_type_values(db: AsyncSession, type: str, values: set[str]) -> 
     return list(result.scalars().all())
 
 
+async def list_by_type_parents(db: AsyncSession, type: str, parents: set[str]) -> list[MasterData]:
+    """Batch-fetch rows of `type` whose PARENT is in `parents` — the mirror of
+    list_by_type_values, keyed by owner instead of by value (round 8-26B's
+    crop/variety Excel import: it has to know which varieties in the file
+    ALREADY own an active P.Code, which is a question about the parent, not
+    about any value the file mentions). ONE query regardless of row count;
+    empty `parents` short-circuits without a query."""
+    if not parents:
+        return []
+    stmt = select(MasterData).where(MasterData.type == type, MasterData.parent.in_(parents))
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def create(db: AsyncSession, payload: MasterDataCreate) -> MasterData:
     item = MasterData(
         type=payload.type.strip(),

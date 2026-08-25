@@ -216,6 +216,8 @@ async def commit_crop_variety_import(
             "createdVarieties": result.created_varieties,
             "activatedVarieties": result.activated_varieties,
             "deactivatedVarieties": result.deactivated_varieties,
+            "createdPCodes": result.created_p_codes,
+            "activatedPCodes": result.activated_p_codes,
             "skippedRows": result.skipped_rows,
             "totalRows": result.total_rows,
         },
@@ -261,6 +263,8 @@ async def preview_crop_variety_import_report(
         crops_to_create=summary.crops_to_create, varieties_to_create=summary.varieties_to_create,
         varieties_to_activate=summary.varieties_to_activate,
         varieties_to_deactivate=summary.varieties_to_deactivate,
+        p_codes_to_create=summary.p_codes_to_create,
+        p_codes_to_activate=summary.p_codes_to_activate,
     )
     return _cv_xlsx_response(workbook, result_filename(PHASE_PREVIEW, processed_at))
 
@@ -322,6 +326,8 @@ async def commit_crop_variety_import_report(
             "createdVarieties": result.created_varieties,
             "activatedVarieties": result.activated_varieties,
             "deactivatedVarieties": result.deactivated_varieties,
+            "createdPCodes": result.created_p_codes,
+            "activatedPCodes": result.activated_p_codes,
             "skippedRows": result.skipped_rows,
             "totalRows": result.total_rows,
             "via": "commit-report",
@@ -334,6 +340,7 @@ async def commit_crop_variety_import_report(
         original_filename=file.filename, processed_at=processed_at,
         crops_to_create=result.created_crops, varieties_to_create=result.created_varieties,
         varieties_to_activate=result.activated_varieties, varieties_to_deactivate=result.deactivated_varieties,
+        p_codes_to_create=result.created_p_codes, p_codes_to_activate=result.activated_p_codes,
     )
     return _cv_xlsx_response(workbook, result_filename(PHASE_COMMIT, processed_at))
 

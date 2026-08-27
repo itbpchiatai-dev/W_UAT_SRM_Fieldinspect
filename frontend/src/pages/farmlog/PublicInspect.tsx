@@ -471,6 +471,16 @@ export function PublicInspect() {
   const [selectedInspectorType, setSelectedInspectorType] = useState<PublicInspectorType | null>(null);
   const [inspectorTypeError, setInspectorTypeError] = useState('');
   const [plotSearch, setPlotSearch] = useState('');
+  // Round 8-27H — reported as clutter: a phone with many assigned plots mixes
+  // in ones with no OPEN cycle right now (canInspect: false — a normal wait-
+  // for-next-round state, never a deactivated plot; a deactivated plot's row
+  // disappears from accessiblePlots entirely server-side, see
+  // public_inspection_access.py's phone_access_plots docstring). Hidden by
+  // default so the common case (find a plot to actually inspect) isn't
+  // buried; the toggle below reveals them. Confirmed with the user this
+  // applies EVEN when the plot would otherwise match the search text or was
+  // just matched by a QR scan — the toggle is the one gate, not a bypass.
+  const [showUnavailablePlots, setShowUnavailablePlots] = useState(false);
   const roleGroupRef = useRef<HTMLDivElement>(null);
 
   // --- Plot selection --------------------------------------------------------
@@ -577,10 +587,23 @@ export function PublicInspect() {
   });
   const stageProtocol = findProtocolForStage(protocols, fields.growthStage || null);
 
+  // Round 8-27H — how many of this phone's plots are hidden by the toggle
+  // above, independent of the search text: the count a user sees on the
+  // (unchecked) checkbox label is "how many more exist," not "how many
+  // matched your search."
+  const unavailablePlotCount = useMemo(
+    () => accessiblePlots.filter((p) => !p.canInspect).length,
+    [accessiblePlots],
+  );
+
   const visiblePlots = useMemo(() => {
+    // The canInspect gate runs FIRST, before search and before the QR
+    // reorder below — so a hidden plot cannot resurface via either path
+    // while the toggle is off (confirmed with the user for both cases).
+    const base = showUnavailablePlots ? accessiblePlots : accessiblePlots.filter((p) => p.canInspect);
     const q = plotSearch.trim().toLowerCase();
     let list = q
-      ? accessiblePlots.filter((p) => (
+      ? base.filter((p) => (
         p.plotCode.toLowerCase().includes(q)
         || p.plotName.toLowerCase().includes(q)
         || p.supplierCode.toLowerCase().includes(q)
@@ -590,7 +613,7 @@ export function PublicInspect() {
         || (p.variety ?? '').toLowerCase().includes(q)
         || (p.lotNo ?? '').toLowerCase().includes(q)
       ))
-      : [...accessiblePlots];
+      : [...base];
     if (qrMatchedPlotId) {
       const idx = list.findIndex((p) => p.plotId === qrMatchedPlotId);
       if (idx > 0) {
@@ -599,7 +622,7 @@ export function PublicInspect() {
       }
     }
     return list;
-  }, [accessiblePlots, plotSearch, qrMatchedPlotId]);
+  }, [accessiblePlots, plotSearch, qrMatchedPlotId, showUnavailablePlots]);
 
   function freshFieldsFor(submittedByName: string): PublicInspectionFormFields {
     return { ...EMPTY_FIELDS, submittedByName };
@@ -1349,9 +1372,29 @@ export function PublicInspect() {
               />
             </label>
 
+            {/* Round 8-27H — only rendered when there's something it would
+                actually reveal; toggling it with nothing hidden would do
+                nothing, so it would just be a confusing extra control. */}
+            {unavailablePlotCount > 0 && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={showUnavailablePlots}
+                  onChange={(e) => setShowUnavailablePlots(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                แสดงแปลงที่ยังไม่มีรอบปลูกที่เปิดอยู่
+                {!showUnavailablePlots && ` (${unavailablePlotCount})`}
+              </label>
+            )}
+
             <div className="space-y-3" aria-live="polite">
               {visiblePlots.length === 0 ? (
-                <p className="py-8 text-center text-sm text-gray-400">ไม่พบแปลง</p>
+                <p className="py-8 text-center text-sm text-gray-400">
+                  {!showUnavailablePlots && unavailablePlotCount > 0
+                    ? `ไม่พบแปลงที่พร้อมตรวจ — มี ${unavailablePlotCount} แปลงที่ยังไม่มีรอบปลูกที่เปิดอยู่`
+                    : 'ไม่พบแปลง'}
+                </p>
               ) : (
                 visiblePlots.map((p) => (
                   <PlotCard

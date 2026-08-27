@@ -607,6 +607,10 @@ describe('PublicInspect — plot selection screen', () => {
     renderPublicInspect();
     await enterPhoneAndLookup();
 
+    // Round 8-27H — hidden by default now; reveal it via the toggle before
+    // asserting its (disabled) card, same as a real user would.
+    fireEvent.click(await screen.findByRole('checkbox', { name: /แสดงแปลงที่ยังไม่มีรอบปลูก/ }));
+
     expect(screen.getByText('ยังไม่มีรอบปลูกที่เปิดอยู่')).toBeTruthy();
     const card = screen.getByRole('button', { name: /PLOT001/ }) as HTMLButtonElement;
     expect(card.disabled).toBe(true);
@@ -614,6 +618,109 @@ describe('PublicInspect — plot selection screen', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'เกษตรกร' }));
     fireEvent.click(card);
     expect(selectPlotMock).not.toHaveBeenCalled();
+  });
+
+  describe('round 8-27H — plots with no open cycle are hidden by default', () => {
+    it('hides a no-active-cycle plot on first load, counted (not named) on the toggle', async () => {
+      lookupMock.mockResolvedValue(lookupResult([
+        plotItem({ canInspect: false, unavailableReason: 'no_active_cycle' }),
+      ]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      expect(screen.queryByRole('button', { name: /PLOT001/ })).toBeNull();
+      expect(await screen.findByRole('checkbox', { name: /แสดงแปลงที่ยังไม่มีรอบปลูกที่เปิดอยู่ \(1\)/ })).toBeTruthy();
+    });
+
+    it('never hides a plot that CAN be inspected', async () => {
+      lookupMock.mockResolvedValue(lookupResult([plotItem({ canInspect: true })]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      expect(await screen.findByRole('button', { name: /PLOT001/ })).toBeTruthy();
+      // Nothing hidden -> nothing for the toggle to reveal, so it's absent
+      // rather than a control that would visibly do nothing.
+      expect(screen.queryByRole('checkbox')).toBeNull();
+    });
+
+    it('checking the toggle reveals it; unchecking hides it again', async () => {
+      lookupMock.mockResolvedValue(lookupResult([
+        plotItem({ canInspect: false, unavailableReason: 'no_active_cycle' }),
+      ]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+      const toggle = await screen.findByRole('checkbox', { name: /แสดงแปลงที่ยังไม่มีรอบปลูก/ });
+
+      fireEvent.click(toggle);
+      expect(await screen.findByRole('button', { name: /PLOT001/ })).toBeTruthy();
+
+      fireEvent.click(toggle);
+      expect(screen.queryByRole('button', { name: /PLOT001/ })).toBeNull();
+    });
+
+    it('stays hidden even when the search text matches it exactly', async () => {
+      lookupMock.mockResolvedValue(lookupResult([
+        plotItem({ canInspect: false, unavailableReason: 'no_active_cycle' }),
+      ]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      fireEvent.change(screen.getByLabelText('ค้นหาแปลง'), { target: { value: 'PLOT001' } });
+
+      expect(screen.queryByRole('button', { name: /PLOT001/ })).toBeNull();
+    });
+
+    it('stays hidden even when it is the plot a QR scan just matched', async () => {
+      // qrMatchedPlotId reorders the visible list to the top — it must never
+      // pull a hidden plot back into view on its own.
+      lookupMock.mockResolvedValue(lookupResult(
+        [plotItem({ canInspect: false, unavailableReason: 'no_active_cycle' })],
+        'plot-1',
+      ));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      expect(screen.queryByRole('button', { name: /PLOT001/ })).toBeNull();
+    });
+
+    it('names the true count of hidden plots, unaffected by the search text', async () => {
+      lookupMock.mockResolvedValue(lookupResult([
+        plotItem({ canInspect: false, unavailableReason: 'no_active_cycle' }),
+        plotItem({
+          plotId: 'plot-2', plotCode: 'PLOT002', plotName: 'Plot Two',
+          canInspect: false, unavailableReason: 'no_active_cycle',
+        }),
+      ]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      expect(await screen.findByRole('checkbox', { name: /\(2\)/ })).toBeTruthy();
+
+      fireEvent.change(screen.getByLabelText('ค้นหาแปลง'), { target: { value: 'no such plot' } });
+
+      expect(screen.getByRole('checkbox', { name: /\(2\)/ })).toBeTruthy();
+    });
+
+    it('the empty state names how many plots are hidden instead of implying there are none at all', async () => {
+      lookupMock.mockResolvedValue(lookupResult([
+        plotItem({ canInspect: false, unavailableReason: 'no_active_cycle' }),
+      ]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      expect(await screen.findByText('ไม่พบแปลงที่พร้อมตรวจ — มี 1 แปลงที่ยังไม่มีรอบปลูกที่เปิดอยู่')).toBeTruthy();
+      expect(screen.queryByText('ไม่พบแปลง')).toBeNull();
+    });
+
+    it('falls back to the plain "ไม่พบแปลง" once nothing is hidden (search matched none)', async () => {
+      lookupMock.mockResolvedValue(lookupResult([plotItem({ canInspect: true })]));
+      renderPublicInspect();
+      await enterPhoneAndLookup();
+
+      fireEvent.change(screen.getByLabelText('ค้นหาแปลง'), { target: { value: 'no such plot' } });
+
+      expect(await screen.findByText('ไม่พบแปลง')).toBeTruthy();
+    });
   });
 
   it('a plot already inspected today is still selectable (shows a badge only)', async () => {
@@ -2996,6 +3103,8 @@ describe('PublicInspect — latest inspection date per active cycle (round 8-19)
       inspectedToday: false, lastInspectionDate: null,
       lastInspectedAt: '2020-01-01T00:00:00Z',
     }));
+    // Round 8-27H — hidden by default now; reveal it via the toggle first.
+    fireEvent.click(await screen.findByRole('checkbox', { name: /แสดงแปลงที่ยังไม่มีรอบปลูก/ }));
 
     expect(screen.getByText('ยังไม่มีรอบปลูกที่เปิดอยู่')).toBeTruthy();
     expect(screen.queryByText(/ตรวจล่าสุดในรอบ/)).toBeNull();

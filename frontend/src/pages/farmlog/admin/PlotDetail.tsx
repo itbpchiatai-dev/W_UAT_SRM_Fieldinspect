@@ -711,7 +711,7 @@ function CurrentStatusSection({
             {quantityKg != null ? (
               <>
                 <Field label="ผลผลิตประเมินล่าสุด" value={formatYieldQuantity(quantityKg, 'kg')} />
-                <Field label="Yield % (เทียบเป้าหมาย)" value={pctDisplay != null ? `${pctDisplay}%` : null} />
+                <Field label="Yield % (เทียบเป้าผลิต)" value={pctDisplay != null ? `${pctDisplay}%` : null} />
               </>
             ) : (
               <Field
@@ -863,14 +863,14 @@ function HistoryRow({ record }: { record: RecordSummary }) {
               {(toNumberOrNull(full.yieldQuantityKg) != null || full.yieldPct != null) && (
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   {toNumberOrNull(full.yieldQuantityKg) != null && (
-                    <p><span className="text-xs text-gray-400">ผลผลิตที่ประเมินได้: </span>{formatYieldQuantity(full.yieldQuantityKg, 'kg')}</p>
+                    <p><span className="text-xs text-gray-400">ผลผลิตที่คาดว่าจะได้: </span>{formatYieldQuantity(full.yieldQuantityKg, 'kg')}</p>
                   )}
                   {toNumberOrNull(full.yieldTargetKgSnapshot) != null && (
-                    <p><span className="text-xs text-gray-400">เป้าหมายที่ใช้คำนวณ: </span>{formatYieldQuantity(full.yieldTargetKgSnapshot, 'kg')}</p>
+                    <p><span className="text-xs text-gray-400">เป้าผลิตที่ใช้คำนวณ: </span>{formatYieldQuantity(full.yieldTargetKgSnapshot, 'kg')}</p>
                   )}
                   {full.yieldPct != null && (
                     <p>
-                      <span className="text-xs text-gray-400">เปอร์เซ็นต์เทียบเป้าหมาย: </span>
+                      <span className="text-xs text-gray-400">เปอร์เซ็นต์เทียบเป้าผลิต: </span>
                       <span className="font-semibold text-green-700">{parseFloat(full.yieldPct)}%</span>
                     </p>
                   )}

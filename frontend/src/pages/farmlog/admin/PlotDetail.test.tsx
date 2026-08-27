@@ -1838,7 +1838,7 @@ describe('PlotDetail — Current Status Yield kg (round 8-8C)', () => {
 
     expect(await screen.findByText('ผลผลิตประเมินล่าสุด')).toBeTruthy();
     expect(screen.getByText('800 kg')).toBeTruthy();
-    expect(await screen.findByText('Yield % (เทียบเป้าหมาย)')).toBeTruthy();
+    expect(await screen.findByText('Yield % (เทียบเป้าผลิต)')).toBeTruthy();
     expect(screen.getByText('80%')).toBeTruthy();
     expect(screen.queryByText('Yield ล่าสุด')).toBeNull();
   });
@@ -1918,14 +1918,14 @@ describe('PlotDetail — history Yield kg (round 8-8C)', () => {
     // "1,600 kg" / "160%" legitimately appear twice once expanded — once in
     // the collapsed glance (still visible) and once in the expanded detail
     // block — same convention as this file's other "renders twice" assertions.
-    expect(await screen.findByText('ผลผลิตที่ประเมินได้:')).toBeTruthy();
+    expect(await screen.findByText('ผลผลิตที่คาดว่าจะได้:')).toBeTruthy();
     expect((await screen.findAllByText('1,600 kg')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('เป้าหมายที่ใช้คำนวณ:')).toBeTruthy();
+    expect(screen.getByText('เป้าผลิตที่ใช้คำนวณ:')).toBeTruthy();
     // "1,000 kg" also legitimately matches the active cycle's own Expected
     // Yield field elsewhere on the page (default fixture) — just prove ours
     // is among them, not that it's the only occurrence.
     expect((await screen.findAllByText('1,000 kg')).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('เปอร์เซ็นต์เทียบเป้าหมาย:')).toBeTruthy();
+    expect(screen.getByText('เปอร์เซ็นต์เทียบเป้าผลิต:')).toBeTruthy();
     expect((await screen.findAllByText('160%')).length).toBeGreaterThanOrEqual(1);
   });
 

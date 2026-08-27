@@ -539,7 +539,7 @@ export function RecordForm() {
         {/* Yield */}
         <section className="rounded-lg border border-green-200 bg-green-50/50 p-5 shadow-sm">
           <h2 className="mb-1 text-base font-semibold text-foreground">ผลผลิต (Yield)</h2>
-          <p className="mb-4 text-xs text-muted-foreground">กรอกปริมาณที่ประเมินได้เป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าหมายให้อัตโนมัติ</p>
+          <p className="mb-4 text-xs text-muted-foreground">กรอกปริมาณที่คาดว่าจะได้เป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าผลิตให้อัตโนมัติ</p>
           <YieldQuantityInput
             quantityKg={form.yieldQuantityKg}
             yieldPct={form.yieldPct}

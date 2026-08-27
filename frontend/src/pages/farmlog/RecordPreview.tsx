@@ -88,20 +88,20 @@ function YieldSection({ r }: { r: RecordDetail }) {
       <dl className="divide-y divide-gray-100">
         {quantityKg != null && (
           <>
-            <Field label="ปริมาณผลผลิตที่ประเมินได้" value={formatYieldQuantity(quantityKg, 'kg')} />
+            <Field label="ปริมาณผลผลิตที่คาดว่าจะได้" value={formatYieldQuantity(quantityKg, 'kg')} />
             {targetKg != null ? (
-              <Field label="เป้าหมายที่ใช้คำนวณ" value={formatYieldQuantity(targetKg, 'kg')} />
+              <Field label="เป้าผลิตที่ใช้คำนวณ" value={formatYieldQuantity(targetKg, 'kg')} />
             ) : (
               <Field
-                label="เป้าหมายที่ใช้คำนวณ"
-                value={<span className="text-xs italic text-gray-400">ไม่มีเป้าหมายสำหรับคำนวณเปอร์เซ็นต์</span>}
+                label="เป้าผลิตที่ใช้คำนวณ"
+                value={<span className="text-xs italic text-gray-400">ไม่มีเป้าผลิตสำหรับคำนวณเปอร์เซ็นต์</span>}
               />
             )}
           </>
         )}
         {yieldPct != null && (
           <Field
-            label={quantityKg != null ? 'เปอร์เซ็นต์เทียบเป้าหมาย' : '% คาดว่าจะได้ผลผลิต'}
+            label={quantityKg != null ? 'เปอร์เซ็นต์เทียบเป้าผลิต' : '% คาดว่าจะได้ผลผลิต'}
             value={<YieldBar pct={yieldPct} />}
           />
         )}

@@ -107,7 +107,7 @@ export function YieldQuantityInput({
   return (
     <div className="space-y-4">
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">ผลผลิตที่ประเมินได้</label>
+        <label className="mb-1 block text-sm font-medium text-gray-700">ผลผลิตที่คาดว่าจะได้</label>
         <div className="flex items-center gap-2">
           <input
             type="number"
@@ -123,15 +123,15 @@ export function YieldQuantityInput({
         </div>
         <p className="mt-1 text-xs text-gray-500">
           {targetKg != null
-            ? `เทียบกับเป้าหมาย ${formatYieldQuantity(targetKg, 'kg')} (ที่ 100%)${latestPct != null && Number.isFinite(latestPct) ? ` · ล่าสุด ${latestPct}%` : ''}`
-            : 'รอบปลูกนี้ไม่มีเป้าหมายหน่วย kg สำหรับคำนวณเปอร์เซ็นต์'}
+            ? `เทียบกับเป้าผลิต ${formatYieldQuantity(targetKg, 'kg')} (ที่ 100%)${latestPct != null && Number.isFinite(latestPct) ? ` · ล่าสุด ${latestPct}%` : ''}`
+            : 'รอบปลูกนี้ไม่มีเป้าผลิตหน่วย kg สำหรับคำนวณเปอร์เซ็นต์'}
         </p>
         {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
       </div>
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-sm text-gray-600">เปอร์เซ็นต์เทียบเป้าหมาย</span>
+          <span className="text-sm text-gray-600">เปอร์เซ็นต์เทียบเป้าผลิต</span>
           <span className="text-lg font-bold text-green-700">
             {yieldPct != null ? `${yieldPct.toFixed(1)}%` : '—'}
           </span>

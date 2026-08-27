@@ -515,7 +515,7 @@ describe('RecordForm — Yield % defaults from the plot latest inspection (round
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P003'));
 
-    expect(await screen.findByText('รอบปลูกนี้ไม่มีเป้าหมายหน่วย kg สำหรับคำนวณเปอร์เซ็นต์')).toBeTruthy();
+    expect(await screen.findByText('รอบปลูกนี้ไม่มีเป้าผลิตหน่วย kg สำหรับคำนวณเปอร์เซ็นต์')).toBeTruthy();
     expect((screen.getByRole('slider') as HTMLInputElement).disabled).toBe(true);
   });
 });

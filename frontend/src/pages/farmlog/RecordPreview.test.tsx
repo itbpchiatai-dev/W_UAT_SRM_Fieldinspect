@@ -319,11 +319,11 @@ describe('RecordPreview — Yield kg display (round 8-8C)', () => {
     }));
     renderPreview();
 
-    expect(await screen.findByText('ปริมาณผลผลิตที่ประเมินได้')).toBeTruthy();
+    expect(await screen.findByText('ปริมาณผลผลิตที่คาดว่าจะได้')).toBeTruthy();
     expect(screen.getByText('800 kg')).toBeTruthy();
-    expect(screen.getByText('เป้าหมายที่ใช้คำนวณ')).toBeTruthy();
+    expect(screen.getByText('เป้าผลิตที่ใช้คำนวณ')).toBeTruthy();
     expect(screen.getByText('1,000 kg')).toBeTruthy();
-    expect(screen.getByText('เปอร์เซ็นต์เทียบเป้าหมาย')).toBeTruthy();
+    expect(screen.getByText('เปอร์เซ็นต์เทียบเป้าผลิต')).toBeTruthy();
     expect(screen.getByText('80%')).toBeTruthy();
   });
 
@@ -335,7 +335,7 @@ describe('RecordPreview — Yield kg display (round 8-8C)', () => {
 
     expect(await screen.findByText('% คาดว่าจะได้ผลผลิต')).toBeTruthy();
     expect(screen.getByText('80%')).toBeTruthy();
-    expect(screen.queryByText('ปริมาณผลผลิตที่ประเมินได้')).toBeNull();
+    expect(screen.queryByText('ปริมาณผลผลิตที่คาดว่าจะได้')).toBeNull();
   });
 
   it('quantity=0 shows "0 kg", never the em dash', async () => {
@@ -354,7 +354,7 @@ describe('RecordPreview — Yield kg display (round 8-8C)', () => {
     renderPreview();
 
     expect(await screen.findByText('500 kg')).toBeTruthy();
-    expect(screen.getByText('ไม่มีเป้าหมายสำหรับคำนวณเปอร์เซ็นต์')).toBeTruthy();
+    expect(screen.getByText('ไม่มีเป้าผลิตสำหรับคำนวณเปอร์เซ็นต์')).toBeTruthy();
   });
 
   it('renders no Yield section at all when there is no yield data whatsoever', async () => {

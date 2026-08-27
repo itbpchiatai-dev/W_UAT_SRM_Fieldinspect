@@ -79,7 +79,7 @@ describe('YieldQuantityInput — kg is primary, slider stays in sync', () => {
         onChange={vi.fn()}
       />,
     );
-    expect(screen.getByText(/เทียบกับเป้าหมาย 1,000 kg \(ที่ 100%\)/)).toBeTruthy();
+    expect(screen.getByText(/เทียบกับเป้าผลิต 1,000 kg \(ที่ 100%\)/)).toBeTruthy();
   });
 });
 
@@ -114,7 +114,7 @@ describe('YieldQuantityInput — no comparable kg target (contract #7)', () => {
         onChange={vi.fn()}
       />,
     );
-    expect(screen.getByText('รอบปลูกนี้ไม่มีเป้าหมายหน่วย kg สำหรับคำนวณเปอร์เซ็นต์')).toBeTruthy();
+    expect(screen.getByText('รอบปลูกนี้ไม่มีเป้าผลิตหน่วย kg สำหรับคำนวณเปอร์เซ็นต์')).toBeTruthy();
   });
 
   it('percentage display stays "—", never a faked 100%', () => {
@@ -199,7 +199,7 @@ describe('YieldQuantityInput — legacy/null data never crashes', () => {
         onChange={vi.fn()}
       />,
     );
-    expect(screen.getByText(/เทียบกับเป้าหมาย 1,000 kg/)).toBeTruthy();
+    expect(screen.getByText(/เทียบกับเป้าผลิต 1,000 kg/)).toBeTruthy();
   });
 });
 

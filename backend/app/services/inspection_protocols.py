@@ -63,16 +63,19 @@ PROTOCOL_SLOTS: tuple[tuple[str, str], ...] = (
 SLOT_NAMES: frozenset[str] = frozenset(slot for slot, _attr in PROTOCOL_SLOTS)
 _SLOT_TO_ATTR: dict[str, str] = dict(PROTOCOL_SLOTS)
 
-# Built-in fallback registry — the round-5.1 defaults, used verbatim when the
-# inspection_protocol_criteria table is empty (fresh/unseeded DB). Keys MUST
-# match the seeded growth_stage master data (app/db/seed.py); the supplement
-# stages there deliberately have no protocol (gated pass-through).
+# Built-in fallback registry, used verbatim when the inspection_protocol_criteria
+# table is empty (fresh/unseeded DB). Kept in sync with the admin-edited labels
+# live in UAT as of round 8-27I so a freshly-seeded DB starts with the same
+# wording admins have already settled on, rather than the original round-5.1
+# placeholders. Keys MUST match the seeded growth_stage master data
+# (app/db/seed.py); the supplement stages there deliberately have no protocol
+# (gated pass-through).
 DEFAULT_PROTOCOLS: dict[str, tuple[str, str, str, str]] = {
-    "ระยะงอก": ("การเตรียมแปลง", "สภาพอากาศ", "การดูแลรักษา", "ความต้านทานของสายพันธุ์"),
-    "เจริญเติบโต": ("สภาพอากาศ", "การดูแลรักษา", "ความเสี่ยง", "สภาพแปลง"),
-    "ออกดอก": ("ความสมบูรณ์ของดอก", "สภาพอากาศ", "การดูแลรักษา", "ความเสี่ยงโรคและแมลง"),
-    "ติดผล": ("การติดผล", "ความสมบูรณ์ของผล", "การดูแลรักษา", "ความเสี่ยงโรคและแมลง"),
-    "เก็บเกี่ยว": ("ความพร้อมเก็บเกี่ยว", "คุณภาพผลผลิต", "ปริมาณผลผลิตคาดการณ์", "สภาพแปลงก่อนเก็บเกี่ยว"),
+    "ระยะงอก": ("การเตรียมแปลง", "ความสมบูรณ์ของต้นกล้า", "การดูแลรักษา", "การควบคุมความเสียหายจากโรคและแมลง"),
+    "เจริญเติบโต": ("ความสมบูรณ์ของต้น", "การดูแลรักษา", "การควบคุมความเสียหายจากโรคและแมลง", "สภาพโดยรวมของแปลง"),
+    "ออกดอก": ("ความสมบูรณ์ของต้น", "ความเหมาะสมของสภาพอากาศ", "การดูแลรักษา", "การควบคุมความเสียหายจากโรคและแมลง"),
+    "ติดผล": ("การติดผล", "ความสมบูรณ์ของต้น", "การดูแลรักษา", "การควบคุมความเสียหายจากโรคและแมลง"),
+    "เก็บเกี่ยว": ("ความพร้อมเก็บเกี่ยว", "ความเหมาะสมของสภาพอากาศ", "การควบคุมความเสียหายจากโรคและแมลง", "สภาพแปลงก่อนเก็บเกี่ยว"),
 }
 
 # Fail fast at import if the defaults and the fixed slots ever drift apart.

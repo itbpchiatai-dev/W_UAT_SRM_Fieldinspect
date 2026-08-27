@@ -113,7 +113,7 @@ def test_build_snapshot_keeps_a_missing_score_as_null() -> None:
     by_slot = {c["slot"]: c for c in snap["criteria"]}
     assert by_slot["weatherScore"]["score"] is None
     # The unscored criterion keeps its label — the point of the snapshot.
-    assert by_slot["weatherScore"]["label"] == "สภาพอากาศ"
+    assert by_slot["weatherScore"]["label"] == "ความสมบูรณ์ของต้นกล้า"
     assert by_slot["fieldPrepScore"]["score"] == 8
 
 

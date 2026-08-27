@@ -162,7 +162,7 @@ async def test_logged_in_create_accepts_a_protocol_stage_missing_a_score() -> No
 
     snap = mocked_create.call_args[0][1].custom_fields[SNAPSHOT_KEY]
     assert [c["score"] for c in snap["criteria"]] == [8, 7, 9, None]
-    assert snap["criteria"][3]["label"] == "ความต้านทานของสายพันธุ์"
+    assert snap["criteria"][3]["label"] == "การควบคุมความเสียหายจากโรคและแมลง"
 
 
 async def test_logged_in_create_accepts_a_protocol_stage_with_no_scores_at_all() -> None:
@@ -251,7 +251,7 @@ async def test_public_create_writes_protocol_snapshot_server_side() -> None:
     snap = mocked_create.call_args[0][1].custom_fields[SNAPSHOT_KEY]
     assert snap["version"] == 1
     assert snap["growthStage"] == "ออกดอก"
-    assert snap["criteria"][0]["label"] == "ความสมบูรณ์ของดอก"
+    assert snap["criteria"][0]["label"] == "ความสมบูรณ์ของต้น"
     assert [c["score"] for c in snap["criteria"]] == [8, 7, 9, 6]
 
 
@@ -276,7 +276,7 @@ async def test_public_create_accepts_a_protocol_stage_missing_a_score() -> None:
     assert [c["score"] for c in snap["criteria"]] == [8, None, None, None]
     # Every criterion keeps its label, scored or not — that is what makes a
     # partial snapshot worth storing at all.
-    assert snap["criteria"][0]["label"] == "ความสมบูรณ์ของดอก"
+    assert snap["criteria"][0]["label"] == "ความสมบูรณ์ของต้น"
     assert all(c["label"] for c in snap["criteria"])
 
 

@@ -207,7 +207,7 @@ export function CycleYieldReport() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                {['Supplier / แปลง', 'รอบปลูก', 'พืช/พันธุ์/Lot', 'Expected (100%)', 'สถานะ / ปิดรอบ', 'สรุปผลผลิต'].map((h) => (
+                {['Supplier / แปลง', 'รอบปลูก', 'พืช/พันธุ์/Lot', 'เป้าผลิต', 'สถานะ / ปิดรอบ', 'สรุปผลผลิต'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>

@@ -92,7 +92,7 @@ describe('ThailandPlotMap detail panel', () => {
     expect(screen.getByText('ผลผลิต (Yield)')).toBeTruthy();
     expect(screen.getByText('จำนวนต้น/จำนวนปลูก')).toBeTruthy();
     expect(screen.getByText('1,200')).toBeTruthy();
-    expect(screen.getByText('Expected Yield ที่ 100%')).toBeTruthy();
+    expect(screen.getByText('เป้าผลิต')).toBeTruthy();
     expect(screen.getByText('1,000 kg')).toBeTruthy();
     // 80% of 1000 kg = 800 kg (computed "ที่คาดว่าจะได้").
     expect(screen.getByText('800 kg')).toBeTruthy();

@@ -191,7 +191,7 @@ export function PlotStatusReport() {
                     still carries the old per-slot headers (server-generated,
                     downloadPlotStatusReport) — a backend change tracked
                     separately. */}
-                {['Supplier / แปลง', 'จังหวัด', 'พืช/พันธุ์/ระยะ', 'Yield ปัจจุบัน', 'คะแนนตรวจ (4 หัวข้อ)', 'ตรวจล่าสุด', 'สถานะ'].map((h) => (
+                {['Supplier / แปลง', 'จังหวัด', 'พืช/พันธุ์/ระยะ', 'ผลผลิตที่คาดว่าจะได้', 'คะแนนตรวจ (4 หัวข้อ)', 'ตรวจล่าสุด', 'สถานะ'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>

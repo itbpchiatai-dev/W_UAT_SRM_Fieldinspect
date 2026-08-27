@@ -705,7 +705,7 @@ describe('Plots create modal — yield planning validation & hints (round 18)', 
 
     fireEvent.change(screen.getByPlaceholderText('0'), { target: { value: '500' } });
 
-    await waitFor(() => expect(screen.getByText(/ยังไม่ระบุ Expected Yield ที่ 100%/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/ยังไม่ระบุเป้าผลิต/)).toBeTruthy());
   });
 
   it('blocks submit with a clear error when expectedYieldFull is set but the unit is left blank', async () => {

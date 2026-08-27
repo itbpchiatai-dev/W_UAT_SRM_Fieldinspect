@@ -2035,7 +2035,7 @@ function CreatePlotModal({
             </div>
             {yieldPlanGap && (
               <p className="mt-2 flex items-center gap-1 text-xs text-amber-600">
-                <span aria-hidden="true">⚠</span> {yieldPlanGap} — กรอกทั้งสองช่องเพื่อให้ระบบคำนวณ Expected Current Yield ได้
+                <span aria-hidden="true">⚠</span> {yieldPlanGap} — กรอกทั้งสองช่องเพื่อให้ระบบคำนวณผลผลิตที่คาดว่าจะได้
               </p>
             )}
           </div>

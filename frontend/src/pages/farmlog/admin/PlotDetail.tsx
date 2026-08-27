@@ -239,13 +239,13 @@ function YieldPlanningSection({
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-gray-400">Expected Yield ที่ 100%</dt>
+          <dt className="text-xs text-gray-400">เป้าผลิต</dt>
           <dd className="text-sm font-medium text-gray-800">
             {formatYieldQuantity(activeCycle.expectedYieldFull, activeCycle.expectedYieldUnit) ?? <span className="text-gray-300">—</span>}
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-gray-400">Current Yield %</dt>
+          <dt className="text-xs text-gray-400">เปอร์เซ็นต์เทียบเป้าผลิต</dt>
           <dd className="text-sm font-medium text-gray-800">
             {pct != null ? `${pct}%` : <span className="text-gray-300">—</span>}
           </dd>
@@ -352,12 +352,12 @@ function CurrentCycleSection({
           value={activeCycle.plantCount != null ? activeCycle.plantCount.toLocaleString('th-TH') : null}
         />
         <Field
-          label="Expected Yield ที่ 100%"
+          label="เป้าผลิต"
           value={formatYieldQuantity(activeCycle.expectedYieldFull, activeCycle.expectedYieldUnit)}
         />
-        <Field label="Current Yield %" value={pct != null ? `${pct}%` : null} />
+        <Field label="เปอร์เซ็นต์เทียบเป้าผลิต" value={pct != null ? `${pct}%` : null} />
         <Field
-          label="ผลผลิตคาดการณ์ปัจจุบัน"
+          label="ผลผลิตที่คาดว่าจะได้"
           value={currentExpected != null ? formatYieldQuantity(currentExpected, activeCycle.expectedYieldUnit) : null}
         />
       </dl>

@@ -70,7 +70,7 @@ export function describeYieldPlanGap(
   if (hasPlantCount && hasFull) return null;
   if (!hasPlantCount && !hasFull) return 'ยังไม่ตั้งแผนผลผลิต';
   if (!hasPlantCount) return 'ยังไม่ระบุจำนวนต้น/จำนวนปลูก';
-  return 'ยังไม่ระบุ Expected Yield ที่ 100%';
+  return 'ยังไม่ระบุเป้าผลิต';
 }
 
 /**
@@ -259,7 +259,7 @@ export function computeInitialYieldValue(
 
 export function describeFinalEstimate(input: FinalEstimateInput): FinalEstimateDisplay {
   if (input.cycleStatus === 'active') {
-    return { kind: 'active', hint: 'ยังไม่ปิดรอบ — ดู Yield ปัจจุบันที่แท็บสถานะแปลง' };
+    return { kind: 'active', hint: 'ยังไม่ปิดรอบ — ดูผลผลิตที่คาดว่าจะได้ที่แท็บสถานะแปลง' };
   }
   // harvested → final estimate; cancelled → last estimate before cancel.
   const label = input.cycleStatus === 'cancelled'

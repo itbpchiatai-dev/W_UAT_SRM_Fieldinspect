@@ -414,7 +414,8 @@ describe('PlotDetail — current status', () => {
     expect(await screen.findByText('พริกขี้หนู')).toBeTruthy();
     // "95.5%" now legitimately renders twice (round 18): once in current
     // status "Yield ล่าสุด" and again inside the Yield Planning card's
-    // "Current Yield %" field — both read the same plot.currentYieldPct.
+    // "เปอร์เซ็นต์เทียบเป้าผลิต" field (round 8-27F) — both read the same
+    // plot.currentYieldPct.
     expect((await screen.findAllByText('95.5%')).length).toBeGreaterThanOrEqual(1);
     expect(await screen.findByText(/13\.756300, 100\.501800/)).toBeTruthy();
     expect(await screen.findByText('FIELD01')).toBeTruthy();

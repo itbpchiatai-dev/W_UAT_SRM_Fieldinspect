@@ -151,7 +151,7 @@ function CycleSection({ r }: { r: RecordDetail }) {
             value={r.cyclePlantCount != null ? r.cyclePlantCount.toLocaleString('th-TH') : null}
           />
           <Field
-            label="Expected Yield ที่ 100%"
+            label="เป้าผลิต"
             value={formatYieldQuantity(r.cycleExpectedYieldFull, r.cycleExpectedYieldUnit)}
           />
         </dl>

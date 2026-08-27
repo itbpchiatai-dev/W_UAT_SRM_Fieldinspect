@@ -97,8 +97,8 @@ describe('describeYieldPlanGap', () => {
   });
 
   it('names expected yield when only that is missing', () => {
-    expect(describeYieldPlanGap(500, null)).toBe('ยังไม่ระบุ Expected Yield ที่ 100%');
-    expect(describeYieldPlanGap(500, 0)).toBe('ยังไม่ระบุ Expected Yield ที่ 100%');
+    expect(describeYieldPlanGap(500, null)).toBe('ยังไม่ระบุเป้าผลิต');
+    expect(describeYieldPlanGap(500, 0)).toBe('ยังไม่ระบุเป้าผลิต');
   });
 
   it('gives a generic message when both are missing', () => {

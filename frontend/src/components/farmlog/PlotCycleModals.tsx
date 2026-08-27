@@ -105,7 +105,7 @@ export function requireUnitWithYield(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['expectedYieldUnit'],
-      message: 'กรุณาระบุหน่วย (เช่น kg) เมื่อกรอก Expected Yield ที่ 100%',
+      message: 'กรุณาระบุหน่วย (เช่น kg) เมื่อกรอกเป้าผลิต',
     });
   }
 }
@@ -696,7 +696,7 @@ export function CyclePlanFields<T extends CyclePlanShape>({
         <Field label="จำนวนต้น/จำนวนปลูก" error={errors.plantCount?.message as string | undefined}>
           <input {...register('plantCount' as Path<T>)} type="number" step="1" className="field-input" placeholder="0" />
         </Field>
-        <Field label="Expected Yield ที่ 100%" error={errors.expectedYieldFull?.message as string | undefined}>
+        <Field label="เป้าผลิต" error={errors.expectedYieldFull?.message as string | undefined}>
           <input {...register('expectedYieldFull' as Path<T>)} type="number" step="0.01" className="field-input" placeholder="0.00" />
         </Field>
         <Field label="หน่วย" error={errors.expectedYieldUnit?.message as string | undefined}>
@@ -1050,7 +1050,7 @@ export function RolloverCycleModal({
             <div><dt className="text-xs text-muted-foreground">Ref Account</dt><dd className="break-words">{cycle.refAccount ?? '—'}</dd></div>
             <div><dt className="text-xs text-muted-foreground">วันที่ปลูก</dt><dd>{cycle.plantingDate ?? '—'}</dd></div>
             <div><dt className="text-xs text-muted-foreground">จำนวนต้น</dt><dd>{cycle.plantCount != null ? cycle.plantCount.toLocaleString('th-TH') : '—'}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Expected Yield ที่ 100%</dt><dd>{formatYieldQuantity(cycle.expectedYieldFull, cycle.expectedYieldUnit) ?? '—'}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">เป้าผลิต</dt><dd>{formatYieldQuantity(cycle.expectedYieldFull, cycle.expectedYieldUnit) ?? '—'}</dd></div>
           </dl>
           <Field label="สถานะปิดรอบ" error={errors.closeStatus?.message}>
             <select {...register('closeStatus')} className="field-input">

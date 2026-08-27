@@ -554,7 +554,7 @@ function PlotDetailPanel({ placed, onClose }: { placed: PlacedPlot; onClose: () 
           value={plot.plantCount != null ? plot.plantCount.toLocaleString('th-TH') : '—'}
         />
         <DetailRow
-          label="Expected Yield ที่ 100%"
+          label="เป้าผลิต"
           value={formatYieldQuantity(plot.expectedYieldFull, plot.expectedYieldUnit) ?? '—'}
         />
         <DetailRow

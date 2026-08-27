@@ -72,7 +72,7 @@ def _unzip(content: bytes) -> dict[str, str]:
 def test_headers_have_expected_columns_in_order() -> None:
     assert _PLOT_STATUS_HEADERS[0] == "Supplier"
     assert _PLOT_STATUS_HEADERS[-1] == "สถานะตรวจ"
-    assert "Yield ปัจจุบัน" in _PLOT_STATUS_HEADERS
+    assert "ผลผลิตที่คาดว่าจะได้" in _PLOT_STATUS_HEADERS
     assert "ตรวจล่าสุด" in _PLOT_STATUS_HEADERS
     # round 7.4 — explicit planting-cycle status column
     assert "สถานะรอบปลูก" in _PLOT_STATUS_HEADERS

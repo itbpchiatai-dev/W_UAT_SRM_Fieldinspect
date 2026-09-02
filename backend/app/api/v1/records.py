@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from app.repositories import record_repository as repo
 from app.schemas.record import RecordCreate, RecordRead, RecordSummary
 from app.services.inspection_photos import (
     PHOTO_FILENAME_PATTERN,
+    OBSPhotoStorage,
     cleanup_photos,
     get_photo_storage,
     media_type_for,
@@ -256,7 +257,16 @@ async def create_record_with_photos(
     except PydanticValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
-    storage = get_photo_storage()
+    # Round 8-16B — OBS keys are namespaced by plot_code
+    # ({env_prefix}/{plot_code}/{uuid}.webp); a plain read here (no row
+    # lock — _create_record below takes the real one) so an OBS upload
+    # never runs under a blank plot_code. Also fails fast: no point
+    # compressing/uploading photos for a plot that doesn't exist or is out
+    # of this caller's scope — _create_record would 404 on it anyway.
+    plot_for_storage = await plot_repo.get_plot(db, record_payload.plot_id)
+    if plot_for_storage is None:
+        raise HTTPException(status_code=404, detail="Plot not found")
+    storage = get_photo_storage(plot_code=plot_for_storage.plot_code)
     urls = await validate_and_save_photos(photos, storage)
     record_payload = record_payload.model_copy(update={"photo_urls": urls})
 
@@ -311,9 +321,24 @@ async def get_record_photo(
     if photo_id not in known_filenames:
         raise HTTPException(status_code=404, detail="Photo not found")
 
+    # Locate the full stored URL so we can distinguish local vs OBS keys.
+    stored_url = next(u for u in record.photo_urls if photo_filename_from_url(u) == photo_id)
+
+    storage = get_photo_storage()
+    if not stored_url.startswith("/"):
+        # Round 8-16B — OBS key (no leading slash): generate a presigned URL
+        # and redirect. The object is private; the presigned URL grants
+        # time-limited access without making the bucket public.
+        if not isinstance(storage, OBSPhotoStorage):
+            raise HTTPException(status_code=404, detail="Photo not found")
+        return RedirectResponse(
+            url=storage.get_presigned_url(stored_url), status_code=302
+        )
+
+    # Local filesystem path (legacy or dev):
     try:
-        path = get_photo_storage().resolve_existing_path(photo_id)
-    except FileNotFoundError:
+        path = storage.resolve_existing_path(photo_id)
+    except (FileNotFoundError, AttributeError):
         raise HTTPException(status_code=404, detail="Photo not found")
 
     return FileResponse(path, media_type=media_type_for(photo_id))

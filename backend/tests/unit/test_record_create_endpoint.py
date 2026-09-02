@@ -91,8 +91,10 @@ def _fake_record(**overrides):
 
 def _fake_plot(**overrides):
     """Minimal plot for _create_record — supplier_id (derivation guard) and
-    is_active (round 7.1 closed-plot guard) are read there."""
-    defaults = dict(id=uuid4(), supplier_id=uuid4(), is_active=True)
+    is_active (round 7.1 closed-plot guard) are read there. plot_code is
+    read by create_record_with_photos (round 8-16B) to namespace the OBS
+    storage key."""
+    defaults = dict(id=uuid4(), supplier_id=uuid4(), is_active=True, plot_code="PLOT001")
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
@@ -203,12 +205,13 @@ async def test_with_photos_saves_four_photos_and_creates_record(tmp_path: Path) 
     with patch(f"{_MODULE}.get_photo_storage", MagicMock(
              return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
          )), \
+         patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=_fake_plot(id=plot_id, supplier_id=fake_record.supplier_id))), \
          patch(f"{_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot(id=plot_id, supplier_id=fake_record.supplier_id))), \
          patch(f"{_MODULE}.repo.create_record", AsyncMock(return_value=fake_record)) as mocked_create, \
          patch(f"{_MODULE}.plot_repo.sync_current_status_from_record", AsyncMock()), \
          patch(f"{_MODULE}.repo.get_record_full", AsyncMock(return_value=fake_record)), \
          patch(f"{_MODULE}._to_read", MagicMock(return_value=SimpleNamespace())):
-        await create_record_with_photos(request=_fake_request(), 
+        await create_record_with_photos(request=_fake_request(),
             current_user=current_user, payload=payload_json, photos=_four_photos(), db=_mock_db(),
         )
 
@@ -219,14 +222,22 @@ async def test_with_photos_saves_four_photos_and_creates_record(tmp_path: Path) 
     assert len(list(tmp_path.iterdir())) == 4
 
 
-async def test_with_photos_too_many_photos_rejected_before_create() -> None:
+async def test_with_photos_too_many_photos_rejected_before_create(tmp_path: Path) -> None:
     """Photos are optional (0..5) now — >5 is the remaining wrong-count case
-    on this multipart path (a zero-photo submit uses the JSON endpoint)."""
+    on this multipart path (a zero-photo submit uses the JSON endpoint).
+    get_photo_storage is mocked to LocalPhotoStorage — real settings would
+    otherwise decide which backend this exercises, which isn't this test's
+    concern (it's asserting create_record never runs, not which storage
+    backend get_photo_storage picks)."""
     payload_json = _payload().model_dump_json()
 
-    with patch(f"{_MODULE}.repo.create_record", AsyncMock()) as mocked_create:
+    with patch(f"{_MODULE}.get_photo_storage", MagicMock(
+             return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
+         )), \
+         patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=_fake_plot())), \
+         patch(f"{_MODULE}.repo.create_record", AsyncMock()) as mocked_create:
         with pytest.raises(HTTPException) as exc_info:
-            await create_record_with_photos(request=_fake_request(), 
+            await create_record_with_photos(request=_fake_request(),
                 current_user=_current_user(), payload=payload_json,
                 photos=[_upload(_JPEG)] * 6, db=_mock_db(),
             )
@@ -254,12 +265,13 @@ async def test_with_photos_ignores_client_supplied_photo_urls(tmp_path: Path) ->
     with patch(f"{_MODULE}.get_photo_storage", MagicMock(
              return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
          )), \
+         patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=_fake_plot(id=plot_id, supplier_id=fake_record.supplier_id))), \
          patch(f"{_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot(id=plot_id, supplier_id=fake_record.supplier_id))), \
          patch(f"{_MODULE}.repo.create_record", AsyncMock(return_value=fake_record)) as mocked_create, \
          patch(f"{_MODULE}.plot_repo.sync_current_status_from_record", AsyncMock()), \
          patch(f"{_MODULE}.repo.get_record_full", AsyncMock(return_value=fake_record)), \
          patch(f"{_MODULE}._to_read", MagicMock(return_value=SimpleNamespace())):
-        await create_record_with_photos(request=_fake_request(), 
+        await create_record_with_photos(request=_fake_request(),
             current_user=_current_user(), payload=payload_json, photos=_four_photos(), db=_mock_db(),
         )
 
@@ -276,10 +288,11 @@ async def test_with_photos_cleans_up_saved_files_when_db_step_fails(tmp_path: Pa
     with patch(f"{_MODULE}.get_photo_storage", MagicMock(
              return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
          )), \
+         patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=_fake_plot())), \
          patch(f"{_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot())), \
          patch(f"{_MODULE}.repo.create_record", AsyncMock(side_effect=RuntimeError("db exploded"))):
         with pytest.raises(RuntimeError):
-            await create_record_with_photos(request=_fake_request(), 
+            await create_record_with_photos(request=_fake_request(),
                 current_user=_current_user(), payload=payload_json, photos=_four_photos(), db=_mock_db(),
             )
 
@@ -296,11 +309,12 @@ async def test_with_photos_reraises_original_error_even_if_cleanup_itself_fails(
     with patch(f"{_MODULE}.get_photo_storage", MagicMock(
              return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
          )), \
+         patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=_fake_plot())), \
          patch(f"{_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=_fake_plot())), \
          patch(f"{_MODULE}.repo.create_record", AsyncMock(side_effect=RuntimeError("db exploded"))), \
          patch(f"{_MODULE}.cleanup_photos", AsyncMock(side_effect=OSError("cleanup also failed"))):
         with pytest.raises(RuntimeError, match="db exploded"):
-            await create_record_with_photos(request=_fake_request(), 
+            await create_record_with_photos(request=_fake_request(),
                 current_user=_current_user(), payload=payload_json, photos=_four_photos(), db=_mock_db(),
             )
 

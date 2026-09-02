@@ -685,7 +685,7 @@ async def create_record_with_photos_public(
         return outcome[1]
 
     _, plot, supplier, cycle, phone_binding = outcome
-    storage = get_photo_storage()
+    storage = get_photo_storage(plot_code=plot.plot_code)
     urls = await validate_and_save_photos(photos, storage)
 
     try:

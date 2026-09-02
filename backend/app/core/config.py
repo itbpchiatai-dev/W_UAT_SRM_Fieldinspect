@@ -217,6 +217,25 @@ class Settings(BaseSettings):
     # eventual serving/download endpoint doesn't require a data migration.
     INSPECTION_PHOTOS_DIR: str = "var/inspection-photos"
     INSPECTION_PHOTOS_URL_PREFIX: str = "/media/inspection-photos"
+    # Round 8-16B — Huawei OBS (S3-compatible) photo storage.
+    # When OBS_ENDPOINT + OBS_ACCESS_KEY_ID are set, get_photo_storage()
+    # returns OBSPhotoStorage instead of LocalPhotoStorage. Objects are stored
+    # at {OBS_ENV_PREFIX}/{plot_code}/{uuid}.webp inside OBS_BUCKET_NAME.
+    # Presigned URLs (expiry: OBS_PRESIGNED_EXPIRY_SECONDS) are used for
+    # the download route — objects remain private; no public-read ACL required.
+    OBS_ENDPOINT: str = ""           # e.g. "obs.ap-southeast-2.myhuaweicloud.com"
+    OBS_ACCESS_KEY_ID: str = ""
+    OBS_SECRET_ACCESS_KEY: str = ""
+    OBS_BUCKET_NAME: str = ""
+    OBS_ENV_PREFIX: str = "UAT"      # "PROD" or "UAT"
+    OBS_PRESIGNED_EXPIRY_SECONDS: int = 900  # 15 min
+    # Explicit connect+read timeout for every OBS SDK call (put/delete/sign).
+    # The SDK's own ObsClient default (60s) is unbounded enough to hold a
+    # request handler open uncomfortably long on a network hiccup; tightened
+    # here rather than left implicit so it shows up as a real, documented
+    # config knob instead of "whatever this SDK version happens to default
+    # to."
+    OBS_TIMEOUT_SECONDS: int = 30
     # Round 8-9A — per-Plot inspection password ("รหัสยืนยันแปลง").
     # PLOT_ACCESS_PASSWORD_PEPPER is the DEDICATED server-side key for the
     # HMAC-SHA256 blind index (app/auth/plot_access_password.py). It is NOT

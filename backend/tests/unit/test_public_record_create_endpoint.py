@@ -559,9 +559,12 @@ async def test_with_photos_success_saves_four_photos_onto_the_record(tmp_path: P
     assert len(list(tmp_path.iterdir())) == 4
 
 
-async def test_with_photos_too_many_photos_rejected_422_before_touching_db() -> None:
+async def test_with_photos_too_many_photos_rejected_422_before_touching_db(tmp_path: Path) -> None:
     """Photos are optional (0..5) now — >5 is the remaining wrong-count case
-    on this multipart path (a zero-photo submit uses the JSON endpoint)."""
+    on this multipart path (a zero-photo submit uses the JSON endpoint).
+    get_photo_storage is mocked to LocalPhotoStorage — real settings would
+    otherwise decide which backend this exercises, which isn't this test's
+    concern (it's asserting create_record never runs)."""
     supplier = _supplier()
     plot = _plot(supplier.id)
     token = _token(plot, supplier)
@@ -571,6 +574,9 @@ async def test_with_photos_too_many_photos_rejected_422_before_touching_db() -> 
          patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
          patch(f"{_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_MODULE}.set_public_record_rls_context", AsyncMock()), \
+         patch(f"{_MODULE}.get_photo_storage", MagicMock(
+             return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
+         )), \
          patch(f"{_MODULE}.record_repo.create_record", AsyncMock()) as mocked_create:
         with pytest.raises(HTTPException) as exc_info:
             await _create_with_photos(
@@ -582,7 +588,7 @@ async def test_with_photos_too_many_photos_rejected_422_before_touching_db() -> 
     mocked_create.assert_not_awaited()
 
 
-async def test_with_photos_non_image_file_rejected_400() -> None:
+async def test_with_photos_non_image_file_rejected_400(tmp_path: Path) -> None:
     supplier = _supplier()
     plot = _plot(supplier.id)
     token = _token(plot, supplier)
@@ -592,7 +598,10 @@ async def test_with_photos_non_image_file_rejected_400() -> None:
     with patch(f"{_MODULE}.supplier_repo.get_supplier", AsyncMock(return_value=supplier)), \
          patch(f"{_MODULE}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
          patch(f"{_MODULE}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_MODULE}.set_public_record_rls_context", AsyncMock()):
+         patch(f"{_MODULE}.set_public_record_rls_context", AsyncMock()), \
+         patch(f"{_MODULE}.get_photo_storage", MagicMock(
+             return_value=LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
+         )):
         with pytest.raises(HTTPException) as exc_info:
             await _create_with_photos(
                 request=AsyncMock(), payload=payload_json, photos=photos, db=_mock_db(),

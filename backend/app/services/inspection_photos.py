@@ -1,10 +1,12 @@
 """Inspection-record photo storage (round 13; download + cleanup round 13.1;
-secure resize/compression round 8-14A; switched to WebP output round 8-14A.1).
+secure resize/compression round 8-14A; switched to WebP output round 8-14A.1;
+Huawei OBS storage round 8-16B).
 
-Local/dev filesystem storage only — object storage (S3/MinIO/Azure Blob) is
-explicitly out of scope. `PhotoStorage` is the seam: swapping in a real
-backend later means writing a new class with `save()`/`delete()`, no changes
-to validation logic or callers (app/api/v1/records.py,
+`PhotoStorage` is the seam between storage backends. `LocalPhotoStorage` is
+the local/dev filesystem backend. `OBSPhotoStorage` (round 8-16B) is the
+Huawei OBS (S3-compatible) backend; it is enabled when OBS_ENDPOINT and
+OBS_ACCESS_KEY_ID are set in config. Swapping between backends requires no
+changes to validation logic or callers (app/api/v1/records.py,
 app/api/v1/public_records.py).
 
 Round 8-14A — every NEWLY uploaded photo is decoded, EXIF-rotated, colour-
@@ -456,19 +458,17 @@ async def normalize_inspection_photo_async(content: bytes) -> bytes:
 
 class PhotoStorage(Protocol):
     async def save(self, content: bytes, extension: str) -> str:
-        """Persist `content` and return its retrievable URL/path."""
+        """Persist `content` and return its stored URL/key."""
         ...
 
-    async def delete(self, filename: str) -> None:
-        """Remove a previously saved object by its generated filename/key.
+    async def delete(self, stored_url: str) -> None:
+        """Remove a previously saved object by its stored URL (as returned by
+        save()).
 
-        Round 8-14A added this to the protocol (it was already on
-        LocalPhotoStorage) because `validate_and_save_photos` must be able to
-        roll back a partially-written batch: saving photo 3 of 5 and failing
-        would otherwise strand photos 1 and 2 on disk forever, referenced by
-        no record. Deliberately keyed by the opaque filename `save()` minted —
-        NOT a filesystem path — so an object-storage implementation can honour
-        it with a plain delete-by-key.
+        Round 8-14A added this to the protocol because `validate_and_save_photos`
+        must be able to roll back a partially-written batch.
+        Round 8-16B: parameter renamed from `filename` to `stored_url` — local
+        storage extracts the basename internally; OBS storage uses the full key.
 
         Implementations must be idempotent: deleting something already gone is
         a no-op, not an error.
@@ -511,12 +511,16 @@ class LocalPhotoStorage:
             raise FileNotFoundError(filename)
         return candidate
 
-    async def delete(self, filename: str) -> None:
+    async def delete(self, stored_url: str) -> None:
         """Best-effort delete, used only for orphan-cleanup after a failed
-        create. Idempotent: an invalid or already-gone filename is a silent
-        no-op (the caller doesn't need "there was nothing to delete" to be
-        an error) — genuine OS errors (permission, file-in-use) still
-        propagate so the caller can log them."""
+        create. Idempotent: an invalid or already-gone URL is a silent
+        no-op — genuine OS errors (permission, file-in-use) still propagate.
+
+        Round 8-16B: accepts the full stored URL (e.g. `/media/inspection-
+        photos/abc.webp`) and extracts the basename internally, keeping the
+        call site uniform across LocalPhotoStorage and OBSPhotoStorage.
+        """
+        filename = photo_filename_from_url(stored_url)
         if "/" in filename or "\\" in filename or ".." in filename:
             return
         candidate = (self._root / filename).resolve()
@@ -528,10 +532,100 @@ class LocalPhotoStorage:
             pass
 
 
-def get_photo_storage() -> LocalPhotoStorage:
+class OBSPhotoStorage:
+    """Huawei OBS photo storage (round 8-16B).
+
+    Uses the official Huawei OBS SDK (esdk-obs-python) — boto3 was tried first
+    but rejected by OBS with XAmzContentSHA256Mismatch on every PutObject.
+
+    Objects are stored at {env_prefix}/{plot_code}/{uuid}.webp and are PRIVATE.
+    The download route obtains time-limited presigned URLs via get_presigned_url()
+    and returns a 302 redirect.
+
+    All network I/O runs in asyncio.to_thread, matching the pattern for Pillow
+    work in this module.
+    """
+
+    def __init__(
+        self,
+        *,
+        bucket: str,
+        endpoint: str,
+        access_key: str,
+        secret_key: str,
+        env_prefix: str,
+        plot_code: str,
+        timeout: int,
+    ) -> None:
+        from obs import ObsClient
+
+        self._bucket = bucket
+        self._env_prefix = env_prefix.strip("/")
+        self._plot_code = plot_code.strip("/")
+        self._client = ObsClient(
+            access_key_id=access_key,
+            secret_access_key=secret_key,
+            server=endpoint,
+            timeout=timeout,
+        )
+
+    async def save(self, content: bytes, extension: str) -> str:
+        import io
+
+        key = f"{self._env_prefix}/{self._plot_code}/{uuid4().hex}.{extension}"
+
+        def _upload() -> None:
+            resp = self._client.putContent(
+                bucketName=self._bucket,
+                objectKey=key,
+                content=io.BytesIO(content),
+            )
+            if resp.status >= 300:
+                raise OSError(
+                    f"OBS putContent failed: status={resp.status} {resp.errorMessage}"
+                )
+
+        await asyncio.to_thread(_upload)
+        return key
+
+    async def delete(self, stored_url: str) -> None:
+        """Best-effort idempotent delete. stored_url IS the OBS key."""
+        try:
+            await asyncio.to_thread(
+                self._client.deleteObject,
+                bucketName=self._bucket,
+                objectKey=stored_url,
+            )
+        except Exception:  # noqa: BLE001 — cleanup must never mask the original error
+            logger.warning("obs_photo_cleanup_failed", key=stored_url)
+
+    def get_presigned_url(self, key: str) -> str:
+        """Generate a time-limited presigned GET URL for a private object."""
+        from app.core.config import get_settings
+
+        result = self._client.createSignedUrl(
+            method="GET",
+            bucketName=self._bucket,
+            objectKey=key,
+            expires=get_settings().OBS_PRESIGNED_EXPIRY_SECONDS,
+        )
+        return result["signedUrl"]
+
+
+def get_photo_storage(*, plot_code: str = "") -> LocalPhotoStorage | OBSPhotoStorage:
     from app.core.config import get_settings
 
     settings = get_settings()
+    if settings.OBS_ENDPOINT and settings.OBS_ACCESS_KEY_ID:
+        return OBSPhotoStorage(
+            bucket=settings.OBS_BUCKET_NAME,
+            endpoint=settings.OBS_ENDPOINT,
+            access_key=settings.OBS_ACCESS_KEY_ID,
+            secret_key=settings.OBS_SECRET_ACCESS_KEY,
+            env_prefix=settings.OBS_ENV_PREFIX,
+            plot_code=plot_code,
+            timeout=settings.OBS_TIMEOUT_SECONDS,
+        )
     return LocalPhotoStorage(
         root=Path(settings.INSPECTION_PHOTOS_DIR),
         url_prefix=settings.INSPECTION_PHOTOS_URL_PREFIX,
@@ -590,27 +684,25 @@ async def validate_and_save_photos(
             saved.append(await storage.save(content, STORED_PHOTO_EXTENSION))
     except Exception:
         for url in saved:
-            filename = photo_filename_from_url(url)
             try:
-                await storage.delete(filename)
+                await storage.delete(url)
             except Exception:  # noqa: BLE001 — cleanup must never mask the real error
-                logger.warning("inspection_photo_partial_cleanup_failed", filename=filename)
+                logger.warning("inspection_photo_partial_cleanup_failed", url=url)
         raise
     return saved
 
 
-async def cleanup_photos(urls: list[str], storage: LocalPhotoStorage) -> None:
+async def cleanup_photos(urls: list[str], storage: LocalPhotoStorage | OBSPhotoStorage) -> None:
     """Round 13.1 orphan-cleanup guard. Call from an `except` block after
     validate_and_save_photos succeeded but the DB step that follows it
-    failed — best-effort only: a cleanup failure is logged (filename only,
-    never the resolved absolute path or the raw OS error string, which can
-    embed it) and swallowed, never raised, so callers can safely `raise`
-    the original DB/create error immediately afterward without it being
-    replaced by a cleanup problem.
+    failed — best-effort only: a cleanup failure is logged and swallowed,
+    never raised, so callers can safely `raise` the original DB/create error.
+
+    Round 8-16B: storage type widened to LocalPhotoStorage | OBSPhotoStorage;
+    stored_url is passed directly to delete() so each backend resolves it.
     """
     for url in urls:
-        filename = photo_filename_from_url(url)
         try:
-            await storage.delete(filename)
+            await storage.delete(url)
         except Exception:
-            logger.warning("inspection_photo_cleanup_failed", filename=filename)
+            logger.warning("inspection_photo_cleanup_failed", url=url)

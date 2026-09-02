@@ -63,6 +63,12 @@ dependencies = [
     # defaults (and historically the decompression-bomb thresholds), which
     # this module's security guarantees depend on — re-audit before raising it.
     "Pillow>=12.3.0,<13.0.0",
+    # esdk-obs-python (round 8-16B) — Huawei OBS official SDK. Used solely by
+    # OBSPhotoStorage in app/services/inspection_photos.py. boto3 was tried
+    # first but rejected: Huawei OBS does not accept boto3's SigV4 payload-
+    # signing format (XAmzContentSHA256Mismatch on every PutObject), whereas
+    # the OBS SDK's own signing is accepted without error.
+    "esdk-obs-python>=3.26.0",
 ]
 
 [project.optional-dependencies]

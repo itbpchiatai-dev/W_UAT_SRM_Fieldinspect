@@ -6,7 +6,19 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +43,39 @@ PLOT_STATUS_INACTIVE = "inactive"
 
 class Plot(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "plots"
+    __table_args__ = (
+        # Round B (migration 0053) — the concurrency backstop for the Auto Plot
+        # Code running number: one running number per (supplier, YYMM) series
+        # among generated rows. Two imports creating plots for the same
+        # supplier in the same month can both read the same "max running"
+        # before either inserts, and nothing locks a supplier row on a plot
+        # insert — so the DB is what refuses the duplicate, and the losing
+        # transaction surfaces as a clean 409. Explicit name (not the naming
+        # convention) so this metadata and migration 0053 agree exactly.
+        Index(
+            "uq_plots_auto_code_series_running",
+            "plot_code_series_key",
+            "plot_code_running_no",
+            unique=True,
+            postgresql_where=text("plot_code_source = 'auto'"),
+        ),
+        # `ck` naming convention (app/db/base.py) expands these to
+        # ck_plots_<name>; migration 0053 uses those exact full names.
+        CheckConstraint(
+            "plot_code_source IS NULL "
+            "OR plot_code_source IN ('auto', 'manual', 'legacy')",
+            name="plot_code_source_allowed",
+        ),
+        CheckConstraint(
+            "plot_code_source IS DISTINCT FROM 'auto' "
+            "OR (plot_code_series_key IS NOT NULL AND plot_code_running_no IS NOT NULL)",
+            name="auto_plot_code_requires_fields",
+        ),
+        CheckConstraint(
+            "plot_code_running_no IS NULL OR plot_code_running_no >= 1",
+            name="plot_code_running_no_positive",
+        ),
+    )
 
     supplier_id: Mapped[UUID] = mapped_column(
         PgUUID(as_uuid=True),
@@ -39,6 +84,22 @@ class Plot(Base, UUIDMixin, TimestampMixin):
         index=True,
     )
     plot_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    # How plot_code was derived (round B, migration 0053) — 'auto' = generated
+    # by services/plot_code.py as {supplierCode}-{YYMM}-{running}; 'manual' = a
+    # value supplied verbatim; 'legacy' reserved for pre-round-B rows (no code
+    # path writes it, and none is backfilled — see the migration). NULL means
+    # "predates the generator", which is what every existing plot reads.
+    #
+    # plot_code_series_key / plot_code_running_no are SERVER-derived
+    # bookkeeping, never client-supplied (absent from PlotCreate/PlotUpdate):
+    # the key is the (supplier, YYMM) series a running number counts within
+    # (build_plot_code_series_key), and the running number is that plot's
+    # position in it. Both are required on an 'auto' row by
+    # ck_plots_auto_plot_code_requires_fields, so a generated code can always
+    # be re-derived and its sequence continued.
+    plot_code_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    plot_code_series_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    plot_code_running_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     village: Mapped[str | None] = mapped_column(String(255), nullable=True)
     district: Mapped[str | None] = mapped_column(String(255), nullable=True)

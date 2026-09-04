@@ -14,10 +14,24 @@ from app.db.models.plot_access_phone import PlotAccessPhone
 from app.db.models.plot_assignment import PlotAssignment
 from app.db.models.plot_cycle import PlotCycle
 from app.db.models.record import Record
+from app.db.models.supplier import Supplier
 from app.db.models.user import User
 from app.repositories import plot_cycle_repository as plot_cycle_repo
 from app.schemas.plot import PlotCreate, PlotUpdate
+from app.services.plot_code import (
+    build_plot_code_series_key,
+    format_auto_plot_code,
+    month_stamp,
+    normalize_supplier_code_for_plot_code,
+    today_in_bangkok,
+)
 from app.services.plot_qr_key import generate_qr_key
+
+# How a generated plot_code is labelled in plots.plot_code_source (round B,
+# migration 0053). 'legacy' is reserved for pre-round-B rows and is
+# deliberately never written by any code path — those rows keep NULL.
+PLOT_CODE_SOURCE_AUTO = "auto"
+PLOT_CODE_SOURCE_MANUAL = "manual"
 
 
 class PlotAlreadyActiveError(Exception):
@@ -438,7 +452,87 @@ async def list_plot_cycle_labels(
     return [label for label in result.scalars().all() if label]
 
 
-async def create_plot(db: AsyncSession, payload: PlotCreate) -> Plot:
+async def _supplier_code_for_id(db: AsyncSession, supplier_id: UUID) -> str | None:
+    """The AUTHORITATIVE supplier code for an Auto Plot Code (round B).
+
+    Read server-side from the Supplier row the plot will belong to — never from
+    a request body, so a client cannot steer which supplier's code ends up in
+    another supplier's plot code. Sibling of
+    plot_cycle_repository._supplier_code_for_plot, which does the same job for
+    the Auto Lot from an already-loaded Plot."""
+    result = await db.execute(select(Supplier.code).where(Supplier.id == supplier_id))
+    return result.scalar_one_or_none()
+
+
+async def _next_plot_code_running_no(db: AsyncSession, series_key: str) -> int:
+    """The next Auto Plot Code running number for a series: MAX + 1 over
+    existing 'auto' plots sharing the SAME plot_code_series_key — i.e. the same
+    (supplier, YYMM).
+
+    The scope is the series, not the supplier: the month is part of the
+    rendered code, so a new month starts its own sequence at 1 while the same
+    supplier's previous months keep theirs. Rows predating round B carry a NULL
+    series key and so never contribute to (or collide with) a count.
+
+    Nothing serialises two inserts in the same series — a plot insert takes no
+    lock on the supplier — so the partial unique index
+    uq_plots_auto_code_series_running is the real backstop: a losing racer hits
+    IntegrityError, which the endpoint surfaces as a clean 409, never a
+    duplicate code and never a 500. Same contract as
+    plot_cycle_repository._next_lot_running_no."""
+    result = await db.execute(
+        select(func.max(Plot.plot_code_running_no)).where(
+            Plot.plot_code_series_key == series_key,
+            Plot.plot_code_source == PLOT_CODE_SOURCE_AUTO,
+        )
+    )
+    return (result.scalar_one_or_none() or 0) + 1
+
+
+async def _resolve_plot_code(
+    db: AsyncSession,
+    *,
+    supplier_id: UUID,
+    plot_code: str | None,
+    month_source: datetime.date | None,
+) -> tuple[str, str | None, str | None, int | None]:
+    """The single plot-code decision (round B). Returns
+    (plot_code, plot_code_source, plot_code_series_key, plot_code_running_no):
+
+      - a nonblank `plot_code` → MANUAL: stored verbatim (trimmed, upper-cased
+        exactly as before this round), joining no series. Kept so an admin can
+        still mirror a code that exists on paper or in another system; the
+        uq_plots_supplier_code index is what stops it duplicating.
+      - blank/None `plot_code` → AUTO: {supplierCode}-{YYMM}-{running}, where
+        the month comes from `month_source` (the first cycle's planting date
+        when there is one) and falls back to today in Asia/Bangkok.
+
+    Raises PlotCodeSupplierCodeUnusableError / PlotCodeTooLongError from
+    services/plot_code.py rather than inventing a fallback code: a code that
+    could not be rendered correctly is a data problem the caller must surface,
+    never something to paper over with a truncated or sanitised string."""
+    trimmed = plot_code.strip() if isinstance(plot_code, str) else None
+    if trimmed:
+        return trimmed.upper(), PLOT_CODE_SOURCE_MANUAL, None, None
+
+    supplier_code = normalize_supplier_code_for_plot_code(
+        await _supplier_code_for_id(db, supplier_id)
+    )
+    month = month_stamp(month_source or today_in_bangkok())
+    series_key = build_plot_code_series_key(supplier_code, month)
+    running = await _next_plot_code_running_no(db, series_key)
+    generated = format_auto_plot_code(
+        supplier_code=supplier_code, month=month, running=running,
+    )
+    return generated, PLOT_CODE_SOURCE_AUTO, series_key, running
+
+
+async def create_plot(
+    db: AsyncSession,
+    payload: PlotCreate,
+    *,
+    month_source: datetime.date | None = None,
+) -> Plot:
     """Insert a physical Plot only — no planting-cycle/yield-plan data (round
     8.0.4 ownership lock; PlotCreate no longer carries those fields at all).
     The mirror columns (current_crop/current_variety/current_lot_no/
@@ -446,10 +540,26 @@ async def create_plot(db: AsyncSession, payload: PlotCreate) -> Plot:
     PlotCycle is created for this plot (plot_cycle_repository.create_cycle
     syncs them) — see POST /plots/with-cycle for the atomic plot+first-cycle
     create flow.
-    """
+
+    Round B — `payload.plot_code` is optional. Blank/omitted means "generate
+    one" ({supplierCode}-{YYMM}-{running}); a value is still honoured verbatim
+    and recorded as 'manual'. `month_source` lets the plot+first-cycle flow
+    stamp the code with the CYCLE's planting month rather than the day the row
+    happened to be created — a plot created in April for a May planting should
+    read 2605, because that is the season everyone will file it under. Omitted
+    (plain POST /plots, no cycle) it falls back to today in Asia/Bangkok."""
+    resolved_code, code_source, series_key, running = await _resolve_plot_code(
+        db,
+        supplier_id=payload.supplier_id,
+        plot_code=payload.plot_code,
+        month_source=month_source,
+    )
     plot = Plot(
         supplier_id=payload.supplier_id,
-        plot_code=payload.plot_code.strip().upper(),
+        plot_code=resolved_code,
+        plot_code_source=code_source,
+        plot_code_series_key=series_key,
+        plot_code_running_no=running,
         name=payload.name.strip(),
         village=payload.village,
         district=payload.district,

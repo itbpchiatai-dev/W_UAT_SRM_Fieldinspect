@@ -70,6 +70,10 @@ from app.schemas.plot_import import (
 from app.services import master_data_validation, plot_import, plot_import_report
 from app.services.excel_workbook import Cell, CellStyle, StyledCell, build_xlsx
 from app.services.lot_number import AutoLotMissingComponentError, LotNumberTooLongError
+from app.services.plot_code import (
+    PlotCodeSupplierCodeUnusableError,
+    PlotCodeTooLongError,
+)
 from app.services.loggers.activity_logger import ActivityLogger
 
 router = APIRouter(tags=["plots"])
@@ -83,6 +87,20 @@ _AUTO_LOT_FIELD_LABELS = {
     "supplierCode": "รหัส Supplier ของแปลง",
     "pCode": "P.Code",
 }
+
+
+def _plot_code_supplier_detail(supplier_code: str | None) -> str:
+    """Thai 422 detail for PlotCodeSupplierCodeUnusableError (round B).
+
+    Says which supplier to fix and what the rule is. The supplier code is
+    stored master data, not user-submitted input, so naming it is safe and is
+    the only way the message is actionable."""
+    shown = supplier_code.strip() if supplier_code and supplier_code.strip() else "(ว่าง)"
+    return (
+        f"รหัส Supplier \"{shown}\" ใช้สร้างรหัสแปลงอัตโนมัติไม่ได้ "
+        "ต้องเป็น A-Z, 0-9, '-' หรือ '_' เท่านั้น และขึ้นต้นด้วยตัวอักษรหรือตัวเลข "
+        "กรุณาแก้รหัส Supplier ที่เมนู Supplier ก่อน หรือกรอกรหัสแปลงเอง"
+    )
 
 
 def _auto_lot_missing_detail(missing: tuple[str, ...]) -> str:
@@ -1518,10 +1536,31 @@ async def create_plot(
     if scope == "supplier" and str(payload.supplier_id) != scope_supplier_id:
         raise HTTPException(status_code=403, detail="Cannot create a plot for another supplier")
 
-    existing = await repo.get_plot_by_code(db, payload.supplier_id, payload.plot_code)
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="Plot code already exists for this supplier")
-    plot = await repo.create_plot(db, payload)
+    # Round B — only a SUPPLIED code can collide here. A blank one is about to
+    # be generated, and the generator draws the next free running number in the
+    # supplier's month series, so there is nothing to pre-check; the partial
+    # unique index is what settles a race (mapped to 409 below).
+    if payload.plot_code and payload.plot_code.strip():
+        existing = await repo.get_plot_by_code(db, payload.supplier_id, payload.plot_code)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Plot code already exists for this supplier")
+    try:
+        plot = await repo.create_plot(db, payload)
+    except PlotCodeSupplierCodeUnusableError as exc:
+        # The supplier's stored code cannot be embedded in a plot code. Naming
+        # it is the point — it is master data an admin can go and fix, not
+        # user-submitted input being echoed back.
+        raise HTTPException(
+            status_code=422, detail=_plot_code_supplier_detail(exc.supplier_code),
+        ) from exc
+    except PlotCodeTooLongError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        # uq_plots_auto_code_series_running (a lost running-number race) or
+        # uq_plots_supplier_code — a clean 409 either way, never a 500.
+        raise HTTPException(
+            status_code=409, detail="Conflict assigning the plot code",
+        ) from exc
     return _to_read(plot)
 
 
@@ -1567,9 +1606,12 @@ async def create_plot_with_cycle(
     if scope == "supplier" and str(payload.plot.supplier_id) != scope_supplier_id:
         raise HTTPException(status_code=403, detail="Cannot create a plot for another supplier")
 
-    existing = await repo.get_plot_by_code(db, payload.plot.supplier_id, payload.plot.plot_code)
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="Plot code already exists for this supplier")
+    # Round B — see POST /plots: a blank code is generated, so only a supplied
+    # one can be pre-checked for a duplicate.
+    if payload.plot.plot_code and payload.plot.plot_code.strip():
+        existing = await repo.get_plot_by_code(db, payload.plot.supplier_id, payload.plot.plot_code)
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Plot code already exists for this supplier")
 
     nc = payload.cycle
     # Round 8-15D — a brand-new cycle's crop/variety (if given) must exist and
@@ -1583,7 +1625,12 @@ async def create_plot_with_cycle(
         else None
     )
     try:
-        plot = await repo.create_plot(db, payload.plot)
+        # Round B — the generated code is stamped with the CYCLE's planting
+        # month, not the day the row happens to be created: a plot registered
+        # in April for a May planting reads JPS-2605-…, which is the season
+        # everyone will file it under. With no planting date the repository
+        # falls back to today in Asia/Bangkok.
+        plot = await repo.create_plot(db, payload.plot, month_source=nc.planting_date)
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
             crop=nc.crop, variety=nc.variety, cycle_label=nc.cycle_label,

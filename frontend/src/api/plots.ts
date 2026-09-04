@@ -55,6 +55,11 @@ export interface PlotSummary {
   supplierCode: string;
   supplierName: string;
   plotCode: string;
+  /** Round B — how plotCode was derived: 'auto' (server-generated
+   * {supplierCode}-{YYMM}-{running}), 'manual' (supplied verbatim), or null for
+   * a plot created before the generator. Read-only; never sent. Optional so an
+   * older cached response still typechecks. */
+  plotCodeSource?: 'auto' | 'manual' | 'legacy' | null;
   name: string;
   village: string | null;
   district: string | null;
@@ -135,6 +140,11 @@ export interface PlotDetail {
   supplierCode: string;
   supplierName: string;
   plotCode: string;
+  /** Round B — how plotCode was derived: 'auto' (server-generated
+   * {supplierCode}-{YYMM}-{running}), 'manual' (supplied verbatim), or null for
+   * a plot created before the generator. Read-only; never sent. Optional so an
+   * older cached response still typechecks. */
+  plotCodeSource?: 'auto' | 'manual' | 'legacy' | null;
   name: string;
   village: string | null;
   district: string | null;
@@ -278,7 +288,11 @@ export interface PlotCycleLabelListParams {
  */
 export interface PlotCreatePayload {
   supplierId: string;
-  plotCode: string;
+  // Round B — OPTIONAL. Send null (or omit) to have the backend generate the
+  // code as {supplierCode}-{YYMM}-{running}, e.g. "JPS-2605-001"; send a value
+  // to keep using one that already exists on paper, which is stored verbatim
+  // (trimmed + upper-cased) and tagged plotCodeSource: 'manual'.
+  plotCode?: string | null;
   name: string;
   village?: string | null;
   district?: string | null;
@@ -857,6 +871,12 @@ export interface PlotImportRowResult {
   // resultLotNo/resultLotNoSource/resultLotRunningNo.
   lotMode?: string | null;
   proposedLotNo?: string | null;
+  // Round B — the plot code a create_plot_with_cycle row with a BLANK plotCode
+  // will be given, as "{supplierCode}-{YYMM}-###". Display-only and never
+  // authoritative: the running number is allocated at commit under the
+  // supplier's month series. Null when the row supplied its own code, and for
+  // every other action.
+  proposedPlotCode?: string | null;
   resultLotNo?: string | null;
   resultLotNoSource?: string | null;
   resultLotRunningNo?: number | null;

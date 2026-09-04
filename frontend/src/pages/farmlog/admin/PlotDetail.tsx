@@ -18,6 +18,7 @@ import {
   StartCycleModal, EditCycleModal, CloseCycleModal, RolloverCycleModal, lotSourceBadge,
   ReactivatePlotModal, ReactivatePlotWithCycleModal,
 } from '../../../components/farmlog/PlotCycleModals';
+import { plotCodeSourceBadge } from '../../../lib/plot-code';
 import { PlotAccessPhoneModal } from '../../../components/farmlog/PlotAccessPhoneModal';
 import { PlotInspectionPasswordModal } from '../../../components/farmlog/PlotInspectionPasswordModal';
 import { useHasPermission } from '../../../hooks/useHasPermission';
@@ -56,6 +57,24 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
       <dt className="text-xs text-gray-400">{label}</dt>
       <dd className="text-sm font-medium text-gray-800">{value ?? <span className="text-gray-300">—</span>}</dd>
     </div>
+  );
+}
+
+/** Round B — the plot's code with its source badge (อัตโนมัติ/กรอกเอง/
+ * ข้อมูลเดิม), the same vocabulary LotValue uses below so a reader learns it
+ * once. A plot created before the generator has no source and shows the code
+ * alone — untagged rather than mislabelled as hand-entered. */
+function PlotCodeValue({ plotCode, source }: { plotCode: string; source?: string | null }) {
+  const badge = plotCodeSourceBadge(source);
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <span className="font-mono">{displayOrDash(plotCode)}</span>
+      {badge && (
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.className}`}>
+          {badge.label}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -1229,7 +1248,10 @@ export function PlotDetail() {
                 "code — name" string, so the three never get conflated. */}
             <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2 lg:grid-cols-3">
               <Field label="ชื่อ Supplier" value={supplierIdentityDisplay(plot.supplierName, plot.supplierCode)} />
-              <Field label="รหัสแปลง" value={displayOrDash(plot.plotCode)} />
+              <Field
+                label="รหัสแปลง"
+                value={<PlotCodeValue plotCode={plot.plotCode} source={plot.plotCodeSource} />}
+              />
               <Field label="ชื่อแปลง" value={displayOrDash(plot.name)} />
             </dl>
 

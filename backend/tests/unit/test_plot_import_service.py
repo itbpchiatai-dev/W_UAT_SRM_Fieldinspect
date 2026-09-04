@@ -134,10 +134,22 @@ async def test_unknown_action_errors() -> None:
     assert "action" in pv.rows[0].message
 
 
-async def test_missing_required_codes_error() -> None:
+async def test_missing_supplier_code_errors() -> None:
     pv = await _preview([_create_row(supplierCode=None, plotCode=None)])
     assert pv.rows[0].status == "error"
-    assert "supplierCode" in pv.rows[0].message and "plotCode" in pv.rows[0].message
+    assert "supplierCode" in pv.rows[0].message
+    # Round B — a BLANK plotCode is no longer an error on a create row: it is
+    # the request to generate one. Only supplierCode is missing here.
+    assert "plotCode" not in pv.rows[0].message
+
+
+async def test_missing_plot_code_still_errors_on_every_other_action() -> None:
+    """Round B — plotCode is how a non-create row ADDRESSES an existing plot,
+    so it stays required there; only create_plot_with_cycle may leave it
+    blank."""
+    pv = await _preview([_create_row(action="update_current_cycle", plotCode=None)])
+    assert pv.rows[0].status == "error"
+    assert "plotCode" in pv.rows[0].message
 
 
 async def test_bad_number_errors() -> None:

@@ -137,6 +137,13 @@ class PlotImportRowResult(CamelBaseModel):
     # All optional/defaulted so older JSON clients are unaffected.
     lot_mode: str | None = None
     proposed_lot_no: str | None = None
+    # Round B — the plot code a create_plot_with_cycle row with a BLANK
+    # plotCode will be given, as "{supplierCode}-{YYMM}-###". Display-only, and
+    # never authoritative: the running number is allocated at commit under the
+    # series, so the "###" is the honest thing to show. None when the row
+    # supplied its own code or is any other action. Defaulted so older JSON
+    # clients are unaffected.
+    proposed_plot_code: str | None = None
     result_lot_no: str | None = None
     result_lot_no_source: str | None = None
     result_lot_running_no: int | None = None

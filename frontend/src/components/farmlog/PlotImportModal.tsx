@@ -609,6 +609,13 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                   เมื่อยืนยันนำเข้าระบบจะเปิดแปลงกลับมาใช้งานและเริ่มรอบปลูกใหม่ในครั้งเดียว
                 </p>
                 <p>
+                  <span className="font-medium text-foreground">รหัสแปลง (plotCode):</span>{' '}
+                  สำหรับ <span className="font-mono">create_plot_with_cycle</span> เว้นว่างได้ —
+                  ระบบจะสร้างให้เป็น <span className="font-mono">{'{รหัส Supplier}-{ปีเดือน}-{เลขรัน}'}</span>{' '}
+                  (เช่น <span className="font-mono">JPS-2605-001</span>) โดยใช้เดือนจากวันที่ปลูก ·
+                  ส่วน action อื่นยังต้องกรอก เพราะใช้ระบุว่าจะแก้แปลงไหน
+                </p>
+                <p>
                   <span className="font-medium text-foreground">กรณีพิเศษ/ไฟล์เก่า:</span>{' '}
                   <span className="font-mono">start_new_cycle</span> และ{' '}
                   <span className="font-mono">close_and_start_new_cycle</span> ยังใช้งานได้เหมือนเดิม
@@ -878,7 +885,22 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                             )}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2">{r.supplierCode ?? '—'}</td>
-                          <td className="whitespace-nowrap px-3 py-2">{r.plotCode ?? '—'}</td>
+                          {/* Round B — a create row may leave plotCode blank
+                              and let the server mint it. Show what it WILL be
+                              ({supplierCode}-{YYMM}-###) rather than a bare
+                              dash, so the user approves a real format; the
+                              "###" is honest — the running number is allocated
+                              at commit, under that supplier's month series. */}
+                          <td className="whitespace-nowrap px-3 py-2">
+                            {r.plotCode ?? (
+                              r.proposedPlotCode ? (
+                                <span className="font-mono text-xs text-green-700">
+                                  {r.proposedPlotCode}
+                                  <span className="ml-1 text-[10px] text-muted-foreground">(ระบบสร้าง)</span>
+                                </span>
+                              ) : '—'
+                            )}
+                          </td>
                           <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{phoneSummary(r)}</td>
                           <td className="px-3 py-2 text-xs text-muted-foreground">
                             <div className="whitespace-nowrap">{r.payload?.cycleLabel ?? '—'}</div>

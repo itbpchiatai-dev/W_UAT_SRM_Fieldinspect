@@ -101,6 +101,11 @@ from app.services.lot_number import (
 )
 from app.services.loggers.activity_logger import ActivityLogger
 from app.services import master_data_validation
+from app.services.plot_code import (
+    month_stamp,
+    preview_auto_plot_code,
+    today_in_bangkok,
+)
 
 # --- Actions --------------------------------------------------------------
 ACTION_CREATE = "create_plot_with_cycle"
@@ -630,6 +635,12 @@ class _RowState:
     result_lot_no: str | None = None
     result_lot_no_source: str | None = None
     result_lot_running_no: int | None = None
+    # Round B — create_plot_with_cycle rows only: the code the server WILL
+    # generate for a blank plotCode cell, rendered as
+    # {supplierCode}-{YYMM}-### (the running number is allocated at commit,
+    # under the series, so a preview never reserves one). None for a row that
+    # supplied its own code, and for every other action.
+    proposed_plot_code: str | None = None
     # final_plot only (round 8-7A):
     #   final_resolved_record_id — the record that WILL be snapshotted (the
     #     server's own "latest active record of this cycle" pick — see
@@ -1126,7 +1137,11 @@ async def _validate_row(
         )
     if not p.supplier_code:
         errors.append("ต้องระบุ supplierCode")
-    if not p.plot_code:
+    # Round B — plotCode is the KEY that addresses an existing plot, so every
+    # action still requires it EXCEPT create_plot_with_cycle, where there is no
+    # existing plot to address and a blank cell means "let the server generate
+    # the code" ({supplierCode}-{YYMM}-{running}).
+    if not p.plot_code and p.action != ACTION_CREATE:
         errors.append("ต้องระบุ plotCode")
     # Round 8-5B — P.Code is required (nonblank) on every action that creates
     # a NEW cycle. update_current_cycle keeps it optional (blank = preserve).
@@ -1275,7 +1290,15 @@ async def _validate_row(
         elif not supplier_code_for_lot:
             errors.append("ไม่พบ Supplier ของแปลง กรุณาตรวจสอบข้อมูลแปลง")
 
-    plot = await plot_repo.get_plot_by_code(db, supplier.id, p.plot_code)
+    # Round B — a create row with a blank plotCode has nothing to look up: its
+    # code does not exist yet. Skipping the lookup (rather than passing "") is
+    # what makes "several new plots for one supplier in one file" work, since
+    # every such row would otherwise resolve to the same empty code.
+    plot = (
+        await plot_repo.get_plot_by_code(db, supplier.id, p.plot_code)
+        if p.plot_code
+        else None
+    )
     if plot is not None:
         state.plot = plot
         state.existing_plot_id = plot.id
@@ -1285,6 +1308,16 @@ async def _validate_row(
             errors.append("ต้องระบุ plotName สำหรับ create_plot_with_cycle")
         if plot is not None:
             errors.append("plotCode นี้มีอยู่แล้วสำหรับ Supplier นี้")
+        # Round B — preview what the server WILL generate for a blank-code row,
+        # so the user approves a real format rather than an empty cell. "###"
+        # stands for the running number, allocated only at commit under the
+        # series — preview never reserves one (same contract as the Auto Lot
+        # preview above).
+        if not p.plot_code:
+            state.proposed_plot_code = preview_auto_plot_code(
+                ctx_supplier_code(state),
+                month_stamp(p.planting_date or today_in_bangkok()),
+            )
         # Round 8-15D — a brand-new plot's first cycle has no "current" pair,
         # so this is always a full new-cycle crop/variety check.
         state.needs_master_data_check = True
@@ -1562,6 +1595,7 @@ def _row_result(state: _RowState) -> PlotImportRowResult:
         current_cycle_label=state.current_cycle_label,
         lot_mode=state.lot_mode,
         proposed_lot_no=state.proposed_lot_no,
+        proposed_plot_code=state.proposed_plot_code,
         result_lot_no=state.result_lot_no,
         result_lot_no_source=state.result_lot_no_source,
         result_lot_running_no=state.result_lot_running_no,
@@ -2010,16 +2044,25 @@ async def _execute_row(
     p = state.parsed
     if p.action == ACTION_CREATE:
         assert state.supplier is not None
-        plot = await plot_repo.create_plot(db, PlotCreate(
-            supplier_id=state.supplier.id,
-            plot_code=p.plot_code or "",
-            name=p.plot_name or "",
-            village=p.village, district=p.district, province=p.province,
-            latitude=p.latitude, longitude=p.longitude, rai=p.rai,
-            # PlotCreate is physical-only (round 8.0.4) — crop/variety/
-            # cycleLabel/plantingDate/plantCount/expectedYield* go to
-            # create_cycle below instead, which syncs the plot mirror.
-        ))
+        plot = await plot_repo.create_plot(
+            db,
+            PlotCreate(
+                supplier_id=state.supplier.id,
+                # Round B — None (not "") when the cell is blank: that is what
+                # asks the repository to generate the code. An empty string
+                # would be a "supplied" code and fail the length rule.
+                plot_code=p.plot_code or None,
+                name=p.plot_name or "",
+                village=p.village, district=p.district, province=p.province,
+                latitude=p.latitude, longitude=p.longitude, rai=p.rai,
+                # PlotCreate is physical-only (round 8.0.4) — crop/variety/
+                # cycleLabel/plantingDate/plantCount/expectedYield* go to
+                # create_cycle below instead, which syncs the plot mirror.
+            ),
+            # The generated code is stamped with the row's planting month —
+            # see create_plot_with_cycle in app/api/v1/plots.py for why.
+            month_source=p.planting_date,
+        )
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
             crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,

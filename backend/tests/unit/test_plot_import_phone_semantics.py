@@ -224,7 +224,10 @@ async def test_commit_create_with_primary_and_additional_calls_replace_after_cyc
     call_order: list[str] = []
     p_sup, p_plot, p_active = _patch_lookups(plot=None)
 
-    async def _create_plot(db, payload):
+    async def _create_plot(db, payload, **kw):
+        # **kw absorbs round B's month_source (the planting month a generated
+        # plot code is stamped with) — this test is about phone ORDERING, not
+        # about how the code is built.
         call_order.append("create_plot")
         return created_plot
 

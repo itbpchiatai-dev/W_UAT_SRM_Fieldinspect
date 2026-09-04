@@ -306,7 +306,13 @@ class PlotCreate(CamelBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     supplier_id: UUID
-    plot_code: str = Field(..., min_length=1, max_length=50)
+    # Round B — OPTIONAL. Omitted, null, or blank/whitespace all mean "let the
+    # server generate one" ({supplierCode}-{YYMM}-{running}, e.g.
+    # "JPS-2605-001"); a nonblank value is still honoured verbatim (trimmed +
+    # upper-cased) and recorded as plot_code_source='manual'. The
+    # plot_code_source/series-key/running-number bookkeeping is SERVER-derived
+    # and intentionally not accepted here.
+    plot_code: str | None = Field(None, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
     village: str | None = Field(None, max_length=255)
     district: str | None = Field(None, max_length=255)
@@ -344,6 +350,12 @@ class PlotRead(CamelBaseModel):
     supplier_code: str = ""
     supplier_name: str = ""
     plot_code: str
+    # Round B — how plot_code was derived: 'auto' (server-generated
+    # {supplierCode}-{YYMM}-{running}), 'manual' (supplied verbatim), or null
+    # for a plot that predates the generator. Read-only and additive: never
+    # accepted from a client, and defaulted so an older row (every existing
+    # plot) serialises as null rather than failing validation.
+    plot_code_source: str | None = None
     name: str
     village: str | None
     district: str | None
@@ -448,6 +460,10 @@ class PlotSummary(CamelBaseModel):
     supplier_code: str = ""
     supplier_name: str = ""
     plot_code: str
+    # Round B — see PlotRead.plot_code_source. Carried in the LIST response too
+    # so the Plots table can tag a hand-entered legacy code without an N+1
+    # per-plot fetch.
+    plot_code_source: str | None = None
     name: str
     village: str | None = None
     district: str | None = None

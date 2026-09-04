@@ -394,7 +394,7 @@ describe('rolloverPlotCycle', () => {
       closeReason: 'เก็บเกี่ยวแล้ว',
       newCycle: {
         poNumber: 'PO25001', pCode: 'Melon-A', cycleLabel: 'jul2026',
-        crop: 'เมล่อน', variety: 'ออเรนจ์', lotNo: 'LOT-02',
+        crop: 'เมล่อน', variety: 'ออเรนจ์',
         plantingDate: '2026-08-01', plantCount: 500,
         expectedYieldFull: 1500, expectedYieldUnit: 'ผล',
       },
@@ -479,7 +479,7 @@ describe('supplierLotNo contract (round 8-12A/8-12B)', () => {
 
     await createPlotCycle('plot-1', {
       poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
-      lotNo: null, supplierLotNo: 'SUP-OWN-1',
+      supplierLotNo: 'SUP-OWN-1',
     });
 
     expect(postSpy).toHaveBeenCalledWith(

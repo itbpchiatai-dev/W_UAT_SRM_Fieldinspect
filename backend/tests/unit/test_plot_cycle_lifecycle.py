@@ -193,42 +193,37 @@ async def test_update_cycle_success_syncs_mirror_not_snapshot() -> None:
          patch(f"{_P}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as mk_clear:
         await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
 
-    # update_cycle(db, plot, cycle, fields) — round 8-5A added `plot` (2nd
-    # positional, for Auto Lot's plot_code). The plot+cycle are threaded
-    # through and only the provided fields are passed (exclude_unset).
-    assert mk_upd.call_args[0][1] is plot
-    assert mk_upd.call_args[0][2] is cycle
-    passed = mk_upd.call_args[0][3]
+    # update_cycle(db, cycle, fields) — round A dropped the `plot` argument
+    # round 8-5A had added for Auto Lot resolution, since an edit no longer
+    # resolves a lot at all. The cycle is threaded through and only the
+    # provided fields are passed (exclude_unset).
+    assert mk_upd.call_args[0][1] is cycle
+    passed = mk_upd.call_args[0][2]
     assert passed == {"crop": "ทุเรียน", "expected_yield_full": 500}
     mk_sync.assert_awaited_once()
     # editing a plan must NOT wipe the plot's latest inspection status
     mk_clear.assert_not_awaited()
 
 
-async def test_update_cycle_auto_lot_missing_component_maps_422() -> None:
-    """Round 8-5B.1 (message updated round 8-12A) — an edit asked to regenerate
-    an Auto Lot but a V2 component is blank. Clean 422 naming the FIELD, never
-    a 500 and never a cleared lot."""
-    from app.services.lot_number import AutoLotMissingComponentError
-
+async def test_update_cycle_cannot_ask_for_a_lot_at_all() -> None:
+    """Round A — the edit endpoint used to accept lotNo and could be asked to
+    regenerate an Auto Lot (which then 422'd when a V2 component was blank).
+    That whole interaction is gone: PlotCycleUpdate has no lotNo field, so the
+    request cannot even be expressed, and update_cycle is handed no lot key."""
     plot = _plot()
     cycle = _cycle(plot_id=plot.id, status="active")
-    payload = PlotCycleUpdate(lotNo=None)  # regenerate Auto, component missing
+
+    assert "lot_no" not in PlotCycleUpdate.model_fields
+
+    payload = PlotCycleUpdate(crop="ทุเรียน")
     with patch(f"{_P}.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
-         patch(f"{_P}.plot_cycle_repo.update_cycle",
-               AsyncMock(side_effect=AutoLotMissingComponentError(("pCode",)))), \
-         patch(f"{_P}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()) as mk_sync:
-        with pytest.raises(HTTPException) as exc:
-            await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
-    assert exc.value.status_code == 422  # never 500
-    # Round 8-12A.1 — the detail names the field in the user's own words
-    # ("P.Code"), not the raw API key, and never mentions the PO.
-    assert "P.Code" in exc.value.detail
-    assert "PO" not in exc.value.detail
-    # mirror sync must NOT run after a refused update.
-    mk_sync.assert_not_awaited()
+         patch(f"{_P}.plot_cycle_repo.update_cycle", AsyncMock(return_value=cycle)) as mk_upd, \
+         patch(f"{_P}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
+        await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
+
+    assert "lot_no" not in mk_upd.call_args[0][2]
 
 
 async def test_update_cycle_rejects_non_active_409() -> None:

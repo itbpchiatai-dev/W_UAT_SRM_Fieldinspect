@@ -845,13 +845,16 @@ export interface PlotImportRowResult {
   resolvedAction?: string | null;
   currentCycleNo?: number | null;
   currentCycleLabel?: string | null;
-  // Round 8-5B lot fields — optional/additive. On PREVIEW: lotMode ('auto' |
-  // 'manual' | 'preserve') + proposedLotNo. Round 8-12A — an Auto preview
-  // reads "{cycleLabel}-{supplierCode}-{pCode}-###", where ### stands for the
+  // Round 8-5B lot fields — optional/additive. On PREVIEW: lotMode +
+  // proposedLotNo. Round 8-12A — an 'auto' preview reads
+  // "{cycleLabel}-{supplierCode}-{pCode}-###", where ### stands for the
   // running number: it is allocated ONLY at commit, server-side, so the
   // client must render proposedLotNo verbatim and never compute a number.
-  // On COMMIT: the real committed values resultLotNo/resultLotNoSource/
-  // resultLotRunningNo.
+  // Round A — the server now only ever reports 'auto' (a new cycle: it will
+  // mint one) or 'preserve' (an update: the stored lot is left alone).
+  // 'manual' is retired but still handled by lotModeLabel, so a preview from
+  // an older backend keeps rendering. On COMMIT: the real committed values
+  // resultLotNo/resultLotNoSource/resultLotRunningNo.
   lotMode?: string | null;
   proposedLotNo?: string | null;
   resultLotNo?: string | null;
@@ -1315,33 +1318,29 @@ export interface PlotCycleCreatePayload {
   // (Start / Create-plot-with-cycle / Rollover.newCycle). poNumber omitted,
   // null, or blank/whitespace all mean "no PO" — the backend stores null and
   // normalize_po_number never raises on it; a nonblank value is upper-cased
-  // server-side. The backend still 422s a blank/omitted P.Code. lotNo
-  // controls the Auto/Manual lot:
-  //   - lotNo omitted/null  → Auto: the backend generates
-  //     {cycleLabel}-{supplierCode}-{pCode}-{running}. Round 8-12A.1 — it
-  //     REQUIRES a nonblank cycleLabel and pCode (and resolves the supplier
-  //     code itself, server-side); a missing one is a 422, never a cycle with
-  //     no lot. The PO is NOT part of the formula and was never required by
-  //     it (round 8-12A already dropped PO from the formula; round 8-13A
-  //     just stopped requiring PO on the request itself).
-  //   - lotNo nonblank      → Manual: stored verbatim (Manual wins over Auto),
-  //     and needs none of the Auto components (including PO).
-  // NEVER send lotNoSource/lotRunningNo/autoLotSeriesKey — those are
-  // server-derived and autoLotSeriesKey is never even exposed by the API.
+  // server-side. The backend still 422s a blank/omitted P.Code.
+  //
+  // Round A — the system lot is NOT part of this payload at all. The backend
+  // always generates {cycleLabel}-{supplierCode}-{pCode}-{running} itself and
+  // it can never be pre-empted, replaced or regenerated afterwards, so there
+  // is nothing for a client to send. It REQUIRES a nonblank cycleLabel and
+  // pCode (and resolves the supplier code server-side); a missing one is a
+  // 422, never a cycle with no lot. The PO is not part of the formula.
+  // NEVER send lotNo/lotNoSource/lotRunningNo/autoLotSeriesKey — all
+  // server-derived, and autoLotSeriesKey is never even exposed by the API.
   poNumber?: string | null;
   pCode: string;
   crop?: string | null;
   variety?: string | null;
   // Round 8-17A.1 — REQUIRED (nonblank after trim) on every "create a new
   // cycle" flow this payload backs (Start / Create-plot-with-cycle /
-  // Rollover.newCycle / Reactivate-with-cycle), independent of Auto vs
-  // Manual lot. The backend's PlotCycleCreate schema enforces the same rule
+  // Rollover.newCycle / Reactivate-with-cycle) — it is a component of the
+  // generated lot. The backend's PlotCycleCreate schema enforces the same rule
   // server-side (source of truth); this type just stops the client from
   // constructing a request that can't pass. PlotCycle.cycleLabel (the READ
   // model above) stays `string | null` — historical cycles predating this
   // requirement still report null and must keep rendering.
   cycleLabel: string;
-  lotNo?: string | null;
   // Round 8-12A — the Supplier's OWN lot number. Optional and independent:
   // omitting it never affects the system lot. Trimmed server-side; send null
   // (or omit) for "none". Max 100 characters.
@@ -1368,19 +1367,16 @@ export interface PlotCycleCreatePayload {
  * 8-13A); here specifically: omit to preserve, explicit null/blank to clear,
  * a value to change.
  *
- * Lot semantics (round 8-5A; formula V2 round 8-12A/8-12A.1):
- *   - lotNo OMITTED  → the lot is left exactly as it is, even when cycleLabel
- *     or pCode change. Renaming a cycle never silently renumbers its lot.
- *   - lotNo null     → regenerate an Auto Lot from the EFFECTIVE cycleLabel +
- *     pCode (this request's values, else the cycle's own) plus the plot's
- *     supplier. A missing component is a 422 and the existing lot is kept —
- *     the PO is NOT consulted, so a cycle with no PO can still regenerate.
- *   - lotNo nonblank → switch to Manual, stored verbatim.
+ * Lot semantics (round A): the system lot is IMMUTABLE after creation. It is
+ * absent from this payload — an edit cannot rewrite, regenerate or clear it,
+ * not even by changing the cycleLabel/pCode it was built from. A lot number
+ * may already be printed on shipped goods; nothing edited here may move it.
  *
- * supplierLotNo follows the same exclude_unset rule and NEVER regenerates the
- * system lot: omit to keep, send null/'' to clear, send a value to replace.
+ * supplierLotNo — the SUPPLIER's own number — is still fully editable and
+ * follows the exclude_unset rule: omit to keep, send null/'' to clear, send a
+ * value to replace. It never touches the system lot.
  *
- * status, cycleNo, the closed-fields, lotNoSource and lotRunningNo are
+ * status, cycleNo, the closed-fields, lotNo, lotNoSource and lotRunningNo are
  * deliberately absent, as is the server's internal auto-lot series key. */
 export type PlotCycleUpdatePayload = Partial<PlotCycleCreatePayload>;
 

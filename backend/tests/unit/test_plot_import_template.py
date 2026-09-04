@@ -152,7 +152,7 @@ def test_row_one_is_import_columns_action_first() -> None:
 def test_description_mapping_keys_match_import_columns_exactly() -> None:
     assert set(TEMPLATE_COLUMN_DESCRIPTIONS) == set(IMPORT_COLUMNS)
     # Round 8-21A added oracleSupplierCode/oracleInvoice/refAccount -> 33.
-    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 33
+    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 32
 
 
 def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
@@ -161,7 +161,7 @@ def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
     # A description in every one of the 33 columns (round 8-21A added
     # oracleSupplierCode/oracleInvoice/refAccount).
     assert set(desc) == set(IMPORT_COLUMNS)
-    assert len(desc) == 33
+    assert len(desc) == 32
     # A2 is the exact skip marker (this is what the importer keys off).
     assert desc["action"] == TEMPLATE_DESCRIPTION_ACTION
     # Every other cell is exactly its mapped description.
@@ -289,8 +289,8 @@ def test_create_example_row_has_the_full_spec_values() -> None:
         "inspectionPasswordStatus": "not_configured", "newInspectionPassword": "1357",
         "crop": "พริก", "variety": "พริกขี้หนู", "cycleLabel": "jun2026",
         "poNumber": "PO25001", "pCode": "Melon-A",
-        "lotNo": "LOT-01",
-        # Round 8-12A — the Supplier's own lot number, unrelated to Auto Lot.
+        # Round 8-12A — the Supplier's own lot number, unrelated to the system
+        # Lot No. Round A — there is no lotNo column to show at all any more.
         "supplierLotNo": "SUP-LOT-2026-01",
         # Round 8-21A — independent back-office reference fields.
         "oracleSupplierCode": "ORC-SUP-001", "oracleInvoice": "INV-2026-0001",
@@ -303,17 +303,19 @@ def test_create_example_row_has_the_full_spec_values() -> None:
 def test_update_rollover_example_cycle_values_match_spec() -> None:
     _headers, by_no = _example_rows([_fake_supplier("SUP001")])
     assert (by_no[5]["plotCode"], by_no[5]["crop"], by_no[5]["variety"],
-            by_no[5]["cycleLabel"], by_no[5]["lotNo"], by_no[5]["plantingDate"],
+            by_no[5]["cycleLabel"], by_no[5]["plantingDate"],
             by_no[5]["plantCount"], by_no[5]["expectedYieldFull"],
             by_no[5]["expectedYieldUnit"]) == (
-        "P002", "พริก", "พริกหยวก", "may2026", "LOT-03", "2026-05-15",
+        "P002", "พริก", "พริกหยวก", "may2026", "2026-05-15",
         "800", "1000", "kg")
     assert (by_no[6]["plotCode"], by_no[6]["crop"], by_no[6]["variety"],
-            by_no[6]["cycleLabel"], by_no[6]["lotNo"], by_no[6]["plantingDate"],
+            by_no[6]["cycleLabel"], by_no[6]["plantingDate"],
             by_no[6]["plantCount"], by_no[6]["expectedYieldFull"],
             by_no[6]["expectedYieldUnit"]) == (
-        "P003", "แตงโม", "กินรี", "aug2026", "LOT-04", "2026-08-01",
+        "P003", "แตงโม", "กินรี", "aug2026", "2026-08-01",
         "600", "3000", "kg")
+    # Round A — no example row can show a lotNo: the column is gone.
+    assert "lotNo" not in by_no[5] and "lotNo" not in by_no[6]
 
 
 def test_non_create_examples_leave_physical_plot_fields_empty() -> None:

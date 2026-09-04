@@ -1,5 +1,5 @@
-"""Auto/Manual/legacy lot resolution inside plot_cycle_repository.create_cycle
-/ update_cycle, plus the next-running-number helper.
+"""Auto Lot generation inside plot_cycle_repository.create_cycle, plus the
+next-running-number helper.
 
 Round 8-5A introduced the V1 formula {PO}-{plotCode}-{running}; round 8-12A
 replaced it with V2:
@@ -9,6 +9,12 @@ replaced it with V2:
 and moved the running sequence's scope from (plot, PO) to
 (supplier, cycleLabel, pCode) — counted ACROSS plots, because V2's formula has
 no plot code and two plots in one series would otherwise mint identical lots.
+
+Round A removed the Manual branch entirely: a lot is generated when the cycle
+is created and can never be supplied, replaced or regenerated afterwards. The
+tests below therefore assert the ABSENCE of those paths as much as the presence
+of the Auto one. Rows already stored as 'manual'/'legacy' still read back
+normally — see test_update_never_touches_a_legacy_manual_lot.
 
 Mock-db unit tests, same style as test_plot_cycle_repository.py.
 """
@@ -77,28 +83,31 @@ def test_next_running_counts_by_series_not_by_plot() -> None:
     assert "PlotCycle.plot_id" not in src
 
 
-# --- create_cycle: MANUAL wins ----------------------------------------------
+# --- round A: there is no way to supply a lot -------------------------------
 
-async def test_create_manual_lot_sets_source_manual_no_generator() -> None:
-    plot = _plot()
-    db = _mock_db()
-    with patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=1)), \
-         patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk_running, \
-         _patch_supplier(), \
-         patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
-        cycle = await repo.create_cycle(
-            db, plot, lot_no="  HAND-01  ", po_number="PO9",
-            cycle_label="2605", p_code="WM-141",
-        )
+def test_no_write_path_accepts_a_caller_supplied_lot() -> None:
+    """The Manual branch is gone at the SIGNATURE level, not merely unused: no
+    cycle-creating entry point takes a lot_no, so no caller (endpoint, Excel
+    import, script or future round) can pre-empt or overwrite the generated
+    Auto Lot without deliberately re-adding a parameter."""
+    from app.repositories import plot_repository as plot_repo
 
-    # Manual lot is stored verbatim (trimmed), Auto generator is never consulted.
-    assert cycle.lot_no == "HAND-01"
-    assert cycle.lot_no_source == "manual"
-    assert cycle.lot_running_no is None
-    assert cycle.auto_lot_series_key is None      # manual rows join no series
-    mk_running.assert_not_awaited()
-    # PO is still normalized + stored (manual lot doesn't discard the PO).
-    assert cycle.po_number == "PO9"
+    for fn in (repo.create_cycle, repo.rollover_cycle, repo._resolve_lot_fields,
+               plot_repo.reactivate_plot_with_cycle):
+        assert "lot_no" not in inspect.signature(fn).parameters, fn.__name__
+    # supplier_lot_no — the SUPPLIER's own, unrelated number — is untouched and
+    # must stay accepted everywhere the system lot no longer is.
+    assert "supplier_lot_no" in inspect.signature(repo.create_cycle).parameters
+
+
+def test_update_cycle_never_writes_any_lot_column() -> None:
+    """Source-level guard: an edit must not reach the lot columns at all — not
+    via _resolve_lot_fields, and not by assigning them directly."""
+    src = inspect.getsource(repo.update_cycle)
+    assert "_resolve_lot_fields" not in src
+    for column in ("cycle.lot_no", "cycle.lot_no_source",
+                   "cycle.lot_running_no", "cycle.auto_lot_series_key"):
+        assert column not in src, column
 
 
 # --- create_cycle: AUTO V2 --------------------------------------------------
@@ -111,7 +120,7 @@ async def test_create_blank_lot_generates_auto_v2() -> None:
          _patch_supplier(), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
         cycle = await repo.create_cycle(
-            db, plot, lot_no=None, cycle_label="2605", p_code="WM-141",
+            db, plot, cycle_label="2605", p_code="WM-141",
             po_number="po25001",
         )
 
@@ -138,7 +147,7 @@ async def test_create_auto_v2_succeeds_with_no_po_at_all() -> None:
          _patch_supplier(), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
         cycle = await repo.create_cycle(
-            db, plot, lot_no=None, cycle_label="2605", p_code="WM-141",
+            db, plot, cycle_label="2605", p_code="WM-141",
             po_number=None,
         )
 
@@ -147,28 +156,6 @@ async def test_create_auto_v2_succeeds_with_no_po_at_all() -> None:
     assert cycle.lot_no_source == "auto"
     assert cycle.lot_running_no == 1
     assert cycle.auto_lot_series_key is not None
-
-
-async def test_create_manual_lot_succeeds_with_no_po_at_all() -> None:
-    """Round 8-13A — Manual Lot mode with po_number=None: the value is used
-    verbatim, PO stays None (never defaulted/invented), and the Auto
-    generator is never consulted."""
-    plot = _plot()
-    db = _mock_db()
-    with patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk_running, \
-         patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=1)), \
-         _patch_supplier(), \
-         patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
-        cycle = await repo.create_cycle(
-            db, plot, lot_no="HAND-NO-PO", po_number=None, p_code="X",
-        )
-
-    assert cycle.po_number is None
-    assert cycle.lot_no == "HAND-NO-PO"
-    assert cycle.lot_no_source == "manual"
-    assert cycle.lot_running_no is None
-    assert cycle.auto_lot_series_key is None
-    mk_running.assert_not_awaited()
 
 
 async def test_create_auto_keeps_full_p_code_and_arbitrary_label() -> None:
@@ -248,16 +235,17 @@ async def test_two_plots_in_one_series_share_the_running_sequence() -> None:
         ("2605", "  ", "pCode"),
     ],
 )
-async def test_create_blank_lot_without_auto_components_is_rejected(
+async def test_create_without_auto_components_is_rejected(
     label, code, expect_missing,
 ) -> None:
-    """Round 8-12A.1 — a blank lotNo REQUESTS an Auto Lot, so a missing
-    component is an error, not a silent NULL lot.
+    """Round 8-12A.1 — every new cycle gets an Auto Lot, so a missing component
+    is an error, not a silent NULL lot.
 
     Round 8-12A returned (None, None, None, None) here, which created ACTIVE
     cycles carrying no lot identifier at all: the caller asked for a lot and
     got nothing, with no error to act on. Nothing is written now — the
-    caller's transaction rolls back."""
+    caller's transaction rolls back. Round A — there is no hand-typed lot to
+    fall back on any more, so this is the ONLY outcome."""
     plot = _plot()
     db = _mock_db()
     with patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=1)), \
@@ -265,21 +253,21 @@ async def test_create_blank_lot_without_auto_components_is_rejected(
          _patch_supplier(), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
         with pytest.raises(AutoLotMissingComponentError) as exc:
-            await repo.create_cycle(db, plot, lot_no=None, cycle_label=label, p_code=code)
+            await repo.create_cycle(db, plot, cycle_label=label, p_code=code)
 
     assert expect_missing in exc.value.missing
     mk_running.assert_not_awaited()      # no running number was burned
     db.add.assert_not_called()           # no cycle row was staged
 
 
-async def test_create_blank_lot_with_both_components_missing_reports_both() -> None:
+async def test_create_with_both_components_missing_reports_both() -> None:
     plot = _plot()
     db = _mock_db()
     with patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=1)), \
          _patch_supplier(), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
         with pytest.raises(AutoLotMissingComponentError) as exc:
-            await repo.create_cycle(db, plot, lot_no=None, cycle_label=None, p_code=None)
+            await repo.create_cycle(db, plot, cycle_label=None, p_code=None)
     assert exc.value.missing == ("cycleLabel", "pCode")
 
 
@@ -297,19 +285,19 @@ async def test_create_auto_needs_a_resolvable_supplier_code() -> None:
     db.add.assert_not_called()
 
 
-async def test_manual_lot_still_works_without_any_auto_component() -> None:
-    """A Manual lot is complete on its own — it must NOT be blocked by the new
-    Auto-component requirement."""
+async def test_a_missing_component_has_no_manual_escape_hatch() -> None:
+    """Round A — before this round a caller could sidestep the Auto-component
+    requirement by typing a lot by hand. There is no such escape any more: with
+    no resolvable component the cycle simply cannot be created, and the caller
+    must fix the DATA (cycleLabel / P.Code / the plot's supplier) instead."""
     plot = _plot()
     db = _mock_db()
     with patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=1)), \
          _patch_supplier(None), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
-        cycle = await repo.create_cycle(
-            db, plot, lot_no="HAND-1", cycle_label=None, p_code=None,
-        )
-    assert cycle.lot_no == "HAND-1"
-    assert cycle.lot_no_source == "manual"
+        with pytest.raises(AutoLotMissingComponentError):
+            await repo.create_cycle(db, plot, cycle_label=None, p_code=None)
+    db.add.assert_not_called()
 
 
 def test_supplier_code_is_read_server_side_never_from_a_request() -> None:
@@ -402,131 +390,114 @@ def _active_cycle(**over):
     return SimpleNamespace(**base)
 
 
-async def test_update_omitted_lot_leaves_lot_untouched() -> None:
+async def test_update_never_touches_an_auto_lot() -> None:
+    """The core round-A guarantee: an edit leaves lot_no / lot_no_source /
+    lot_running_no / auto_lot_series_key exactly as the cycle was created with,
+    even when the very fields the lot was BUILT from change in the same
+    request. A lot number may already be printed on shipped goods — nothing an
+    admin edits afterwards may move it."""
     db = _mock_db()
-    plot = _plot()
-    cycle = _active_cycle(lot_no="KEEP-ME", lot_no_source="manual")
-    with _patch_supplier():
-        await repo.update_cycle(db, plot, cycle, {"crop": "พริก"})
-    assert cycle.lot_no == "KEEP-ME"
-    assert cycle.lot_no_source == "manual"
-
-
-async def test_update_changing_label_or_p_code_alone_never_rewrites_the_lot() -> None:
-    """Renaming a cycle or fixing a product code must not renumber or rewrite
-    an existing lot identifier — lotNo ABSENT means "leave the lot alone"."""
-    db = _mock_db()
-    plot = _plot()
     cycle = _active_cycle(
         lot_no="2605-SUP010-WM-141-001", lot_no_source="auto", lot_running_no=1,
         auto_lot_series_key="k", cycle_label="2605", p_code="WM-141",
     )
-    with _patch_supplier(), patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk:
-        await repo.update_cycle(db, plot, cycle, {"cycle_label": "26-may", "p_code": "WM-999"})
+    with patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk:
+        await repo.update_cycle(
+            db, cycle,
+            {"cycle_label": "26-may", "p_code": "WM-999", "crop": "พริก"},
+        )
+
+    # The plan fields DID change...
+    assert cycle.cycle_label == "26-may"
+    assert cycle.p_code == "WM-999"
+    assert cycle.crop == "พริก"
+    # ...and the lot did not, in any of its four columns.
     assert cycle.lot_no == "2605-SUP010-WM-141-001"
+    assert cycle.lot_no_source == "auto"
     assert cycle.lot_running_no == 1
     assert cycle.auto_lot_series_key == "k"
+    mk.assert_not_awaited()          # no running number was burned
+
+
+async def test_update_never_touches_a_legacy_manual_lot() -> None:
+    """Rows created before round A can carry lot_no_source='manual'/'legacy'.
+    They keep reading and editing normally; the stored lot is simply frozen
+    like every other one, never rewritten into an Auto lot."""
+    db = _mock_db()
+    cycle = _active_cycle(lot_no="HAND-01", lot_no_source="manual",
+                          cycle_label="2605", p_code="WM-141")
+    with patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk:
+        await repo.update_cycle(db, cycle, {"crop": "พริก"})
+    assert cycle.lot_no == "HAND-01"
+    assert cycle.lot_no_source == "manual"
     mk.assert_not_awaited()
 
 
-async def test_update_manual_lot_sets_source_manual_and_clears_series() -> None:
+async def test_update_leaves_a_lotless_legacy_cycle_lotless() -> None:
+    """A legacy cycle with no lot at all is NOT quietly back-filled by an edit:
+    generating one here would be exactly the extra write path round A removes.
+    It stays as it is until someone deals with it deliberately."""
     db = _mock_db()
-    plot = _plot()
-    cycle = _active_cycle(
-        lot_no="2605-SUP010-WM-141-001", lot_no_source="auto",
-        lot_running_no=1, auto_lot_series_key="k",
-    )
-    with _patch_supplier():
-        await repo.update_cycle(db, plot, cycle, {"lot_no": "  MANUAL-9 "})
-    assert cycle.lot_no == "MANUAL-9"
-    assert cycle.lot_no_source == "manual"
-    assert cycle.lot_running_no is None
-    assert cycle.auto_lot_series_key is None
-
-
-async def test_update_explicit_blank_lot_regenerates_auto_from_effective_values() -> None:
-    db = _mock_db()
-    plot = _plot()
-    cycle = _active_cycle(lot_no="OLD", cycle_label="2605", p_code="WM-141")
-    with _patch_supplier(), \
-         patch(f"{_MOD}._next_lot_running_no", AsyncMock(return_value=7)):
-        await repo.update_cycle(db, plot, cycle, {"lot_no": None})
-    assert cycle.lot_no == "2605-SUP010-WM-141-007"
-    assert cycle.lot_no_source == "auto"
-    assert cycle.lot_running_no == 7
-    assert cycle.auto_lot_series_key is not None
-
-
-async def test_update_regenerate_uses_the_NEW_label_sent_in_the_same_request() -> None:
-    db = _mock_db()
-    plot = _plot()
-    cycle = _active_cycle(lot_no="OLD", cycle_label="2605", p_code="WM-141")
-    with _patch_supplier(), \
-         patch(f"{_MOD}._next_lot_running_no", AsyncMock(return_value=1)):
-        await repo.update_cycle(
-            db, plot, cycle, {"cycle_label": "26-may", "lot_no": None},
-        )
-    assert cycle.lot_no == "26-may-SUP010-WM-141-001"
-
-
-@pytest.mark.parametrize(
-    "fields,expect_missing",
-    [
-        ({"cycle_label": None, "lot_no": None}, "cycleLabel"),
-        ({"p_code": None, "lot_no": None}, "pCode"),
-    ],
-)
-async def test_update_regenerate_without_a_component_raises_and_preserves_lot(
-    fields, expect_missing,
-) -> None:
-    db = _mock_db()
-    plot = _plot()
-    cycle = _active_cycle(lot_no="KEEP", lot_no_source="manual",
+    cycle = _active_cycle(lot_no=None, lot_no_source=None,
                           cycle_label="2605", p_code="WM-141")
-    with _patch_supplier():
-        with pytest.raises(AutoLotMissingComponentError) as exc:
-            await repo.update_cycle(db, plot, cycle, fields)
-    assert expect_missing in exc.value.missing
-    # the existing lot is untouched — never cleared to NULL
-    assert cycle.lot_no == "KEEP"
-    assert cycle.lot_no_source == "manual"
+    with patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk:
+        await repo.update_cycle(db, cycle, {"crop": "พริก"})
+    assert cycle.lot_no is None
+    assert cycle.lot_no_source is None
+    mk.assert_not_awaited()
 
 
-async def test_update_supplier_lot_no_alone_never_regenerates_the_lot() -> None:
+async def test_update_ignores_a_lot_no_key_even_if_a_caller_smuggles_one() -> None:
+    """Defense in depth. The API schema and the Excel importer both stopped
+    sending a lot; if some future caller puts one in `fields` anyway, it is
+    ignored rather than applied — the same treatment status/cycle_no already
+    get (see test_update_ignores_non_editable_keys)."""
     db = _mock_db()
-    plot = _plot()
+    cycle = _active_cycle(lot_no="KEEP", lot_no_source="auto",
+                          lot_running_no=2, auto_lot_series_key="k")
+    await repo.update_cycle(
+        db, cycle,
+        {"lot_no": "SMUGGLED", "lot_no_source": "manual", "lot_running_no": 99},
+    )
+    assert cycle.lot_no == "KEEP"
+    assert cycle.lot_no_source == "auto"
+    assert cycle.lot_running_no == 2
+    assert cycle.auto_lot_series_key == "k"
+
+
+async def test_update_supplier_lot_no_is_still_editable() -> None:
+    """The SUPPLIER's own lot number is the one lot field a user may still
+    change — it never fed the generated lot, so freezing that one does not
+    freeze this one."""
+    db = _mock_db()
     cycle = _active_cycle(
         lot_no="2605-SUP010-WM-141-001", lot_no_source="auto",
         lot_running_no=1, auto_lot_series_key="k",
     )
-    with _patch_supplier(), patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk:
-        await repo.update_cycle(db, plot, cycle, {"supplier_lot_no": " NEW-SUP-1 "})
+    with patch(f"{_MOD}._next_lot_running_no", AsyncMock()) as mk:
+        await repo.update_cycle(db, cycle, {"supplier_lot_no": " NEW-SUP-1 "})
     assert cycle.supplier_lot_no == "NEW-SUP-1"
-    assert cycle.lot_no == "2605-SUP010-WM-141-001"
+    assert cycle.lot_no == "2605-SUP010-WM-141-001"     # system lot unaffected
     assert cycle.lot_running_no == 1
     mk.assert_not_awaited()
 
 
 async def test_update_can_clear_supplier_lot_no_explicitly() -> None:
     db = _mock_db()
-    plot = _plot()
     cycle = _active_cycle(supplier_lot_no="OLD-SUP")
-    with _patch_supplier():
-        await repo.update_cycle(db, plot, cycle, {"supplier_lot_no": None})
+    await repo.update_cycle(db, cycle, {"supplier_lot_no": None})
     assert cycle.supplier_lot_no is None
 
 
 async def test_update_ignores_non_editable_keys() -> None:
-    plot = _plot()
     cycle = _active_cycle(status="active")
     db = _mock_db()
     # status/cycle_no/closed_* are never editable via update_cycle, and the
     # INTERNAL series key can never be set by a caller either.
-    with _patch_supplier():
-        await repo.update_cycle(
-            db, plot, cycle,
-            {"status": "harvested", "cycle_no": 99, "auto_lot_series_key": "hack"},
-        )
+    await repo.update_cycle(
+        db, cycle,
+        {"status": "harvested", "cycle_no": 99, "auto_lot_series_key": "hack"},
+    )
     assert cycle.status == "active"
     assert cycle.auto_lot_series_key is None
 

@@ -255,13 +255,17 @@ def test_resolve_lot_fields_no_longer_takes_an_auto_required_flag() -> None:
 @pytest.mark.parametrize("blank_lot", [None, "", "   "])
 async def test_every_blank_lot_form_requests_an_auto_lot(blank_lot) -> None:
     """None, "" and "   " must all mean the same thing — a user cannot land in
-    a lotless cycle by typing spaces."""
+    a lotless cycle by typing spaces.
+
+    Round A — the parameter under test moved from lotNo (gone) to the Auto
+    components themselves, which is where a blank can still arrive from a
+    form or a spreadsheet cell."""
     db, plot = _mock_db(), _plot()
     with patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=1)), \
          patch(f"{_MOD}._supplier_code_for_plot", AsyncMock(return_value="SUP010")), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()):
         with pytest.raises(AutoLotMissingComponentError):
-            await repo.create_cycle(db, plot, lot_no=blank_lot, cycle_label=None, p_code="X")
+            await repo.create_cycle(db, plot, cycle_label=blank_lot, p_code="X")
     db.add.assert_not_called()
 
 
@@ -322,46 +326,55 @@ def test_endpoints_map_integrity_error_to_409_not_500() -> None:
     index raise the same IntegrityError, and neither may become a 500."""
     import app.api.v1.plots as plots_mod
 
-    for fn in (plots_mod.start_plot_cycle, plots_mod.update_plot_cycle,
-               plots_mod.rollover_plot_cycle):
+    # Round A — update_plot_cycle is deliberately NOT in this list any more: an
+    # edit writes no lot column at all, so neither V2 index can fire there. The
+    # handlers live on every endpoint that CREATES a cycle, which is the only
+    # place a lot is minted and therefore the only place a race exists.
+    for fn in (plots_mod.start_plot_cycle, plots_mod.rollover_plot_cycle,
+               plots_mod.create_plot_with_cycle,
+               plots_mod.reactivate_plot_with_cycle):
         src = inspect.getsource(fn)
         assert "except IntegrityError" in src, f"{fn.__name__} must catch it"
         assert "status_code=409" in src
 
+    edit_src = inspect.getsource(plots_mod.update_plot_cycle)
+    assert "_resolve_lot_fields" not in edit_src
+    assert "lot_no=" not in edit_src
+
 
 async def test_a_losing_racer_gets_409_and_writes_nothing() -> None:
     """Simulates the DB backstop firing: whichever transaction loses the race
-    on either V2 index gets a clean conflict, never a duplicate lot."""
+    on either V2 index gets a clean conflict, never a duplicate lot.
+
+    Round A — driven through start_plot_cycle rather than update_plot_cycle:
+    minting a lot is now the ONLY moment two transactions can collide, because
+    an edit never writes one."""
     import app.api.v1.plots as plots_mod
 
     plot = SimpleNamespace(id=uuid4(), plot_code="P001", supplier_id=uuid4(),
                            is_active=True)
-    cycle = SimpleNamespace(id=uuid4(), plot_id=plot.id, status="active",
-                            cycle_label="2605", p_code="WM-141", lot_no="L",
-                            lot_no_source="auto", lot_running_no=1,
-                            auto_lot_series_key="k", po_number=None,
-                            supplier_lot_no=None, crop=None, variety=None)
     boom = IntegrityError("stmt", {}, Exception("uq_plot_cycles_auto_lot_v2_lot_no"))
 
     db = MagicMock()
     db.flush = AsyncMock()
     with patch("app.api.v1.plots.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch("app.api.v1.plots.plot_cycle_repo.get_cycle_for_plot",
-               AsyncMock(return_value=cycle)), \
          patch("app.api.v1.plots.plot_cycle_repo.get_active_cycle_for_plot_for_update",
-               AsyncMock(return_value=cycle)), \
-         patch("app.api.v1.plots.plot_cycle_repo.update_cycle",
+               AsyncMock(return_value=None)), \
+         patch("app.api.v1.plots.master_data_validation.assert_crop_variety_valid",
+               AsyncMock()), \
+         patch("app.api.v1.plots.plot_cycle_repo.create_cycle",
                AsyncMock(side_effect=boom)), \
-         patch("app.api.v1.plots.plot_cycle_repo.sync_plot_mirror_from_cycle",
-               AsyncMock()) as mk_sync:
-        from app.schemas.plot import PlotCycleUpdate
+         patch("app.api.v1.plots.plot_cycle_repo.clear_plot_inspection_snapshot",
+               AsyncMock()) as mk_clear:
+        from app.schemas.plot import PlotCycleCreate
         with pytest.raises(HTTPException) as exc:
-            await plots_mod.update_plot_cycle(
-                plot_id=plot.id, cycle_id=cycle.id,
-                payload=PlotCycleUpdate(lotNo=None), db=db,
+            await plots_mod.start_plot_cycle(
+                plot_id=plot.id,
+                payload=PlotCycleCreate(cycleLabel="2605", pCode="WM-141"),
+                db=db,
             )
     assert exc.value.status_code == 409
-    mk_sync.assert_not_awaited()      # nothing downstream ran
+    mk_clear.assert_not_awaited()      # nothing downstream ran
 
 
 def test_no_advisory_lock_was_introduced() -> None:

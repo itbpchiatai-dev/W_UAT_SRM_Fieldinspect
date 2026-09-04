@@ -12,7 +12,7 @@ import type { UseFormRegister, UseFormWatch, UseFormSetValue, FieldErrors, Path 
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Archive, Loader2, Pencil, PowerOff, RefreshCw, Sprout, Unlock } from 'lucide-react';
+import { Archive, Loader2, Lock, Pencil, PowerOff, RefreshCw, Sprout, Unlock } from 'lucide-react';
 import {
   createPlotCycle,
   updatePlotCycle,
@@ -36,12 +36,12 @@ const optionalNumberInput = z.preprocess(
 );
 
 // Plan fields shared by every cycle form (Start/Edit/Rollover/Create-plot).
-// Round 8-5B split the schema by MODE because pCode requiredness and the
-// lot-mode options differ; round 8-13B made poNumber optional in BOTH modes
-// (it was required on create through round 8-12C):
+// Round 8-5B split the schema by MODE because pCode requiredness differs;
+// round 8-13B made poNumber optional in BOTH modes (it was required on create
+// through round 8-12C); round A removed the lot-mode selector from both:
 //   - CREATE (cyclePlanFields): poNumber OPTIONAL (blank = no PO); pCode
-//     REQUIRED nonblank; lotMode ∈ {auto, manual}. Used by Start,
-//     Rollover.newCycle, and Plots.tsx's Create Plot "รอบปลูกแรก".
+//     REQUIRED nonblank. Used by Start, Rollover.newCycle, and Plots.tsx's
+//     Create Plot "รอบปลูกแรก".
 //   - EDIT (cycleEditPlanFields): poNumber + pCode OPTIONAL. pCode blank =
 //     preserve (unchanged); poNumber blank = CLEAR the stored PO — see
 //     toEditPayload, which always sends poNumber (never omits it) for
@@ -56,10 +56,11 @@ const planCoreFields = {
   // blank-means-keep rule, so nothing forces the user to fill this in).
   variety: z.string().max(100).optional().or(z.literal('')),
   cycleLabel: z.string().max(100).optional().or(z.literal('')),
-  lotNo: z.string().max(100).optional().or(z.literal('')),
   // Round 8-12A — the SUPPLIER's own lot number. Always optional, in every
   // mode: it never feeds the Auto Lot formula, so requiring it would block a
-  // cycle for data the system does not need.
+  // cycle for data the system does not need. Round A — it is also the ONLY
+  // lot field on this form: the system Lot No is generated server-side and
+  // has no input at all.
   supplierLotNo: z.string().max(100).optional().or(z.literal('')),
   // Round 8-21A/8-21B — three independent, OPTIONAL back-office reference
   // fields, same "always optional in every mode" rule as supplierLotNo:
@@ -78,7 +79,6 @@ export const cyclePlanFields = {
   // an error. pCode stays required nonblank.
   poNumber: z.string().max(100).optional().or(z.literal('')),
   pCode: z.string().trim().min(1, 'กรุณากรอก P.Code').max(100),
-  lotMode: z.enum(['auto', 'manual']).default('auto'),
   ...planCoreFields,
   // Round 8-26C — variety is REQUIRED when CREATING a cycle, overriding
   // planCoreFields above. P.Code is required on create and is now derived
@@ -91,7 +91,6 @@ export const cyclePlanFields = {
 export const cycleEditPlanFields = {
   poNumber: z.string().max(100).optional().or(z.literal('')),
   pCode: z.string().max(100).optional().or(z.literal('')),
-  lotMode: z.enum(['keep', 'auto', 'manual']).default('keep'),
   ...planCoreFields,
 };
 
@@ -134,25 +133,25 @@ export function requireCycleLabel(
   }
 }
 
-/** Round 8-12A.1 — the Auto Lot components the BACKEND requires when a form
- * asks it to generate a lot ({cycleLabel}-{supplierCode}-{pCode}-{running}).
- * The supplier code is resolved server-side and is never a form field, so the
- * form can only check the one the user actually types here. Blocking means
- * the user sees which field is missing instead of a 422 after submit.
+/** Round 8-12A.1 — the Auto Lot components the BACKEND requires to generate a
+ * lot ({cycleLabel}-{supplierCode}-{pCode}-{running}). The supplier code is
+ * resolved server-side and is never a form field, so the form can only check
+ * the one the user actually types here. Blocking means the user sees which
+ * field is missing instead of a 422 after submit.
  *
- * cycleLabel is deliberately NOT checked here any more (round 8-17A.1):
- * requireCycleLabel above now requires it unconditionally on every submit,
- * Auto or Manual, so a second Auto-only check on the same field would only
- * duplicate that issue.
+ * cycleLabel is deliberately NOT checked here (round 8-17A.1):
+ * requireCycleLabel above already requires it unconditionally on every
+ * submit, so a second check on the same field would only duplicate the issue.
  *
- * `effective` lets EDIT fall back to the cycle's stored pCode: the user may
- * regenerate a lot without retyping a P.Code they never changed. */
+ * Round A — this no longer depends on a lot mode. A new cycle ALWAYS gets a
+ * generated lot, so its components are always required; and an edit never
+ * regenerates one, so `effective` exists only to let EDIT fall back to the
+ * cycle's stored pCode when the user never retyped it. */
 export function requireAutoLotComponents(
-  values: { lotMode?: 'auto' | 'manual' | 'keep'; pCode?: string },
+  values: { pCode?: string },
   ctx: z.RefinementCtx,
   effective?: { pCode?: string | null },
 ) {
-  if (values.lotMode !== 'auto') return;
   const code = values.pCode?.trim() || effective?.pCode?.trim() || '';
   if (!code) {
     ctx.addIssue({
@@ -163,45 +162,43 @@ export function requireAutoLotComponents(
   }
 }
 
-// Full plan refine — the yield-unit rule PLUS the Manual-lot rule: choosing
-// "กรอก Lot เอง" requires a nonblank Lot No (Manual wins over Auto only when a
-// real value is supplied). Round 8-12B — Auto now also requires cycleLabel +
-// P.Code, mirroring the backend's own rule.
+// Full plan refine — the yield-unit rule PLUS the lot-component rules.
+// Round 8-12B — the generated lot requires cycleLabel + P.Code, mirroring the
+// backend's own rule. Round A dropped the Manual-lot rule with the mode
+// selector itself: there is no hand-typed Lot No to validate any more.
 export function refineCyclePlan(
   values: {
     expectedYieldFull?: number; expectedYieldUnit?: string;
-    lotMode?: 'auto' | 'manual' | 'keep'; lotNo?: string;
     cycleLabel?: string; pCode?: string;
   },
   ctx: z.RefinementCtx,
 ) {
   requireUnitWithYield(values, ctx);
   requireCycleLabel(values, ctx);
-  if (values.lotMode === 'manual' && (!values.lotNo || values.lotNo.trim() === '')) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['lotNo'],
-      message: 'กรุณากรอก Lot No ระบบ เมื่อเลือก "กรอก Lot เอง"',
-    });
-  }
   requireAutoLotComponents(values, ctx);
 }
 
 /** EDIT-only refine. Round 8-5B.1 required a PO to regenerate an Auto Lot;
- * round 8-12A dropped the PO from the formula entirely, so that rule is GONE —
- * a cycle with no PO can now regenerate perfectly well. What Auto needs
- * instead is cycleLabel + P.Code, checked by refineCyclePlan above (the edit
- * form pre-fills both from the cycle, so an untouched form already satisfies
- * it). */
+ * round 8-12A dropped the PO from the formula entirely, and round A dropped
+ * regeneration altogether — an edit never touches the lot.
+ *
+ * That is why this is no longer just refineCyclePlan: with no lot to mint, the
+ * Auto components stop being an edit-time requirement. cycleLabel is still
+ * required (it identifies the cycle — round 8-17A.1), but a blank P.Code goes
+ * back to meaning "preserve whatever is stored", which is what keeps a legacy
+ * cycle that never had one editable at all. */
 export function refineEditCyclePlan(
   values: {
-    expectedYieldFull?: number; expectedYieldUnit?: string;
-    lotMode?: 'auto' | 'manual' | 'keep'; lotNo?: string; poNumber?: string;
+    expectedYieldFull?: number; expectedYieldUnit?: string; poNumber?: string;
     cycleLabel?: string; pCode?: string;
   },
   ctx: z.RefinementCtx,
 ) {
-  refineCyclePlan(values, ctx);
+  requireUnitWithYield(values, ctx);
+  requireCycleLabel(values, ctx);
+  // Deliberately NOT requireAutoLotComponents: an edit generates no lot, so a
+  // blank P.Code here means "preserve the stored one" (a legacy cycle may not
+  // even have one), never "you are about to mint a lot without it".
 }
 
 export const cycleFormSchema = z.object(cyclePlanFields).superRefine(refineCyclePlan);
@@ -216,11 +213,9 @@ export type CycleEditFormValues = z.infer<typeof cycleEditFormSchema>;
 export interface CyclePlanShape {
   poNumber?: string;
   pCode?: string;
-  lotMode?: 'auto' | 'manual' | 'keep';
   crop?: string;
   variety?: string;
   cycleLabel?: string;
-  lotNo?: string;
   supplierLotNo?: string;
   oracleSupplierCode?: string;
   oracleInvoice?: string;
@@ -237,11 +232,11 @@ function numberOrNull(value: number | undefined): number | null {
 
 // CREATE payload — poNumber trimmed-or-null (round 8-13A/B: optional, never
 // uppercased here — the backend normalizes/upper-cases it); pCode always sent
-// (still required). lotNo follows lotMode: Auto → null (the backend generates
-// {cycleLabel}-{supplierCode}-{pCode}-{running}); Manual → verbatim.
+// (still required). Round A — no lot is sent at all: the backend always
+// generates {cycleLabel}-{supplierCode}-{pCode}-{running} itself.
 // supplierLotNo is sent trimmed, or null when blank — it is independent of the
-// system lot. NEVER sends lotNoSource/lotRunningNo or any auto-lot series key
-// (all server-derived).
+// system lot. NEVER sends lotNo/lotNoSource/lotRunningNo or any auto-lot
+// series key (all server-derived).
 export function toPayload(values: CycleFormValues): PlotCycleCreatePayload {
   return {
     poNumber: values.poNumber?.trim() || null,
@@ -252,7 +247,6 @@ export function toPayload(values: CycleFormValues): PlotCycleCreatePayload {
     // value, so `.trim()` here is always nonblank — never sent as null,
     // matching PlotCycleCreatePayload.cycleLabel's now-required `string`.
     cycleLabel: values.cycleLabel!.trim(),
-    lotNo: values.lotMode === 'manual' ? (values.lotNo?.trim() || null) : null,
     supplierLotNo: values.supplierLotNo?.trim() || null,
     // Round 8-21B — trim-or-null, same convention as supplierLotNo above.
     oracleSupplierCode: values.oracleSupplierCode?.trim() || null,
@@ -272,9 +266,9 @@ export function toPayload(values: CycleFormValues): PlotCycleCreatePayload {
 // form resolves that by making blank always mean "clear". pCode keeps the
 // OLD omit-when-blank/preserve behavior (round 8-13A did not touch it: P.Code
 // stays required on create, and editing it blank is still just "don't touch
-// it", never "clear a required field"). lot follows lotMode: 'keep' omits
-// lotNo entirely (preserve existing), 'auto' sends null (regenerate), 'manual'
-// sends the entered value. Never sends lotNoSource/lotRunningNo.
+// it", never "clear a required field"). Round A — the system lot is never
+// sent in any form: it is immutable once the cycle exists, so an edit simply
+// has nothing to say about it. Never sends lotNoSource/lotRunningNo either.
 export function toEditPayload(values: CycleEditFormValues): PlotCycleUpdatePayload {
   const payload: PlotCycleUpdatePayload = {
     crop: values.crop || null,
@@ -307,18 +301,6 @@ export function toEditPayload(values: CycleEditFormValues): PlotCycleUpdatePaylo
   };
   const pc = values.pCode?.trim();
   if (pc) payload.pCode = pc;
-  if (values.lotMode === 'manual') {
-    payload.lotNo = values.lotNo?.trim() || null;
-  } else if (values.lotMode === 'auto') {
-    // Round 8-12A — ask the backend to regenerate. This is NO LONGER gated on
-    // the PO: the V2 formula doesn't use it, so requiring one would block a
-    // legitimate regenerate on a cycle that has no PO. The components Auto
-    // actually needs (cycleLabel + P.Code) are enforced by
-    // requireAutoLotComponents before submit, and re-checked server-side.
-    payload.lotNo = null;
-  }
-  // 'keep' → leave lotNo unset so the backend preserves the existing lot.
-  // lotNoSource/lotRunningNo and the internal series key are never sent.
   return payload;
 }
 
@@ -446,24 +428,6 @@ function Field({
   );
 }
 
-function SegButton({
-  active, onClick, children,
-}: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
-        active
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-border bg-card text-muted-foreground hover:bg-secondary'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 export function CyclePlanFields<T extends CyclePlanShape>({
   register, errors, watch, setValue, supplierCode, mode = 'create', existingLot,
 }: {
@@ -480,13 +444,10 @@ export function CyclePlanFields<T extends CyclePlanShape>({
   // user never types it here: it is server truth, echoed for display only.
   supplierCode: string;
   mode?: 'create' | 'edit';
-  // Edit only — the cycle's current lot, so the control can offer "เก็บ Lot
-  // เดิม" and show it read-only.
+  // Edit only — the cycle's current lot, shown read-only (round A: an edit can
+  // never change it, so there is nothing to offer but the value itself).
   existingLot?: { lotNo: string | null; lotNoSource: 'auto' | 'manual' | 'legacy' | null };
 }) {
-  const lotMode = (watch('lotMode' as Path<T>) as 'auto' | 'manual' | 'keep' | undefined) ?? 'auto';
-  const setLotMode = (v: 'auto' | 'manual' | 'keep') =>
-    setValue('lotMode' as Path<T>, v as never, { shouldDirty: true, shouldValidate: true });
   const hasExistingLot = mode === 'edit' && !!existingLot?.lotNo;
   const pCodeRequired = mode === 'create';
 
@@ -621,32 +582,33 @@ export function CyclePlanFields<T extends CyclePlanShape>({
         </Field>
       </div>
 
-      {/* Lot No ระบบ — Auto (default) vs Manual, with an extra "เก็บ Lot เดิม"
-          option in edit mode so a plain edit never rewrites the existing lot.
-          Round 8-12B — labelled "Lot No ระบบ" because a cycle now carries TWO
-          lot numbers; this segmented control governs ONLY this one. */}
-      <Field label="Lot No ระบบ" error={errors.lotNo?.message as string | undefined}>
-        <div className="flex flex-wrap gap-2">
-          {hasExistingLot && (
-            <SegButton active={lotMode === 'keep'} onClick={() => setLotMode('keep')}>
-              เก็บ Lot เดิม
-            </SegButton>
-          )}
-          <SegButton active={lotMode === 'auto'} onClick={() => setLotMode('auto')}>
-            {hasExistingLot ? 'สร้าง Auto Lot ใหม่' : 'สร้างอัตโนมัติ'}
-          </SegButton>
-          <SegButton active={lotMode === 'manual'} onClick={() => setLotMode('manual')}>
-            กรอก Lot เอง
-          </SegButton>
-        </div>
-        {lotMode === 'keep' && hasExistingLot && (
-          <p className="mt-1 rounded-md border border-border bg-secondary/40 px-3 py-2 text-sm">
-            {existingLot?.lotNo}
-            <span className="ml-2 text-xs text-muted-foreground">(คงค่าเดิม)</span>
-          </p>
-        )}
-        {lotMode === 'auto' && (
-          <div className="mt-1 rounded-md border border-dashed border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800">
+      {/* Lot No ระบบ — READ-ONLY (round A). There is no mode to choose any
+          more: the server generates the lot when the cycle is created and it
+          never changes afterwards, so this is a display-only panel showing
+          either what WILL be generated (create) or what already exists (edit).
+          Labelled "Lot No ระบบ" because a cycle carries TWO lot numbers; the
+          editable one is Supplier Lot No, its own Field below. */}
+      <Field label="Lot No ระบบ">
+        {hasExistingLot ? (
+          <div className="rounded-md border border-border bg-muted px-3 py-2">
+            <p className="flex flex-wrap items-center gap-2 text-sm">
+              <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="break-all font-mono">{existingLot?.lotNo}</span>
+              {(() => {
+                const badge = lotSourceBadge(existingLot?.lotNoSource ?? null, true);
+                return badge ? (
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.className}`}>
+                    {badge.label}
+                  </span>
+                ) : null;
+              })()}
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              ระบบสร้างให้ตอนเริ่มรอบปลูก — แก้ไขไม่ได้
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800">
             <p className="break-all">
               ระบบจะสร้างให้:{' '}
               <span className="font-mono">
@@ -661,13 +623,6 @@ export function CyclePlanFields<T extends CyclePlanShape>({
               รูปแบบ: ชื่อรอบปลูก-รหัส Supplier-P.Code-เลขรัน · เลขรันจริงระบบจะกำหนดให้ตอนบันทึก
             </p>
           </div>
-        )}
-        {lotMode === 'manual' && (
-          <input
-            {...register('lotNo' as Path<T>)}
-            className="field-input mt-1"
-            placeholder="เช่น LOT-01"
-          />
         )}
       </Field>
 
@@ -790,7 +745,7 @@ export function StartCycleModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<CycleFormValues>({
     resolver: zodResolver(cycleFormSchema),
-    defaultValues: { lotMode: 'auto', poNumber: '', pCode: '' },
+    defaultValues: { poNumber: '', pCode: '' },
   });
 
   const createM = useMutation({ mutationFn: (p: PlotCycleCreatePayload) => createPlotCycle(plotId, p) });
@@ -828,29 +783,18 @@ export function EditCycleModal({
 }: {
   plotId: string; supplierCode: string; cycle: PlotCycle; onClose: () => void; onSaved: () => void;
 }) {
-  // Edit lot-mode default (round 8-5B): a manual cycle opens in Manual with its
-  // value prefilled; a cycle WITH any lot (auto/legacy) opens in "เก็บ Lot เดิม"
-  // so a plain edit never rewrites it; a cycle with NO lot defaults to Auto.
-  const initialLotMode: 'keep' | 'auto' | 'manual' = !cycle.lotNo
-    ? 'auto'
-    : cycle.lotNoSource === 'manual'
-      ? 'manual'
-      : 'keep';
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<CycleEditFormValues>({
     resolver: zodResolver(cycleEditFormSchema),
     values: {
       poNumber: cycle.poNumber ?? '',
       pCode: cycle.pCode ?? '',
-      lotMode: initialLotMode,
       crop: cycle.crop ?? '',
       variety: cycle.variety ?? '',
       cycleLabel: cycle.cycleLabel ?? '',
-      // Prefill the Manual input only when the cycle is already manual; for
-      // keep/auto the lotNo input is hidden and its value unused.
-      lotNo: cycle.lotNoSource === 'manual' ? (cycle.lotNo ?? '') : '',
-      // Round 8-12B — always prefilled, in every lot mode: the supplier's lot
-      // number is independent data, so an edit must show what is stored and
-      // let the user clear it by emptying the box.
+      // Round 8-12B — always prefilled: the supplier's lot number is
+      // independent data, so an edit must show what is stored and let the user
+      // clear it by emptying the box. (The SYSTEM lot has no input at all —
+      // CyclePlanFields renders it read-only from `existingLot`.)
       supplierLotNo: cycle.supplierLotNo ?? '',
       // Round 8-21B — same "always prefilled, clear by emptying" convention.
       oracleSupplierCode: cycle.oracleSupplierCode ?? '',
@@ -971,8 +915,8 @@ type RolloverFormValues = z.infer<typeof rolloverSchema>;
 
 function toRolloverPayload(values: RolloverFormValues): PlotCycleRolloverPayload {
   // The new cycle reuses the shared CREATE payload builder (PO optional,
-  // pCode required, lotMode-driven lotNo) — RolloverFormValues is a superset
-  // of CycleFormValues.
+  // pCode required, no lot — the server generates it) — RolloverFormValues is
+  // a superset of CycleFormValues.
   return {
     closeStatus: values.closeStatus,
     closeReason: values.closeReason?.trim() || null,
@@ -1005,7 +949,7 @@ export function RolloverCycleModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<RolloverFormValues>({
     resolver: zodResolver(rolloverSchema),
-    defaultValues: { closeStatus: 'harvested', closeReason: '', lotMode: 'auto', poNumber: '', pCode: '' },
+    defaultValues: { closeStatus: 'harvested', closeReason: '', poNumber: '', pCode: '' },
   });
 
   const rolloverM = useMutation({
@@ -1197,7 +1141,7 @@ export function ReactivatePlotWithCycleModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<CycleFormValues>({
     resolver: zodResolver(cycleFormSchema),
-    defaultValues: { lotMode: 'auto', poNumber: '', pCode: '' },
+    defaultValues: { poNumber: '', pCode: '' },
   });
 
   const reactivateM = useMutation({

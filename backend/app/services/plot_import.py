@@ -190,10 +190,9 @@ FINAL_PLOT_FIXED_YIELD_UNIT = "kg"
 # reader maps by header NAME (services/excel_reader.py), never position, so
 # an older file uploaded without these two columns simply has no such keys in
 # its row dicts and is read exactly as before (see _parse_row/_str below).
-# Round 8-5B — poNumber/pCode added right after cycleLabel and before lotNo
-# (22 columns total). The reader maps by header NAME, so an older 20-column
-# file simply has no such keys (see _parse_row / old-file handling in
-# _validate_row).
+# Round 8-5B — poNumber/pCode added right after cycleLabel (22 columns total).
+# The reader maps by header NAME, so an older 20-column file simply has no such
+# keys (see _parse_row / old-file handling in _validate_row).
 # Round 8-6J — currentPlotStatus appended last: purely informational (never
 # read by _parse_row / _Parsed below), so an older 22-column file uploaded
 # without it parses exactly as before, and editing this cell in a downloaded
@@ -216,7 +215,14 @@ IMPORT_COLUMNS: list[str] = [
     "action", "supplierCode", "plotCode", "plotName", "primaryPhone", "additionalPhones",
     "village", "district",
     "province", "latitude", "longitude", "rai", "crop", "variety", "cycleLabel",
-    "poNumber", "pCode", "lotNo", "supplierLotNo",
+    # Round A — lotNo was REMOVED from the input contract, the same way round
+    # 8-10B removed finalYieldUnit/finalInspectionRecordId below: the system lot
+    # is generated at cycle creation and is immutable afterwards, so there is
+    # nothing for a user to decide here. supplierLotNo (the SUPPLIER's own lot
+    # number) is untouched and stays the one lot column anyone fills in. A
+    # legacy workbook that still carries a lotNo header is accepted while the
+    # cell is blank and REJECTED when it is not (_removed_input_column_errors).
+    "poNumber", "pCode", "supplierLotNo",
     "oracleSupplierCode", "oracleInvoice", "refAccount",
     "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit",
     "currentPlotStatus",
@@ -314,12 +320,12 @@ TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     "variety": "พันธุ์/สายพันธุ์ของรอบปลูก เช่น พริกขี้หนู (ไม่บังคับ)",
     # Round 8-17A.1 — required (nonblank) for every action that opens a NEW
     # cycle (create_plot_with_cycle/start_new_cycle/close_and_start_new_cycle/
-    # start_next_cycle/reactivate_plot_with_cycle), regardless of Auto or
-    # Manual lot. update_current_cycle also requires it UNLESS the row leaves
-    # the cell blank on a cycle that is already unlabeled (legacy data — no
-    # forced backfill). final_plot never uses it.
+    # start_next_cycle/reactivate_plot_with_cycle) — it is a component of the
+    # Auto Lot the server generates there. update_current_cycle also requires
+    # it UNLESS the row leaves the cell blank on a cycle that is already
+    # unlabeled (legacy data — no forced backfill). final_plot never uses it.
     "cycleLabel": "ชื่อรอบปลูกที่ผู้ใช้เข้าใจ เช่น jun2026 หรือ รอบ มิ.ย. 2026 "
-                  "(จำเป็นสำหรับ action ที่เริ่มรอบปลูกใหม่ทุกกรณี — ทั้ง Auto และ Manual Lot; "
+                  "(จำเป็นสำหรับ action ที่เริ่มรอบปลูกใหม่ทุกกรณี เพราะใช้สร้าง Lot No; "
                   "update_current_cycle บังคับเช่นกันหากรอบปัจจุบันมีชื่อรอบอยู่แล้ว; "
                   "final_plot ไม่ใช้คอลัมน์นี้)",
     "poNumber": "เลข PO ของรอบปลูก (ไม่บังคับ) เว้นว่างได้ เช่น PO25001 "
@@ -328,8 +334,9 @@ TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     "pCode": "รหัสสินค้า (P.Code) ของรอบปลูก เช่น Melon-A; "
              "จำเป็นสำหรับ create_plot_with_cycle และ start_next_cycle; "
              "update_current_cycle เว้นว่างเพื่อคงค่าเดิม",
-    "lotNo": "เลข Lot ของรอบปลูก: เว้นว่าง = ระบบสร้าง Auto Lot ({ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน}); กรอกเอง = ใช้ค่าที่กรอก (Manual)",
-    "supplierLotNo": "เลข Lot ที่ Supplier กำหนดสำหรับรอบปลูกนี้ ไม่เกี่ยวกับ Auto Lot ของระบบ",
+    "supplierLotNo": "เลข Lot ที่ Supplier กำหนดสำหรับรอบปลูกนี้ ไม่เกี่ยวกับ Lot No "
+                     "ที่ระบบสร้างให้ (ระบบสร้าง Lot No เอง "
+                     "{ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน} ตอนเปิดรอบปลูก และแก้ไขไม่ได้)",
     # Round 8-21A — three independent, OPTIONAL reference columns. The
     # update_current_cycle note is deliberately different from poNumber/
     # pCode/supplierLotNo above: those three only ever PRESERVE on a blank
@@ -475,14 +482,15 @@ class _Parsed:
     crop: str | None = None
     variety: str | None = None
     cycle_label: str | None = None
-    lot_no: str | None = None
     # PO / P.Code (round 8-5B) — normalized (PO upper-cased, both trimmed) in
     # _parse_row. None when the column is blank or absent (old 20-column file).
     po_number: str | None = None
     p_code: str | None = None
     # Round 8-12A — the SUPPLIER's own lot number for the cycle. Independent of
-    # lot_no: never feeds the Auto Lot formula or the running number. None when
-    # the column is blank or absent (a pre-8-12A workbook simply has no key).
+    # the system lot: never feeds the Auto Lot formula or the running number.
+    # None when the column is blank or absent (a pre-8-12A workbook simply has
+    # no key). Round A — this is the ONLY lot field a row can carry; the system
+    # lot has no input column at all.
     supplier_lot_no: str | None = None
     # Round 8-21A — three independent, OPTIONAL back-office reference fields
     # (trim, blank->None; see app/services/cycle_reference_fields.py). The
@@ -824,7 +832,6 @@ def _parse_row(raw: dict[str, str], columns_present: frozenset[str] = frozenset(
         cycle_label=_str(raw, "cycleLabel"),
         po_number=normalize_po_number(_str(raw, "poNumber")),
         p_code=normalize_p_code(_str(raw, "pCode")),
-        lot_no=_str(raw, "lotNo"),
         supplier_lot_no=normalize_supplier_lot_no(_str(raw, "supplierLotNo")),
         oracle_supplier_code=normalize_cycle_reference_text(_str(raw, "oracleSupplierCode")),
         oracle_invoice=normalize_cycle_reference_text(_str(raw, "oracleInvoice")),
@@ -852,7 +859,7 @@ def _parse_row(raw: dict[str, str], columns_present: frozenset[str] = frozenset(
     )
     p.primary_phone, p.additional_phones = _phone_config(raw, errors)
     p.new_inspection_password = _inspection_password(raw, errors)
-    errors.extend(_legacy_final_plot_column_errors(raw))
+    errors.extend(_removed_input_column_errors(raw))
     # Plot codes are stored upper-cased (plot_repository.create_plot); normalize
     # here so preview/dedup/lookup all agree with what would be persisted.
     if p.plot_code:
@@ -860,21 +867,30 @@ def _parse_row(raw: dict[str, str], columns_present: frozenset[str] = frozenset(
     return p, errors
 
 
-def _legacy_final_plot_column_errors(raw: dict[str, str]) -> list[str]:
-    """Round 8-10B — a pre-8-10B workbook still carries finalYieldUnit and
-    finalInspectionRecordId. Blank cells are fine (the file is simply older
-    than the contract), but a cell the user actually FILLED IN must fail
-    loudly.
+def _removed_input_column_errors(raw: dict[str, str]) -> list[str]:
+    """Columns that USED to be inputs and no longer are. A workbook downloaded
+    before the column was retired still carries its header; a blank cell is
+    fine (the file is simply older than the contract), but a cell the user
+    actually FILLED IN must fail loudly.
 
     Silently ignoring a value the user typed is the worst option available: they
-    would reasonably believe the unit they wrote, or the record they chose, was
-    what got used — and would only discover otherwise by reading the closed
-    cycle later. An error naming the column, on the row it came from, costs one
-    re-upload and removes all doubt.
+    would reasonably believe the unit they wrote, the record they chose, or the
+    lot number they entered was what got used — and would only discover
+    otherwise by reading the closed cycle later. An error naming the column, on
+    the row it came from, costs one re-upload and removes all doubt.
 
     The offending VALUE is never echoed. finalInspectionRecordId is a record
     identifier, and repeating a user-supplied id back into a workbook and a log
-    line is exactly the habit these columns are being removed to stop."""
+    line is exactly the habit these columns are being removed to stop.
+
+    Retired so far:
+      - finalYieldUnit / finalInspectionRecordId (round 8-10B) — the figures are
+        always kilograms and the record to snapshot is always the cycle's own
+        latest active one.
+      - lotNo (round A) — the system lot is generated when the cycle is created
+        ({cycleLabel}-{supplierCode}-{pCode}-{running}) and can never be
+        hand-typed or replaced. supplierLotNo, the supplier's OWN lot number,
+        is unaffected and remains a normal input column."""
     errors: list[str] = []
     if _str(raw, "finalYieldUnit") is not None:
         errors.append(
@@ -884,6 +900,11 @@ def _legacy_final_plot_column_errors(raw: dict[str, str]) -> list[str]:
         errors.append(
             "ไม่ต้องระบุ finalInspectionRecordId ระบบเลือกบันทึกการตรวจล่าสุดให้อัตโนมัติ "
             "กรุณาลบค่าจากคอลัมน์นี้"
+        )
+    if _str(raw, "lotNo") is not None:
+        errors.append(
+            "ไม่ต้องระบุ lotNo ระบบสร้าง Lot No ให้อัตโนมัติตอนเปิดรอบปลูกและแก้ไขไม่ได้ "
+            "กรุณาลบค่าจากคอลัมน์นี้ (ถ้าต้องการบันทึกเลข Lot ของ Supplier ให้ใช้คอลัมน์ supplierLotNo)"
         )
     return errors
 
@@ -959,12 +980,17 @@ def _cycle_plan_matches_import(cycle: PlotCycle, p: _Parsed) -> bool:
 
     Deliberately conservative: NO case-folding of crop/variety/unit and NO
     unit conversion (kg ≠ g); Decimals compare by numeric value so 1600 ==
-    1600.00; blank/whitespace strings normalize to None (both sides)."""
+    1600.00; blank/whitespace strings normalize to None (both sides).
+
+    Round A — the system lot is no longer part of this comparison: a row cannot
+    carry one any more, so it can never be the single field that makes an
+    otherwise-identical row "genuinely new". Dropping the term makes the guard
+    slightly STRICTER (one less way to look different), which is the safe
+    direction for a duplicate-upload check."""
     return (
         _norm_plan_str(cycle.crop) == _norm_plan_str(p.crop)
         and _norm_plan_str(cycle.variety) == _norm_plan_str(p.variety)
         and _norm_plan_str(cycle.cycle_label) == _norm_plan_str(p.cycle_label)
-        and _norm_plan_str(cycle.lot_no) == _norm_plan_str(p.lot_no)
         and cycle.planting_date == p.planting_date
         and cycle.plant_count == p.plant_count
         and cycle.expected_yield_full == p.expected_yield_full
@@ -1156,7 +1182,6 @@ async def _validate_row(
                   label="ชื่อรอบปลูก (cycleLabel)")
     _check_length(p.po_number, _MAX_PO_NUMBER, "poNumber", errors)
     _check_length(p.p_code, _MAX_P_CODE, "pCode", errors)
-    _check_length(p.lot_no, _MAX_LOT_NO, "lotNo", errors)
     _check_length(p.supplier_lot_no, _MAX_LOT_NO, "supplierLotNo", errors)
     _check_length(p.oracle_supplier_code, _MAX_ORACLE_SUPPLIER_CODE, "oracleSupplierCode", errors)
     _check_length(p.oracle_invoice, _MAX_ORACLE_INVOICE, "oracleInvoice", errors)
@@ -1217,7 +1242,7 @@ async def _validate_row(
     supplier_code_for_lot = ctx_supplier_code(state)
     if (
         p.action in _NEW_CYCLE_ACTIONS
-        and not p.lot_no and p.cycle_label and p.p_code and supplier_code_for_lot
+        and p.cycle_label and p.p_code and supplier_code_for_lot
     ):
         try:
             format_auto_lot_no(
@@ -1226,17 +1251,17 @@ async def _validate_row(
             )
         except LotNumberTooLongError:
             errors.append(
-                "Auto Lot ที่จะสร้าง ({ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน}) "
-                "ยาวเกิน 100 ตัวอักษร กรุณาย่อ cycleLabel หรือ pCode หรือกรอก lotNo เอง"
+                "Lot No ที่ระบบจะสร้าง ({ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน}) "
+                "ยาวเกิน 100 ตัวอักษร กรุณาย่อ cycleLabel หรือ pCode"
             )
 
-    # Round 8-12A.1 — a NEW-cycle row with a blank lotNo is asking for an Auto
-    # Lot, so every component of the V2 formula must be present. Round 8-12A
-    # let such a row through and silently created a cycle with NO lot at all;
-    # it is now a per-row Preview error naming the missing field, which also
-    # means Commit refuses the whole file (all-or-nothing) rather than writing
-    # a lotless cycle. A row that gives a Manual lotNo needs none of this.
-    if p.action in _NEW_CYCLE_ACTIONS and not p.lot_no:
+    # Round 8-12A.1 — every NEW-cycle row gets an Auto Lot, so every component
+    # of the V2 formula must be present. Round 8-12A let such a row through and
+    # silently created a cycle with NO lot at all; it is now a per-row Preview
+    # error naming the missing field, which also means Commit refuses the whole
+    # file (all-or-nothing) rather than writing a lotless cycle. Round A — this
+    # is now unconditional: there is no hand-typed lot to opt out with.
+    if p.action in _NEW_CYCLE_ACTIONS:
         missing_auto: list[str] = []
         if not p.cycle_label:
             missing_auto.append("ชื่อรอบปลูก (cycleLabel)")
@@ -1245,8 +1270,7 @@ async def _validate_row(
         if missing_auto:
             errors.append(
                 "ต้องระบุ " + " และ ".join(missing_auto)
-                + " เมื่อเว้น lotNo ว่าง (ระบบจะสร้าง Auto Lot ให้) "
-                "หรือกรอก lotNo เอง"
+                + " เนื่องจากระบบใช้สร้าง Lot No ให้อัตโนมัติ"
             )
         elif not supplier_code_for_lot:
             errors.append("ไม่พบ Supplier ของแปลง กรุณาตรวจสอบข้อมูลแปลง")
@@ -1335,8 +1359,8 @@ async def _validate_row(
         errors.append("แปลงนี้ยังไม่มีรอบปลูกที่เปิดอยู่ — ใช้ start_new_cycle แทน")
     elif p.action == ACTION_UPDATE and active is not None:
         # Round 8-17A.1 — update_current_cycle replaces cycle_label in full
-        # (see the fields dict built in _execute_row: unlike poNumber/pCode/
-        # lotNo, cycle_label has no "blank cell = preserve" carve-out). A
+        # (see the fields dict built in _execute_row: unlike poNumber/pCode,
+        # cycle_label has no "blank cell = preserve" carve-out). A
         # blank cell would therefore CLEAR an existing label; block that
         # specific case only — a row that leaves a legacy (already-None)
         # label blank is a no-op, not a clear, and must keep reading back
@@ -1436,9 +1460,12 @@ async def _validate_row(
 
 
 # Round 8-5B — lot modes surfaced in the preview (lotMode). 'preserve' is
-# update-only (blank lot + an existing lot → keep it).
+# update-only: an update never writes the lot column at all, so whatever the
+# cycle already carries is what it keeps.
+# Round A — 'manual' is GONE. A row can no longer supply a lot, so the only two
+# outcomes left are "the server will generate one" (a new cycle) and "the
+# existing one is kept untouched" (an update).
 LOT_MODE_AUTO = "auto"
-LOT_MODE_MANUAL = "manual"
 LOT_MODE_PRESERVE = "preserve"
 
 
@@ -1453,45 +1480,35 @@ def ctx_supplier_code(state: "_RowState") -> str | None:
 
 def _compute_lot_preview(state: _RowState) -> None:
     """Set lot_mode + proposed_lot_no on a VALID row (round 8-5B; formula V2
-    round 8-12A). Manual wins when a nonblank lotNo is given; otherwise Auto for
-    new-cycle actions and for update_current_cycle only when there's no existing
-    lot to preserve.
+    round 8-12A). A new-cycle action always previews the Auto Lot the server
+    will generate; update_current_cycle always previews the cycle's EXISTING
+    lot, unchanged.
 
     The Auto preview shows {cycleLabel}-{supplierCode}-{pCode}-### — the "###"
     stands for the running number, which is allocated ONLY at commit under the
-    plot lock, so preview stays read-only and never reserves a number."""
+    plot lock, so preview stays read-only and never reserves a number.
+
+    Round A — the Manual branch is gone from both paths, and an update no
+    longer has a "regenerate" case either: the lot is written once at creation
+    and never rewritten, so an update's preview is simply what is already
+    stored (None for a legacy cycle that has no lot — it stays lotless)."""
     p = state.parsed
     supplier_code = ctx_supplier_code(state)
     if p.action == ACTION_FINAL:
-        # Round 8-7A — final_plot never touches lot_no/po_number at all (it
+        # Round 8-7A — final_plot never touches the lot or po_number at all (it
         # closes the existing cycle as-is); leave both None rather than
         # falling into the "new cycle" branch below, which would otherwise
         # invent a nonsense Auto Lot preview from this action's unrelated
-        # (always-blank) po_number/lot_no fields.
+        # (always-blank) po_number field.
         return
     if p.action == ACTION_UPDATE:
-        if p.lot_no:
-            state.lot_mode, state.proposed_lot_no = LOT_MODE_MANUAL, p.lot_no
-        elif state.active_cycle_lot_no:
-            state.lot_mode, state.proposed_lot_no = LOT_MODE_PRESERVE, state.active_cycle_lot_no
-        else:
-            # Round 8-12A — an update regenerates only from the EFFECTIVE
-            # cycleLabel/pCode (row value, else the active cycle's own).
-            label = p.cycle_label or state.active_cycle_label
-            code = p.p_code or state.active_cycle_p_code
-            if label and code and supplier_code:
-                state.lot_mode = LOT_MODE_AUTO
-                state.proposed_lot_no = auto_lot_preview(label, supplier_code, code)
-            else:
-                state.lot_mode, state.proposed_lot_no = LOT_MODE_PRESERVE, None
+        state.lot_mode = LOT_MODE_PRESERVE
+        state.proposed_lot_no = state.active_cycle_lot_no
         return
     # create_plot_with_cycle / start_new_cycle / close_and_start_new_cycle /
-    # start_next_cycle all open a NEW cycle → Auto unless a Manual lot is given.
-    if p.lot_no:
-        state.lot_mode, state.proposed_lot_no = LOT_MODE_MANUAL, p.lot_no
-    else:
-        state.lot_mode = LOT_MODE_AUTO
-        state.proposed_lot_no = auto_lot_preview(p.cycle_label, supplier_code, p.p_code)
+    # start_next_cycle all open a NEW cycle → the server generates the lot.
+    state.lot_mode = LOT_MODE_AUTO
+    state.proposed_lot_no = auto_lot_preview(p.cycle_label, supplier_code, p.p_code)
 
 
 def _capture_lot_result(state: _RowState, cycle: PlotCycle) -> None:
@@ -1514,7 +1531,7 @@ def _row_result(state: _RowState) -> PlotImportRowResult:
         village=p.village, district=p.district,
         province=p.province, latitude=p.latitude, longitude=p.longitude,
         rai=p.rai, crop=p.crop, variety=p.variety,
-        cycle_label=p.cycle_label, po_number=p.po_number, p_code=p.p_code, lot_no=p.lot_no,
+        cycle_label=p.cycle_label, po_number=p.po_number, p_code=p.p_code,
         supplier_lot_no=p.supplier_lot_no,
         oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
         ref_account=p.ref_account,
@@ -2000,12 +2017,12 @@ async def _execute_row(
             village=p.village, district=p.district, province=p.province,
             latitude=p.latitude, longitude=p.longitude, rai=p.rai,
             # PlotCreate is physical-only (round 8.0.4) — crop/variety/
-            # cycleLabel/lotNo/plantingDate/plantCount/expectedYield* go to
+            # cycleLabel/plantingDate/plantCount/expectedYield* go to
             # create_cycle below instead, which syncs the plot mirror.
         ))
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label, lot_no=p.lot_no,
+            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
             supplier_lot_no=p.supplier_lot_no,
             po_number=p.po_number, p_code=p.p_code,
             oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
@@ -2046,7 +2063,7 @@ async def _execute_row(
             )
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label, lot_no=p.lot_no,
+            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
             supplier_lot_no=p.supplier_lot_no,
             po_number=p.po_number, p_code=p.p_code,
             oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
@@ -2089,7 +2106,7 @@ async def _execute_row(
             db, plot, cycle,
             close_status=CYCLE_STATUS_HARVESTED,
             closed_by_id=ctx.user_id, close_reason=ROLLOVER_CLOSE_REASON,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label, lot_no=p.lot_no,
+            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
             supplier_lot_no=p.supplier_lot_no,
             po_number=p.po_number, p_code=p.p_code,
             oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
@@ -2112,7 +2129,7 @@ async def _execute_row(
         if active is None:
             cycle = await plot_cycle_repo.create_cycle(
                 db, plot,
-                crop=p.crop, variety=p.variety, cycle_label=p.cycle_label, lot_no=p.lot_no,
+                crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
                 supplier_lot_no=p.supplier_lot_no,
                 po_number=p.po_number, p_code=p.p_code,
                 oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
@@ -2142,7 +2159,7 @@ async def _execute_row(
             db, plot, active,
             close_status=CYCLE_STATUS_HARVESTED,
             closed_by_id=ctx.user_id, close_reason=ROLLOVER_CLOSE_REASON_START_NEXT,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label, lot_no=p.lot_no,
+            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
             supplier_lot_no=p.supplier_lot_no,
             po_number=p.po_number, p_code=p.p_code,
             oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
@@ -2171,7 +2188,7 @@ async def _execute_row(
         try:
             plot, cycle = await plot_repo.reactivate_plot_with_cycle(
                 db, plot,
-                crop=p.crop, variety=p.variety, cycle_label=p.cycle_label, lot_no=p.lot_no,
+                crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
                 supplier_lot_no=p.supplier_lot_no,
                 po_number=p.po_number, p_code=p.p_code,
                 oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
@@ -2265,9 +2282,11 @@ async def _execute_row(
     #     column entirely ABSENT from the workbook (an older download with no
     #     such header) is omitted from `fields`, which preserves the existing
     #     value. See _Parsed's *_given flags / _validate_all's columns_present.
-    #   - lotNo: nonblank → Manual; blank + no existing lot + usable Auto
-    #     components → Auto; blank + an existing lot → OMIT (preserve existing
-    #     lot, so a plain edit never wipes it).
+    #   - the system lot: NEVER written. Round A removed the lotNo column and
+    #     with it every way an import could set, replace or regenerate a lot —
+    #     `fields` simply carries no lot key, and update_cycle would ignore one
+    #     anyway. An edit therefore always leaves the cycle's existing lot
+    #     exactly as it is (including a legacy cycle that has none).
     fields: dict[str, Any] = {
         "crop": p.crop, "variety": p.variety, "cycle_label": p.cycle_label,
         "planting_date": p.planting_date, "plant_count": p.plant_count,
@@ -2286,14 +2305,7 @@ async def _execute_row(
         fields["oracle_invoice"] = p.oracle_invoice
     if p.ref_account_given:
         fields["ref_account"] = p.ref_account
-    if p.lot_no:
-        fields["lot_no"] = p.lot_no
-    elif cycle.lot_no is None and (p.cycle_label or cycle.cycle_label) and (p.p_code or cycle.p_code):
-        # Round 8-12A — blank lot + no existing lot + the V2 components are
-        # available (row value, else the cycle's own) → ask for an Auto Lot.
-        fields["lot_no"] = None
-    # else: blank lot + an existing lot (or no PO) → omit → preserve.
-    await plot_cycle_repo.update_cycle(db, plot, cycle, fields)
+    await plot_cycle_repo.update_cycle(db, cycle, fields)
     await plot_cycle_repo.sync_plot_mirror_from_cycle(db, plot, cycle)
     _capture_lot_result(state, cycle)
     await _apply_phone_config(db, plot, p)
@@ -2711,8 +2723,8 @@ async def commit_import_execute(
             # 8-12A); a real running >1000 could in theory still overflow at
             # commit. Fail the whole file cleanly (all-or-nothing) with the row.
             raise ImportFileError(
-                f"แถวที่ {state.row_number}: Auto Lot ที่จะสร้างยาวเกิน 100 ตัวอักษร "
-                f"({exc}) กรุณาย่อ cycleLabel/pCode หรือกรอก lotNo เอง"
+                f"แถวที่ {state.row_number}: Lot No ที่ระบบจะสร้างยาวเกิน 100 ตัวอักษร "
+                f"({exc}) กรุณาย่อ cycleLabel/pCode"
             ) from exc
         except AutoLotMissingComponentError as exc:
             # Round 8-12A.1 — validation already rejects this per row, so
@@ -2723,7 +2735,7 @@ async def commit_import_execute(
             # field only, never a submitted value.
             raise ImportFileError(
                 f"แถวที่ {state.row_number}: ต้องระบุ {', '.join(exc.missing)} "
-                "ก่อนสร้าง Auto Lot หรือกรอก lotNo เอง"
+                "ก่อนที่ระบบจะสร้าง Lot No ให้ได้"
             ) from exc
     return states
 

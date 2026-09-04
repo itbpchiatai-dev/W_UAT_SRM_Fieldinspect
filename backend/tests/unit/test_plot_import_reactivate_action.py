@@ -461,11 +461,13 @@ async def test_reactivate_row_blank_cycle_label_and_blank_lot_is_rejected():
     p1, p2, p3, p4 = _patch_lookups(plot=inactive_plot, active=None)
     with p1, p2, p3, p4:
         preview = await build_preview(
-            AsyncMock(), _xlsx([_row(cycleLabel="", lotNo=None)]), ctx=_ctx(),
+            AsyncMock(), _xlsx([_row(cycleLabel="")]), ctx=_ctx(),
         )
     assert preview.error_rows == 1
     assert "cycleLabel" in preview.rows[0].message
-    assert "lotNo" in preview.rows[0].message   # tells them the other way out
+    # Round A — there is no "other way out" to offer any more (a hand-typed lot
+    # used to be one); the message just says the label builds the Lot No.
+    assert "Lot No" in preview.rows[0].message
 
 
 async def test_reactivate_cycle_label_reuse_is_also_caught_at_commit_time_not_just_preview():

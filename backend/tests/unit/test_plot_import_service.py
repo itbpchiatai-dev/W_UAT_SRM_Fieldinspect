@@ -82,7 +82,7 @@ def _create_row(**over) -> dict[str, str]:
         # contract tests. Default here so this shared fixture keeps testing
         # what it was written to test elsewhere.
         "cycleLabel": "jun2026",
-        "crop": "พริก", "variety": "พริกขี้หนู", "lotNo": "LOT-01",
+        "crop": "พริก", "variety": "พริกขี้หนู",
         "plantingDate": "2026-06-01", "plantCount": "1000",
         "expectedYieldFull": "800", "expectedYieldUnit": "kg",
     }
@@ -618,10 +618,20 @@ async def test_cycle_label_over_100_chars_errors_in_preview() -> None:
     assert "100" in pv.rows[0].message
 
 
-async def test_cycle_label_exactly_100_chars_is_valid() -> None:
+async def test_cycle_label_exactly_100_chars_passes_its_own_length_check() -> None:
+    """The cycleLabel COLUMN accepts 100 chars (its VARCHAR limit).
+
+    Round A — such a label nonetheless fails the row, because every new cycle
+    now gets a generated lot and a 100-char label cannot fit inside a 100-char
+    lot number. The distinction matters: the error the user sees must be the
+    Lot-length one (actionable: shorten the label), never a bogus
+    "cycleLabel too long"."""
     label_100 = "y" * 100
     pv = await _preview([_create_row(cycleLabel=label_100)], plot=None)
-    assert pv.rows[0].status == "valid"
+    msg = pv.rows[0].message
+    assert pv.rows[0].status == "error"
+    assert "Lot No" in msg and "100" in msg
+    assert "cycleLabel" in msg          # names what to shorten
 
 
 async def test_cycle_label_blank_is_now_an_error_for_a_new_cycle_action() -> None:
@@ -780,7 +790,7 @@ def _rollover_plan_row(**over) -> dict[str, str]:
         "action": "close_and_start_new_cycle", "supplierCode": "SUP001",
         "plotCode": "P003", "poNumber": "PO25004", "pCode": "Chili-D",
         "crop": "พริก", "variety": "พริกขี้หนู",
-        "cycleLabel": "qa-cycle-4", "lotNo": "SMOKE-LOT-4",
+        "cycleLabel": "qa-cycle-4",
         "plantingDate": "2026-08-09", "plantCount": "2000",
         "expectedYieldFull": "1600", "expectedYieldUnit": "kg",
     }
@@ -816,12 +826,6 @@ async def test_rollover_exact_plan_match_is_duplicate_error() -> None:
 
 async def test_rollover_valid_when_only_cycle_label_differs() -> None:
     pv = await _preview([_rollover_plan_row(cycleLabel="qa-cycle-5")],
-                        plot=_plot(), active=_matching_active_cycle())
-    assert pv.rows[0].status == "valid"
-
-
-async def test_rollover_valid_when_only_lot_no_differs() -> None:
-    pv = await _preview([_rollover_plan_row(lotNo="SMOKE-LOT-5")],
                         plot=_plot(), active=_matching_active_cycle())
     assert pv.rows[0].status == "valid"
 
@@ -1908,15 +1912,6 @@ async def test_create_row_missing_pcode_errors() -> None:
     assert "pCode" in pv.rows[0].message
 
 
-async def test_create_manual_lot_preview_is_manual() -> None:
-    pv = await _preview([_create_row(lotNo="HAND-01")], plot=None)
-    row = pv.rows[0]
-    assert row.status == "valid"
-    assert row.lot_mode == "manual"
-    assert row.proposed_lot_no == "HAND-01"
-    assert row.payload.po_number == "PO25001"  # normalized (already upper)
-
-
 async def test_create_blank_lot_preview_is_auto_v2_formula() -> None:
     """Round 8-12A — the preview shows
     {cycleLabel}-{supplierCode}-{pCode}-### (### = the running number, which is
@@ -1957,15 +1952,18 @@ async def test_update_blank_lot_preserves_existing_lot_preview_and_execute() -> 
          patch(f"{_M}.plot_cycle_repo.update_cycle", AsyncMock()) as m_update, \
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
         await commit_import(object(), _xlsx([_create_row(
-            action="update_current_cycle", plotCode="P002", lotNo=None,
+            action="update_current_cycle", plotCode="P002",
             poNumber=None, pCode=None)]), ctx=_ctx())
-    fields = m_update.call_args.args[3]
+    fields = m_update.call_args.args[2]
     assert "lot_no" not in fields         # preserve existing lot
     assert "po_number" not in fields      # blank PO → preserve
     assert "p_code" not in fields
 
 
-async def test_update_manual_lot_and_new_po_are_sent() -> None:
+async def test_update_sends_new_po_and_p_code_but_never_a_lot() -> None:
+    """Round A — an update still edits PO and P.Code, but the lot columns are
+    off-limits: even changing the very inputs the lot was built from leaves it
+    exactly as created."""
     plot = _plot()
     active = _cycle(cycle_no=2, lot_no="OLD-LOT", lot_no_source="auto")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
@@ -1976,11 +1974,11 @@ async def test_update_manual_lot_and_new_po_are_sent() -> None:
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
         await commit_import(object(), _xlsx([_create_row(
             action="update_current_cycle", plotCode="P002",
-            lotNo="NEW-9", poNumber="po-new", pCode="Melon-Z")]), ctx=_ctx())
-    fields = m_update.call_args.args[3]
-    assert fields["lot_no"] == "NEW-9"       # Manual
+            poNumber="po-new", pCode="Melon-Z")]), ctx=_ctx())
+    fields = m_update.call_args.args[2]
     assert fields["po_number"] == "PO-NEW"   # normalized upper
     assert fields["p_code"] == "Melon-Z"
+    assert "lot_no" not in fields
 
 
 async def test_commit_result_carries_real_lot_source_running() -> None:
@@ -2099,14 +2097,15 @@ async def test_auto_lot_without_po_proposes_v2_formula() -> None:
     assert row.payload.po_number is None
 
 
-async def test_manual_lot_without_po_is_valid() -> None:
-    pv = await _preview(
-        [_create_row(poNumber=None, lotNo="MANUAL-LOT-77")], plot=None,
-    )
+async def test_auto_lot_without_po_is_valid() -> None:
+    """Round 8-13A — the PO is optional and takes no part in the V2 formula.
+    Round A — with the Manual escape gone, this is the only remaining shape of
+    "a new cycle with no PO", and it must still preview cleanly."""
+    pv = await _preview([_create_row(poNumber=None)], plot=None)
     row = pv.rows[0]
     assert row.status == "valid"
-    assert row.lot_mode == "manual"
-    assert row.proposed_lot_no == "MANUAL-LOT-77"
+    assert row.lot_mode == "auto"
+    assert row.proposed_lot_no == "jun2026-SUP001-Melon-A-###"
     assert row.payload.po_number is None
 
 
@@ -2122,11 +2121,11 @@ async def test_excel_auto_lot_pre_check_uses_running_1000_boundary() -> None:
     # Round 8-12A raised the probe from 100 to 1000 because V2's minimum width
     # is 3, so the growth step that can overflow is 3→4 digits.
     pv = await _preview(
-        [_create_row(cycleLabel="L" * 64, pCode="P" * 24, lotNo=None)],
+        [_create_row(cycleLabel="L" * 64, pCode="P" * 24)],
         plot=None,
     )
     assert pv.rows[0].status == "error"
-    assert "Auto Lot" in pv.rows[0].message
+    assert "Lot No" in pv.rows[0].message
 
 
 def test_excel_pre_check_source_uses_running_1000_and_v2_components() -> None:

@@ -50,12 +50,15 @@ class PlotImportRowPayload(CamelBaseModel):
     # input. Defaulted so older JSON clients are unaffected.
     po_number: str | None = None
     p_code: str | None = None
-    lot_no: str | None = None
+    # Round A — lot_no is NOT echoed here any more: it is no longer a row
+    # input, so there is nothing of the user's to echo. What the server will
+    # generate (or preserve) is reported separately by the preview's
+    # lot_mode/proposed_lot_no, and what it actually wrote by result_lot_no.
     # Round 8-12A — the SUPPLIER's own lot number, echoed back exactly as
-    # parsed (trimmed, blank→None). Independent of lot_no: it never affects the
-    # Auto Lot formula, the running number, or the Manual/Auto decision.
-    # Defaulted so a pre-8-12A workbook (no such column) and any older JSON
-    # client are both unaffected.
+    # parsed (trimmed, blank→None). Independent of the system lot: it never
+    # affects the Auto Lot formula or the running number. Defaulted so a
+    # pre-8-12A workbook (no such column) and any older JSON client are both
+    # unaffected.
     supplier_lot_no: str | None = None
     # Round 8-21A — three independent, OPTIONAL back-office reference fields,
     # echoed back exactly as parsed (trimmed, blank→None). Defaulted so a

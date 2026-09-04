@@ -190,14 +190,15 @@ _S_STATUS = {
 }
 
 # Per-column width for the result sheet — one entry per ALL_COLUMNS entry
-# (33 import + 11 result = 44 columns). Round 8-21A added oracleSupplierCode/
+# (32 import + 11 result = 43 columns). Round 8-21A added oracleSupplierCode/
 # oracleInvoice/refAccount after supplierLotNo (see plot_import.IMPORT_
 # COLUMNS) — inserted at the matching position below, and also corrected a
 # pre-existing one-short count in the result-column section (resultProcessedAt
-# had no width entry of its own before this round).
+# had no width entry of its own before this round). Round A dropped lotNo from
+# the import columns, so one width went with it.
 _COL_WIDTHS = [
-    # import columns, in IMPORT_COLUMNS order (action..supplierLotNo, 19 cols):
-    22, 14, 16, 24, 16, 28, 14, 14, 14, 12, 12, 8, 14, 14, 16, 14, 14, 14, 14,
+    # import columns, in IMPORT_COLUMNS order (action..supplierLotNo, 18 cols):
+    22, 14, 16, 24, 16, 28, 14, 14, 14, 12, 12, 8, 14, 14, 16, 14, 14, 14,
     18, 18, 18,  # oracleSupplierCode, oracleInvoice, refAccount (round 8-21A)
     # plantingDate..newInspectionPassword (11 cols):
     12, 16, 14, 14, 12, 12, 20, 16, 20, 20, 20,

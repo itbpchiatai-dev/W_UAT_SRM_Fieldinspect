@@ -379,7 +379,7 @@ async def test_update_omitted_fields_leave_existing_values_untouched() -> None:
     plot = _plot()
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
-        await repo.update_cycle(db, plot, cycle, {"crop": "พริก"})
+        await repo.update_cycle(db, cycle, {"crop": "พริก"})
     assert cycle.oracle_supplier_code == "EXISTING-ORC"
     assert cycle.oracle_invoice == "EXISTING-INV"
     assert cycle.ref_account == "EXISTING-ACC"
@@ -393,7 +393,7 @@ async def test_update_present_none_clears_existing_values() -> None:
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
         await repo.update_cycle(
-            db, plot, cycle,
+            db, cycle,
             {"oracle_supplier_code": None, "oracle_invoice": None, "ref_account": None},
         )
     assert cycle.oracle_supplier_code is None
@@ -409,7 +409,7 @@ async def test_update_present_text_trims_and_saves() -> None:
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
         await repo.update_cycle(
-            db, plot, cycle,
+            db, cycle,
             {"oracle_supplier_code": "  NEW-ORC  ", "oracle_invoice": "  NEW-INV  ",
              "ref_account": "  NEW-ACC  "},
         )
@@ -425,7 +425,7 @@ async def test_update_present_blank_string_clears() -> None:
     plot = _plot()
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
-        await repo.update_cycle(db, plot, cycle, {"oracle_invoice": "   "})
+        await repo.update_cycle(db, cycle, {"oracle_invoice": "   "})
     assert cycle.oracle_invoice is None
     # Fields not mentioned stay untouched.
     assert cycle.oracle_supplier_code == "EXISTING-ORC"

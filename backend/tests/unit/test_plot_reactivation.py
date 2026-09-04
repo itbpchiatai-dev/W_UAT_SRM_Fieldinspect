@@ -187,24 +187,26 @@ async def test_reactivate_plot_with_cycle_create_failure_propagates_for_rollback
     assert plot.is_active is True  # uncommitted — DB never sees this
 
 
-async def test_reactivate_plot_with_cycle_threads_lot_po_pcode_to_create_cycle():  # items 13/14/15/16
-    """cycle_no=max+1 and the Auto/Manual/legacy lot resolution are
-    create_cycle's own, already fully unit-tested logic
-    (test_plot_cycle_repository.py) — reactivate_plot_with_cycle must not
-    reimplement any of it, only thread the row's values through unchanged."""
+async def test_reactivate_plot_with_cycle_threads_po_pcode_to_create_cycle():  # items 13/14/15/16
+    """cycle_no=max+1 and the Auto Lot generation are create_cycle's own,
+    already fully unit-tested logic (test_plot_cycle_repository.py) —
+    reactivate_plot_with_cycle must not reimplement any of it, only thread the
+    row's values through unchanged. Round A — the lot is no longer among them:
+    it is not threaded through, it is generated inside create_cycle."""
     plot = _plot(is_active=False)
     cycle = _cycle()
     with patch(f"{_R}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
          patch(f"{_R}.plot_cycle_repo.create_cycle", AsyncMock(return_value=cycle)) as mk_create, \
          patch(f"{_R}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()):
         await repo.reactivate_plot_with_cycle(
-            _db(), plot, lot_no="MANUAL-LOT-9", po_number="po25001", p_code="Melon-A",
-            crop="ทุเรียน",
+            _db(), plot, po_number="po25001", p_code="Melon-A",
+            cycle_label="2605", crop="ทุเรียน",
         )
     kw = mk_create.call_args.kwargs
-    assert kw["lot_no"] == "MANUAL-LOT-9"
     assert kw["po_number"] == "po25001"
     assert kw["p_code"] == "Melon-A"
+    assert kw["cycle_label"] == "2605"
+    assert "lot_no" not in kw
 
 
 async def test_reactivate_plot_with_cycle_leaves_qr_and_phones_untouched():  # items 24

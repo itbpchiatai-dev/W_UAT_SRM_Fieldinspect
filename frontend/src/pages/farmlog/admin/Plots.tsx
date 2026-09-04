@@ -1870,9 +1870,10 @@ function CreatePlotModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<CreatePlotFormValues>({
     resolver: zodResolver(createPlotSchema),
-    // Round 8-5B — the first cycle needs PO/pCode (required) and defaults its
-    // lot to Auto.
-    defaultValues: { lotMode: 'auto', poNumber: '', pCode: '' },
+    // Round 8-5B — the first cycle needs pCode (required); PO is optional.
+    // Round A — there is no lot mode to default: the server always generates
+    // the cycle's Lot No.
+    defaultValues: { poNumber: '', pCode: '' },
   });
 
   // Access phones (round 8-3C) — a plain controlled value alongside the RHF

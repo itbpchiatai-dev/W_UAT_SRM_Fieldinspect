@@ -66,7 +66,7 @@ def test_row1_has_41_headers_in_order() -> None:
     assert headers == R.ALL_COLUMNS
     # Round 8-21A — 33 import columns (oracleSupplierCode/oracleInvoice/
     # refAccount added after supplierLotNo) + 11 result columns = 44.
-    assert len(headers) == 44
+    assert len(headers) == 43
     assert headers[:len(IMPORT_COLUMNS)] == IMPORT_COLUMNS
     assert headers[len(IMPORT_COLUMNS):] == R.RESULT_COLUMNS
 
@@ -211,8 +211,9 @@ def test_formula_like_plot_name_is_literal_text() -> None:
 
 
 def test_formula_like_lot_no_is_literal_text() -> None:
-    by_no = _rows_by_num(_build([_view(3, "error", raw={"action": "x", "lotNo": "+SUM(1,1)"})]))
-    assert by_no[3]["lotNo"].startswith("'+")
+    # Round A — probed on supplierLotNo; lotNo is no longer a column at all.
+    by_no = _rows_by_num(_build([_view(3, "error", raw={"action": "x", "supplierLotNo": "+SUM(1,1)"})]))
+    assert by_no[3]["supplierLotNo"].startswith("'+")
 
 
 def test_workbook_has_no_uuid_token_or_secret_material() -> None:

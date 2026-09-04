@@ -111,7 +111,10 @@ def test_reactivate_row_copies_latest_historical_cycle_fields():
     assert values["cycleLabel"] == "closed2025"
     assert values["poNumber"] == "PO24009"
     assert values["pCode"] == "Durian-Z"
-    assert values["lotNo"] == "OLD-LOT-09"
+    # Round A — the historical cycle's lot is NOT copied forward: the new
+    # cycle this row opens gets its own generated one, and there is no column
+    # to put an old lot in anyway.
+    assert "lotNo" not in values
     assert values["plantingDate"] == "2025-03-01"
     assert values["plantCount"] == "300"
     assert values["expectedYieldFull"] == "777"
@@ -124,7 +127,7 @@ def test_reactivate_row_with_no_cycle_history_is_blank_never_invented():
     plot = _plot(is_active=False)
     values = _reactivate_row_values(plot, None)
     assert values["action"] == plot_import.ACTION_REACTIVATE_WITH_CYCLE
-    for field in ("crop", "variety", "cycleLabel", "poNumber", "pCode", "lotNo",
+    for field in ("crop", "variety", "cycleLabel", "poNumber", "pCode",
                   "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit"):
         assert values[field] is None, field
 

@@ -56,10 +56,17 @@ async def test_create_cycle_next_number_active_and_syncs_mirror() -> None:
     db.add = MagicMock()
     db.flush = AsyncMock()
 
+    # Round A — a cycle can no longer be created with a caller-supplied lot, so
+    # this (cycle_no / status / mirror-sync) test supplies the Auto components
+    # and stubs the generator instead. What the lot itself resolves to is
+    # covered by test_plot_cycle_lot_resolution.py, not here.
     with patch(f"{_MOD}._next_cycle_no", AsyncMock(return_value=3)), \
+         patch(f"{_MOD}._supplier_code_for_plot", AsyncMock(return_value="SUP010")), \
+         patch(f"{_MOD}._next_lot_running_no", AsyncMock(return_value=1)), \
          patch(f"{_MOD}.sync_plot_mirror_from_cycle", AsyncMock()) as mocked_sync:
         cycle = await repo.create_cycle(
-            db, plot, crop="เมล่อน", variety="V", lot_no="L1",
+            db, plot, crop="เมล่อน", variety="V",
+            cycle_label="2605", p_code="WM-141",
             planting_date=datetime.date(2026, 5, 1), plant_count=100,
             expected_yield_full=Decimal("800.00"), expected_yield_unit="kg",
         )
@@ -68,6 +75,7 @@ async def test_create_cycle_next_number_active_and_syncs_mirror() -> None:
     assert cycle.status == "active"
     assert cycle.plot_id == plot.id
     assert cycle.crop == "เมล่อน"
+    assert cycle.lot_no == "2605-SUP010-WM-141-001"
     assert cycle.started_at is not None
     db.add.assert_called_once()
     mocked_sync.assert_awaited_once()

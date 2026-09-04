@@ -1,9 +1,10 @@
 /**
- * PlotCycleModals — round 8-5B PO/P.Code + Auto/Manual lot UX. Unit tests for
- * the exported payload/preview/badge helpers (the deterministic core of the
- * form logic) plus a render test that the Auto/Manual segmented control drives
- * the lotNo input. The create/start/rollover integration flows are covered by
- * Plots.test.tsx / PlotDetail.test.tsx.
+ * PlotCycleModals — round 8-5B PO/P.Code, and the round-A locked lot UX. Unit
+ * tests for the exported payload/preview/badge helpers (the deterministic core
+ * of the form logic) plus render tests that the system Lot No is display-only:
+ * a preview before the cycle exists, the stored value after. The
+ * create/start/rollover integration flows are covered by Plots.test.tsx /
+ * PlotDetail.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -17,6 +18,8 @@ import {
   lotSourceBadge,
   cycleFormSchema,
   cycleEditFormSchema,
+  cyclePlanFields,
+  cycleEditPlanFields,
   CyclePlanFields,
   StartCycleModal,
   EditCycleModal,
@@ -98,45 +101,36 @@ vi.mock('../../api/plots', async (importOriginal) => ({
 }));
 
 function base(): CycleFormValues {
-  return { poNumber: 'po25001', pCode: 'Melon-A', cycleLabel: '2605', lotMode: 'auto' } as CycleFormValues;
+  return { poNumber: 'po25001', pCode: 'Melon-A', cycleLabel: '2605' } as CycleFormValues;
 }
 
 describe('toPayload (CREATE) — round 8-5B', () => {
-  it('always sends trimmed PO (as entered) + pCode; Auto sends lotNo=null (never a client-guessed number)', () => {
-    const p = toPayload({ ...base(), poNumber: '  po25001 ', pCode: '  Melon-A ', lotMode: 'auto' });
+  it('always sends trimmed PO (as entered) + pCode, and no lot at all', () => {
+    const p = toPayload({ ...base(), poNumber: '  po25001 ', pCode: '  Melon-A ' });
     expect(p.poNumber).toBe('po25001');
     expect(p.pCode).toBe('Melon-A');
-    expect(p.lotNo).toBeNull(); // Auto → backend generates it; never a running number from the client
-    // never leaks the server-derived fields
+    // Round A — the server generates the lot; the client never names it, not
+    // even as an explicit null.
+    expect(p).not.toHaveProperty('lotNo');
+    // never leaks the server-derived fields either
     expect(p).not.toHaveProperty('lotNoSource');
     expect(p).not.toHaveProperty('lotRunningNo');
-  });
-
-  it('Manual sends the entered lotNo verbatim (Manual wins)', () => {
-    const p = toPayload({ ...base(), lotMode: 'manual', lotNo: '  HAND-01 ' });
-    expect(p.lotNo).toBe('HAND-01');
   });
 });
 
 describe('toEditPayload (EDIT) — preserve / regenerate semantics', () => {
   function editBase(): CycleEditFormValues {
-    return { poNumber: '', pCode: '', cycleLabel: '2605', lotMode: 'keep' } as CycleEditFormValues;
+    return { poNumber: '', pCode: '', cycleLabel: '2605' } as CycleEditFormValues;
   }
 
-  it('keep → omits lotNo entirely (preserve existing lot)', () => {
-    const p = toEditPayload({ ...editBase(), lotMode: 'keep' });
+  it('never sends a lot in any form — the stored one is immutable', () => {
+    // Round A — not omitted-because-unchanged, but structurally absent: there
+    // is no mode, no input and no key. Changing the very fields the lot was
+    // built from makes no difference.
+    const p = toEditPayload({ ...editBase(), cycleLabel: '26-may', pCode: 'WM-999' });
     expect(Object.prototype.hasOwnProperty.call(p, 'lotNo')).toBe(false);
-  });
-
-  it('auto WITH a PO → sends lotNo=null (explicit regenerate)', () => {
-    // Round 8-5B.1 — Auto regenerate requires a PO; with one, lotNo=null is sent.
-    const p = toEditPayload({ ...editBase(), lotMode: 'auto', poNumber: 'PO25001' });
-    expect(p.lotNo).toBeNull();
-  });
-
-  it('manual → sends the entered lotNo', () => {
-    const p = toEditPayload({ ...editBase(), lotMode: 'manual', lotNo: 'NEW-9' });
-    expect(p.lotNo).toBe('NEW-9');
+    expect(p.cycleLabel).toBe('26-may');
+    expect(p.pCode).toBe('WM-999');
   });
 
   it('round 8-13B: blank pCode → omitted (preserve); blank poNumber → sent as null (CLEAR, never omitted)', () => {
@@ -150,7 +144,7 @@ describe('toEditPayload (EDIT) — preserve / regenerate semantics', () => {
   });
 
   it('never leaks server-derived lot fields', () => {
-    const p = toEditPayload({ ...editBase(), lotMode: 'manual', lotNo: 'X' });
+    const p = toEditPayload({ ...editBase() });
     expect(p).not.toHaveProperty('lotNoSource');
     expect(p).not.toHaveProperty('lotRunningNo');
   });
@@ -211,20 +205,22 @@ describe('schema required rules', () => {
     // Round 8-17A.1 — cycleLabel supplied here so this isolates the pCode
     // rule specifically (cycleLabel's OWN requirement is covered separately
     // below, under "refineEditCyclePlan"/"cycleFormSchema").
-    expect(cycleFormSchema.safeParse({ lotMode: 'auto', poNumber: '', pCode: '', cycleLabel: '2605', variety: 'พริกขี้หนู' }).success).toBe(false);
-    expect(cycleEditFormSchema.safeParse({ lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605' }).success).toBe(true);
+    expect(cycleFormSchema.safeParse({ poNumber: '', pCode: '', cycleLabel: '2605', variety: 'พริกขี้หนู' }).success).toBe(false);
+    expect(cycleEditFormSchema.safeParse({ poNumber: '', pCode: '', cycleLabel: '2605' }).success).toBe(true);
   });
   it('round 8-13B: CREATE accepts a blank PO alone, as long as pCode is present', () => {
     const r = cycleFormSchema.safeParse({
-      lotMode: 'manual', lotNo: 'HAND-1', poNumber: '', pCode: 'X', cycleLabel: '2605', variety: 'พริกขี้หนู',
+      poNumber: '', pCode: 'X', cycleLabel: '2605', variety: 'พริกขี้หนู',
     });
     expect(r.success).toBe(true);
   });
-  it('Manual lot with a blank value is rejected', () => {
-    const r = cycleFormSchema.safeParse({
-      poNumber: 'PO', pCode: 'PC', cycleLabel: '2605', lotMode: 'manual', lotNo: '', variety: 'พริกขี้หนู',
-    });
-    expect(r.success).toBe(false);
+  it('round A: neither schema has a lot field to fill in', () => {
+    expect('lotMode' in cyclePlanFields).toBe(false);
+    expect('lotNo' in cyclePlanFields).toBe(false);
+    expect('lotMode' in cycleEditPlanFields).toBe(false);
+    expect('lotNo' in cycleEditPlanFields).toBe(false);
+    // the SUPPLIER's own lot number is untouched and still editable
+    expect('supplierLotNo' in cyclePlanFields).toBe(true);
   });
 });
 
@@ -236,7 +232,7 @@ function Harness({ supplierCode = 'SUP010', mode = 'create' as const }: {
   const { register, watch, setValue, formState: { errors } } = useForm<CycleFormValues>({
     resolver: zodResolver(cycleFormSchema),
     defaultValues: {
-      lotMode: 'auto', poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
+      poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
       crop: 'พริก', variety: 'พริกขี้หนู',
     },
   });
@@ -259,25 +255,25 @@ function renderPlan(props: { supplierCode?: string; mode?: 'create' | 'edit' } =
   );
 }
 
-describe('CyclePlanFields — Auto/Manual segmented control (create)', () => {
-  it('defaults to Auto: shows the V2 preview, no editable lot input', () => {
+describe('CyclePlanFields — the system lot is generated, never typed (create)', () => {
+  it('shows the V2 preview of what the server will mint, with no input at all', () => {
     renderPlan();
     expect(screen.getByText('2605-SUP010-WM-141-###')).toBeTruthy();
     expect(screen.queryByPlaceholderText('เช่น LOT-01')).toBeNull();
   });
 
-  it('switching to "กรอก Lot เอง" reveals the manual lot input', () => {
+  it('round A: the Auto/Manual control is gone — there is no way to type a lot', () => {
     renderPlan();
-    fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
-    expect(screen.getByPlaceholderText('เช่น LOT-01')).toBeTruthy();
-    expect(screen.queryByText('2605-SUP010-WM-141-###')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'กรอก Lot เอง' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างอัตโนมัติ' })).toBeNull();
+    expect(screen.queryByPlaceholderText('เช่น LOT-01')).toBeNull();
   });
 
-  it('the Supplier Lot No input sits outside the Auto/Manual control and stays visible in every mode', () => {
+  it('the Supplier Lot No input is separate from it, and stays editable', () => {
     renderPlan();
-    expect(screen.getByPlaceholderText('เช่น SUP-LOT-A123')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
-    expect(screen.getByPlaceholderText('เช่น SUP-LOT-A123')).toBeTruthy();
+    const input = screen.getByPlaceholderText('เช่น SUP-LOT-A123') as HTMLInputElement;
+    expect(input.readOnly).toBe(false);
+    expect(input.disabled).toBe(false);
   });
 
   it('labels the system lot so it is not confused with the supplier lot', () => {
@@ -287,48 +283,44 @@ describe('CyclePlanFields — Auto/Manual segmented control (create)', () => {
   });
 });
 
-// --- round 8-12B: Auto Lot requires cycleLabel + P.Code (NOT a PO) ---------
+// --- round 8-12B: the Auto Lot components. Round A — required on CREATE (a
+// lot is minted there) but NOT on EDIT, where a blank P.Code is back to
+// meaning "preserve the stored one" because nothing is minted. -------------
 
-describe('refineEditCyclePlan — edit Auto requires cycleLabel + P.Code', () => {
-  it('edit + auto + blank cycleLabel/pCode -> rejected, naming BOTH missing fields', () => {
-    const r = cycleEditFormSchema.safeParse({ lotMode: 'auto', poNumber: '', pCode: '' });
+describe('refineEditCyclePlan — an edit requires cycleLabel, never the lot components', () => {
+  it('edit + blank cycleLabel -> rejected, naming ONLY the label', () => {
+    const r = cycleEditFormSchema.safeParse({ poNumber: '', pCode: '' });
     expect(r.success).toBe(false);
     if (!r.success) {
       const paths = r.error.issues.map((i) => i.path[0]);
       expect(paths).toContain('cycleLabel');
-      expect(paths).toContain('pCode');
-      // the retired PO rule must be gone
+      // Round A — a blank P.Code is a PRESERVE, not an error: an edit mints no
+      // lot, and a legacy cycle may never have had one to begin with.
+      expect(paths).not.toContain('pCode');
+      // the retired PO rule must be gone too
       expect(paths).not.toContain('poNumber');
     }
   });
 
-  it('edit + auto + a PO but no cycleLabel/pCode -> STILL rejected (a PO does not satisfy V2)', () => {
-    const r = cycleEditFormSchema.safeParse({ lotMode: 'auto', poNumber: 'PO25001', pCode: '' });
+  it('edit + a PO but no cycleLabel -> STILL rejected (a PO is not a label)', () => {
+    const r = cycleEditFormSchema.safeParse({ poNumber: 'PO25001', pCode: '' });
     expect(r.success).toBe(false);
   });
 
-  it('edit + auto + cycleLabel + pCode and NO PO -> ok (V2 never needs the PO)', () => {
+  it('edit + cycleLabel + pCode and NO PO -> ok (V2 never needs the PO)', () => {
     const r = cycleEditFormSchema.safeParse({
-      lotMode: 'auto', poNumber: '', pCode: 'WM-141', cycleLabel: '2605',
+      poNumber: '', pCode: 'WM-141', cycleLabel: '2605',
     });
     expect(r.success).toBe(true);
   });
 
-  it('edit + keep + blank cycleLabel -> rejected (round 8-17A.1: required in every edit, including keep/preserve mode)', () => {
-    expect(cycleEditFormSchema.safeParse({ lotMode: 'keep', poNumber: '', pCode: '' }).success).toBe(false);
+  it('edit + blank cycleLabel -> rejected (round 8-17A.1: required in every edit)', () => {
+    expect(cycleEditFormSchema.safeParse({ poNumber: '', pCode: '' }).success).toBe(false);
   });
 
-  it('edit + keep + blank everything ELSE but cycleLabel present -> ok (preserve still works for pCode/PO)', () => {
+  it('edit + blank everything ELSE but cycleLabel present -> ok (preserve still works for pCode/PO)', () => {
     expect(
-      cycleEditFormSchema.safeParse({ lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605' }).success,
-    ).toBe(true);
-  });
-
-  it('edit + manual + value -> ok, Auto components (pCode) not required — cycleLabel still is', () => {
-    expect(
-      cycleEditFormSchema.safeParse({
-        lotMode: 'manual', lotNo: 'X', poNumber: '', pCode: '', cycleLabel: '2605',
-      }).success,
+      cycleEditFormSchema.safeParse({ poNumber: '', pCode: '', cycleLabel: '2605' }).success,
     ).toBe(true);
   });
 });
@@ -337,51 +329,48 @@ describe('cycleFormSchema (create) — Auto requires cycleLabel + P.Code', () =>
   // variety is required on CREATE since round 8-26C (P.Code derives from it).
   const base = { poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605', variety: 'พริกขี้หนู' };
 
-  it('auto + all components -> ok', () => {
-    expect(cycleFormSchema.safeParse({ ...base, lotMode: 'auto' }).success).toBe(true);
+  it('all components -> ok', () => {
+    expect(cycleFormSchema.safeParse({ ...base }).success).toBe(true);
   });
 
-  it('auto + missing cycleLabel -> blocked', () => {
-    const r = cycleFormSchema.safeParse({ ...base, cycleLabel: '', lotMode: 'auto' });
+  it('missing cycleLabel -> blocked', () => {
+    const r = cycleFormSchema.safeParse({ ...base, cycleLabel: '' });
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('cycleLabel');
   });
 
-  it('auto + missing pCode -> blocked', () => {
-    const r = cycleFormSchema.safeParse({ ...base, pCode: '', lotMode: 'auto' });
+  it('missing pCode -> blocked', () => {
+    const r = cycleFormSchema.safeParse({ ...base, pCode: '' });
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('pCode');
   });
 
-  it('manual + a lot value + no cycleLabel -> blocked (round 8-17A.1: cycleLabel required in every mode, not just Auto)', () => {
-    const r = cycleFormSchema.safeParse({
-      ...base, cycleLabel: '', lotMode: 'manual', lotNo: 'HAND-1',
-    });
+  it('round A: the lot components are required unconditionally — there is no mode that skips them', () => {
+    // Before this round a hand-typed lot exempted the row from needing them.
+    const r = cycleFormSchema.safeParse({ ...base, cycleLabel: '', pCode: '' });
     expect(r.success).toBe(false);
-    if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('cycleLabel');
+    if (!r.success) {
+      const paths = r.error.issues.map((i) => i.path[0]);
+      expect(paths).toContain('cycleLabel');
+      expect(paths).toContain('pCode');
+    }
   });
 });
 
-describe('toEditPayload — Auto regenerate is no longer gated on the PO', () => {
-  it('auto + PO -> sends lotNo:null + poNumber, never source/running', () => {
-    const p = toEditPayload({ lotMode: 'auto', poNumber: 'PO25001', pCode: '', cycleLabel: '2605' } as CycleEditFormValues);
-    expect(p.lotNo).toBeNull();
+describe('toEditPayload — PO handling, with the lot untouchable', () => {
+  it('PO -> sent, and still no lot / source / running', () => {
+    const p = toEditPayload({ poNumber: 'PO25001', pCode: '', cycleLabel: '2605' } as CycleEditFormValues);
     expect(p.poNumber).toBe('PO25001');
+    expect(p).not.toHaveProperty('lotNo');
     expect(p).not.toHaveProperty('lotNoSource');
     expect(p).not.toHaveProperty('lotRunningNo');
   });
 
-  it('auto + blank PO -> STILL emits lotNo:null (V2 regenerates without a PO); poNumber sent as null (clear)', () => {
-    const p = toEditPayload({ lotMode: 'auto', poNumber: '', pCode: '', cycleLabel: '2605' } as CycleEditFormValues);
-    expect(Object.prototype.hasOwnProperty.call(p, 'lotNo')).toBe(true);
-    expect(p.lotNo).toBeNull();
-    // round 8-13B: poNumber is now ALWAYS sent (blank = clear), never omitted.
+  it('blank PO -> sent as null (CLEAR, never omitted); the lot stays absent', () => {
+    const p = toEditPayload({ poNumber: '', pCode: '', cycleLabel: '2605' } as CycleEditFormValues);
+    // round 8-13B: poNumber is ALWAYS sent (blank = clear), never omitted.
     expect(p).toHaveProperty('poNumber');
     expect(p.poNumber).toBeNull();
-  });
-
-  it('keep -> omits lotNo entirely (the existing lot is preserved)', () => {
-    const p = toEditPayload({ lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605' } as CycleEditFormValues);
     expect(Object.prototype.hasOwnProperty.call(p, 'lotNo')).toBe(false);
   });
 });
@@ -390,7 +379,7 @@ describe('supplierLotNo payloads', () => {
   it('create trims the value and never sends an internal series key', () => {
     const p = toPayload({
       poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
-      lotMode: 'auto', supplierLotNo: '  SUP-OWN-1  ',
+      supplierLotNo: '  SUP-OWN-1  ',
     } as CycleFormValues);
     expect(p.supplierLotNo).toBe('SUP-OWN-1');
     expect(p).not.toHaveProperty('autoLotSeriesKey');
@@ -401,25 +390,22 @@ describe('supplierLotNo payloads', () => {
   it('create with a blank supplier lot sends null', () => {
     const p = toPayload({
       poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
-      lotMode: 'auto', supplierLotNo: '   ',
+      supplierLotNo: '   ',
     } as CycleFormValues);
     expect(p.supplierLotNo).toBeNull();
   });
 
-  it('supplier lot never changes the Manual/Auto decision', () => {
-    const auto = toPayload({
-      poNumber: 'P', pCode: 'C', cycleLabel: 'L', lotMode: 'auto', supplierLotNo: 'S-1',
+  it('the supplier lot never drags the system lot into the payload', () => {
+    const p = toPayload({
+      poNumber: 'P', pCode: 'C', cycleLabel: 'L', supplierLotNo: 'S-1',
     } as CycleFormValues);
-    const manual = toPayload({
-      poNumber: 'P', pCode: 'C', cycleLabel: 'L', lotMode: 'manual', lotNo: 'M-1', supplierLotNo: 'S-1',
-    } as CycleFormValues);
-    expect(auto.lotNo).toBeNull();
-    expect(manual.lotNo).toBe('M-1');
+    expect(p.supplierLotNo).toBe('S-1');
+    expect(p).not.toHaveProperty('lotNo');
   });
 
-  it('edit sends the supplier lot on every lot mode, including keep', () => {
+  it('edit sends the supplier lot and still never the system lot', () => {
     const p = toEditPayload({
-      lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605', supplierLotNo: 'S-9',
+      poNumber: '', pCode: '', cycleLabel: '2605', supplierLotNo: 'S-9',
     } as CycleEditFormValues);
     expect(p.supplierLotNo).toBe('S-9');
     expect(p).not.toHaveProperty('lotNo');
@@ -454,77 +440,58 @@ function renderEdit(cycle: PlotCycle) {
   return { onClose, onSaved };
 }
 
-// Round 8-12B — V1 blocked "regenerate Auto Lot" without a PO. V2's formula
-// has no PO at all, so that rule is GONE; what Auto needs now is a cycleLabel
-// and a P.Code. These tests replace the round-8-5B.1 pair that asserted the
-// opposite.
-describe('EditCycleModal — Auto regenerate requires cycleLabel + P.Code, never a PO', () => {
-  it('choosing "สร้าง Auto Lot ใหม่" with no P.Code blocks submit and names P.Code, not the PO', async () => {
+// Round 8-12B — V1 blocked "regenerate Auto Lot" without a PO; V2 needed a
+// cycleLabel + P.Code instead. Round A retired regeneration itself: the lot is
+// minted once, at cycle creation, so the edit form only DISPLAYS it. These
+// tests assert that display, and that the components stay required for the
+// reasons that outlived the lot mode (cycleLabel/P.Code still identify the
+// cycle and still build the lot at CREATE time).
+describe('EditCycleModal — the system lot is display-only', () => {
+  it('shows the stored lot read-only, with no way to change or regenerate it', () => {
     updatePlotCycleMock.mockReset();
-    // legacy cycle: has a lot + a cycleLabel, but no pCode and no PO.
-    const { onSaved } = renderEdit(legacyCycle());
+    renderEdit(legacyCycle());
 
     expect(screen.getByText('LEGACY-LOT')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'สร้าง Auto Lot ใหม่' }));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    expect(await screen.findByText('กรุณากรอก P.Code ก่อนสร้าง Lot No ระบบอัตโนมัติ')).toBeTruthy();
-    // the retired PO rule must not fire
-    expect(screen.queryByText('กรุณากรอก PO Number ก่อนสร้าง Auto Lot')).toBeNull();
-    expect(updatePlotCycleMock).not.toHaveBeenCalled();
-    expect(onSaved).not.toHaveBeenCalled();
-    expect(screen.getByText('แก้รอบปลูก — รอบที่ 2')).toBeTruthy();
+    expect(screen.getByText('ระบบสร้างให้ตอนเริ่มรอบปลูก — แก้ไขไม่ได้')).toBeTruthy();
+    // none of the retired controls exist any more
+    expect(screen.queryByRole('button', { name: 'สร้าง Auto Lot ใหม่' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'กรอก Lot เอง' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'เก็บ Lot เดิม' })).toBeNull();
+    expect(screen.queryByPlaceholderText('เช่น LOT-01')).toBeNull();
   });
 
-  it('filling P.Code alone lets Auto through — a PO is never required (sends lotNo:null, poNumber:null)', async () => {
+  it('tags a legacy lot with its source badge so an old hand-typed one is recognisable', () => {
     updatePlotCycleMock.mockReset();
-    updatePlotCycleMock.mockResolvedValue(
-      legacyCycle({ lotNo: 'jun2026-SUP010-WM-141-001', lotNoSource: 'auto' }),
-    );
-    const { onSaved } = renderEdit(legacyCycle());
+    renderEdit(legacyCycle({ lotNo: 'HAND-01', lotNoSource: 'manual' }));
+    expect(screen.getByText('HAND-01')).toBeTruthy();
+    expect(screen.getByText('กรอกเอง')).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'สร้าง Auto Lot ใหม่' }));
-    await pickVariety();
+  it('saving an edit never sends a lot, even when P.Code and label change', async () => {
+    updatePlotCycleMock.mockReset();
+    updatePlotCycleMock.mockResolvedValue(legacyCycle());
+    const { onSaved } = renderEdit(legacyCycle({ pCode: 'WM-141', cycleLabel: '2605' }));
+
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(updatePlotCycleMock).toHaveBeenCalledTimes(1));
     const [, , payload] = updatePlotCycleMock.mock.calls[0];
-    expect(payload.lotNo).toBeNull();          // = "regenerate"
-    expect(payload.pCode).toBe('WM-141');
-    // round 8-13B: poNumber is ALWAYS sent now (blank input -> null), never
-    // omitted — the legacy cycle already had no PO, so this is a no-op clear.
-    expect(payload).toHaveProperty('poNumber');
-    expect(payload.poNumber).toBeNull();
+    expect(payload).not.toHaveProperty('lotNo');
     expect(payload).not.toHaveProperty('lotNoSource');
     expect(payload).not.toHaveProperty('lotRunningNo');
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
-  it('a blank cycleLabel blocks Auto and names the cycle label', async () => {
+  it('a blank cycleLabel still blocks the save (it identifies the cycle)', async () => {
     updatePlotCycleMock.mockReset();
     renderEdit(legacyCycle({ cycleLabel: null, pCode: 'WM-141' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'สร้าง Auto Lot ใหม่' }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 
-    // Round 8-17A.1 — the Auto-only message is retired; blank cycleLabel
-    // now fails the unconditional requireCycleLabel check with this message.
     expect(
       await screen.findByText('กรุณาระบุชื่อรอบปลูก เนื่องจากใช้ระบุรอบและสร้าง Lot No อัตโนมัติ'),
     ).toBeTruthy();
     expect(updatePlotCycleMock).not.toHaveBeenCalled();
-  });
-
-  it('an untouched edit of a complete cycle can regenerate straight away (values are prefilled)', async () => {
-    updatePlotCycleMock.mockReset();
-    updatePlotCycleMock.mockResolvedValue(legacyCycle());
-    renderEdit(legacyCycle({ pCode: 'WM-141', cycleLabel: '2605' }));
-
-    fireEvent.click(screen.getByRole('button', { name: 'สร้าง Auto Lot ใหม่' }));
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    await waitFor(() => expect(updatePlotCycleMock).toHaveBeenCalledTimes(1));
-    expect(updatePlotCycleMock.mock.calls[0][2].lotNo).toBeNull();
   });
 });
 
@@ -555,7 +522,7 @@ describe('EditCycleModal — Supplier Lot No', () => {
     await waitFor(() => expect(updatePlotCycleMock).toHaveBeenCalledTimes(1));
     const payload = updatePlotCycleMock.mock.calls[0][2];
     expect(payload.supplierLotNo).toBeNull();
-    // lot mode defaulted to "เก็บ Lot เดิม" → the system lot is untouched
+    // round A — the system lot is not part of an edit payload at all
     expect(payload).not.toHaveProperty('lotNo');
   });
 });
@@ -594,10 +561,8 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     createPlotCycleMock.mockResolvedValue(legacyCycle());
     const { onSaved } = renderStart();
 
-    fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น LOT-01'), { target: { value: 'HAND-1' } });
     await pickVariety();
-    // Round 8-17A.1 — cycleLabel is required regardless of Auto/Manual lot.
+    // Round 8-17A.1 — cycleLabel is required on every new-cycle form.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } },
     );
@@ -611,7 +576,7 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
-  it('Auto Lot + blank PO + cycleLabel/pCode filled -> submits, preview never shows a PO', async () => {
+  it('blank PO + cycleLabel/pCode filled -> submits, preview never shows a PO', async () => {
     createPlotCycleMock.mockReset();
     createPlotCycleMock.mockResolvedValue(legacyCycle());
     renderStart();
@@ -625,7 +590,9 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     await waitFor(() => expect(createPlotCycleMock).toHaveBeenCalledTimes(1));
     const [, payload] = createPlotCycleMock.mock.calls[0];
     expect(payload.poNumber).toBeNull();
-    expect(payload.lotNo).toBeNull(); // Auto — backend generates it
+    // Round A — the lot is absent from the payload entirely; the backend mints
+    // it from the cycleLabel/pCode above.
+    expect(payload).not.toHaveProperty('lotNo');
   });
 });
 
@@ -643,10 +610,8 @@ describe('RolloverCycleModal — PO Number optional (round 8-13B)', () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น LOT-01'), { target: { value: 'HAND-2' } });
     await pickVariety();
-    // Round 8-17A.1 — cycleLabel is required regardless of Auto/Manual lot.
+    // Round 8-17A.1 — cycleLabel is required on every new-cycle form.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jul2026' } },
     );
@@ -672,10 +637,8 @@ describe('ReactivatePlotWithCycleModal — PO Number optional (round 8-13B)', ()
       </QueryClientProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'กรอก Lot เอง' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น LOT-01'), { target: { value: 'HAND-3' } });
     await pickVariety();
-    // Round 8-17A.1 — cycleLabel is required regardless of Auto/Manual lot.
+    // Round 8-17A.1 — cycleLabel is required on every new-cycle form.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'aug2026' } },
     );
@@ -754,7 +717,7 @@ describe('CyclePlanFields — Oracle reference group (round 8-21B)', () => {
 describe('toPayload/toEditPayload — Oracle reference fields', () => {
   it('create: trims and sends all three values', () => {
     const p = toPayload({
-      poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605', lotMode: 'auto',
+      poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
       oracleSupplierCode: '  ORC-SUP-1  ', oracleInvoice: '  INV-1  ', refAccount: '  ACC-1  ',
     } as CycleFormValues);
     expect(p.oracleSupplierCode).toBe('ORC-SUP-1');
@@ -764,7 +727,7 @@ describe('toPayload/toEditPayload — Oracle reference fields', () => {
 
   it('create: blank/omitted fields all send null', () => {
     const p = toPayload({
-      poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605', lotMode: 'auto',
+      poNumber: 'PO25001', pCode: 'WM-141', cycleLabel: '2605',
       oracleSupplierCode: '   ',
     } as CycleFormValues);
     expect(p.oracleSupplierCode).toBeNull();
@@ -774,7 +737,7 @@ describe('toPayload/toEditPayload — Oracle reference fields', () => {
 
   it('edit: always sends the three fields (trim-or-null), same convention as supplierLotNo', () => {
     const p = toEditPayload({
-      lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605',
+      poNumber: '', pCode: '', cycleLabel: '2605',
       oracleSupplierCode: '  X  ', oracleInvoice: '', refAccount: undefined,
     } as CycleEditFormValues);
     expect(p.oracleSupplierCode).toBe('X');
@@ -788,7 +751,7 @@ describe('Oracle reference fields — validation (>255 chars rejected)', () => {
     'create schema rejects %s over 255 characters',
     (field) => {
       const r = cycleFormSchema.safeParse({
-        poNumber: '', pCode: 'C', cycleLabel: 'L', lotMode: 'auto', variety: 'พริกขี้หนู',
+        poNumber: '', pCode: 'C', cycleLabel: 'L', variety: 'พริกขี้หนู',
         [field]: 'X'.repeat(256),
       });
       expect(r.success).toBe(false);
@@ -799,7 +762,7 @@ describe('Oracle reference fields — validation (>255 chars rejected)', () => {
     'create schema accepts exactly 255 characters for %s',
     (field) => {
       const r = cycleFormSchema.safeParse({
-        poNumber: '', pCode: 'C', cycleLabel: 'L', lotMode: 'auto', variety: 'พริกขี้หนู',
+        poNumber: '', pCode: 'C', cycleLabel: 'L', variety: 'พริกขี้หนู',
         [field]: 'X'.repeat(255),
       });
       expect(r.success).toBe(true);
@@ -808,7 +771,7 @@ describe('Oracle reference fields — validation (>255 chars rejected)', () => {
 
   it('edit schema also rejects over 255 characters', () => {
     const r = cycleEditFormSchema.safeParse({
-      lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: 'L',
+      poNumber: '', pCode: '', cycleLabel: 'L',
       oracleInvoice: 'X'.repeat(256),
     });
     expect(r.success).toBe(false);
@@ -1027,7 +990,7 @@ describe('CyclePlanFields — round 8-26C: P.Code derives from the พันธ�
 describe('cycleFormSchema — round 8-26C: พันธุ์ required on create', () => {
   it('rejects a create with no variety', () => {
     const r = cycleFormSchema.safeParse({
-      poNumber: '', pCode: 'WM-141', cycleLabel: '2605', lotMode: 'auto',
+      poNumber: '', pCode: 'WM-141', cycleLabel: '2605',
     });
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('variety');
@@ -1035,14 +998,14 @@ describe('cycleFormSchema — round 8-26C: พันธุ์ required on create
 
   it('rejects a whitespace-only variety', () => {
     const r = cycleFormSchema.safeParse({
-      poNumber: '', pCode: 'WM-141', cycleLabel: '2605', lotMode: 'auto', variety: '   ',
+      poNumber: '', pCode: 'WM-141', cycleLabel: '2605', variety: '   ',
     });
     expect(r.success).toBe(false);
   });
 
   it('the EDIT schema still accepts a blank variety', () => {
     const r = cycleEditFormSchema.safeParse({
-      lotMode: 'keep', poNumber: '', pCode: '', cycleLabel: '2605', variety: '',
+      poNumber: '', pCode: '', cycleLabel: '2605', variety: '',
     });
     expect(r.success).toBe(true);
   });

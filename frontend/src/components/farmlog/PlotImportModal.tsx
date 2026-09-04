@@ -190,7 +190,10 @@ function importErrorMessage(error: unknown): { message: string; preview?: PlotIm
  * show "—" here regardless of preserve-vs-none semantics — the help text
  * above the table is what explains that distinction.
  */
-/** Round 8-5B — short Thai label for a preview row's lotMode. */
+/** Round 8-5B — short Thai label for a preview row's lotMode. Round A — the
+ * server no longer reports 'manual' (a row cannot supply a lot), but the
+ * mapping is kept so a preview produced by an older backend still renders a
+ * label instead of a bare mode string. */
 function lotModeLabel(mode: string | null | undefined): string | null {
   if (mode === 'auto') return 'อัตโนมัติ';
   if (mode === 'manual') return 'กรอกเอง';
@@ -572,7 +575,7 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
             </p>
             <p className="mt-2">
               วันที่ปลูกใช้รูปแบบ <span className="font-mono">YYYY-MM-DD</span> · 1 แถวต่อแปลงต่อไฟล์ ·
-              เว้น <span className="font-mono">lotNo</span> ว่าง = ระบบสร้าง Lot ให้
+              ระบบสร้าง Lot No ให้เองทุกรอบใหม่
               (ต้องมี <span className="font-mono">cycleLabel</span> และ <span className="font-mono">pCode</span>)
             </p>
             {/* Round 8-6B Part F — points at the filtered/contextual template
@@ -612,14 +615,16 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                   (ไม่จำเป็นต้องเลือกเองแล้วสำหรับงานประจำวัน — ใช้ start_next_cycle แทนได้)
                 </p>
                 <p>ต้องระบุชื่อรอบปลูก (cycleLabel) เมื่อใช้ start_next_cycle</p>
-                {/* Round 8-12B — the Auto Lot V2 contract. */}
+                {/* Round 8-12B — the Auto Lot V2 contract. Round A — there is
+                    no lotNo column any more, so this explains what the server
+                    does rather than what to type. */}
                 <p>
-                  <span className="font-medium text-foreground">Lot No ระบบ (lotNo):</span>{' '}
-                  เว้นว่างเพื่อให้ระบบสร้างจาก ชื่อรอบปลูก + รหัส Supplier + P.Code + เลขรัน
+                  <span className="font-medium text-foreground">Lot No ระบบ:</span>{' '}
+                  ระบบสร้างให้เองตอนเปิดรอบปลูก จาก ชื่อรอบปลูก + รหัส Supplier + P.Code + เลขรัน
                   (เช่น <span className="font-mono">2605-SUP010-WM-141-003</span>) —
                   ต้องกรอก <span className="font-mono">cycleLabel</span> และ{' '}
                   <span className="font-mono">pCode</span> ด้วย มิฉะนั้นแถวนั้นจะไม่ผ่านการตรวจสอบ ·
-                  กรอกเอง = ใช้ค่าที่กรอก (ไม่สร้างให้)
+                  ไม่มีคอลัมน์ <span className="font-mono">lotNo</span> ให้กรอกแล้ว และแก้ไขทีหลังไม่ได้
                 </p>
                 <p>
                   <span className="font-medium text-foreground">Supplier Lot No (supplierLotNo):</span>{' '}

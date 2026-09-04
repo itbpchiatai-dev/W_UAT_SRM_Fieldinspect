@@ -607,8 +607,9 @@ class PlotCycleCreate(CamelBaseModel):
     blank/omitted P.Code is still a 422. The migration-0042 columns stay
     nullable at the DB level (unchanged since round 8-5B) — this requiredness
     is an API contract for NEW cycles only, never a DB constraint change.
-    status/cycle_no/started_at/closed_* and lot_no_source/lot_running_no are
-    all server-derived, never client-supplied."""
+    status/cycle_no/started_at/closed_* and the whole lot trio (lot_no,
+    lot_no_source, lot_running_no) are all server-derived, never
+    client-supplied — see the lot comment below."""
 
     crop: str | None = Field(None, max_length=100)
     variety: str | None = Field(None, max_length=100)
@@ -621,11 +622,13 @@ class PlotCycleCreate(CamelBaseModel):
     # that predate this requirement) and feeds the Auto Lot formula, so a
     # blank one silently degrades both.
     cycle_label: str = Field(..., max_length=100)
-    lot_no: str | None = Field(None, max_length=100)
     # PO (round 8-13A — OPTIONAL, see class docstring) / P.Code (round 8-5B —
     # still REQUIRED nonblank). PO is upper-cased + trimmed when given;
-    # P.Code is trimmed (case kept). lot_no_source/lot_running_no are
-    # SERVER-derived and intentionally NOT accepted here.
+    # P.Code is trimmed (case kept). The system lot (lot_no) and its
+    # lot_no_source/lot_running_no bookkeeping are ALL server-derived and
+    # intentionally NOT accepted here — round A removed lot_no from this
+    # schema, so a new cycle's Auto Lot can never be pre-empted by a
+    # hand-typed one.
     po_number: str | None = Field(None, max_length=100)
     p_code: str = Field(..., max_length=100)
     # Round 8-12A — the SUPPLIER's own lot number for this cycle. OPTIONAL and
@@ -698,9 +701,11 @@ class PlotCycleUpdate(CamelBaseModel):
     variety: str | None = Field(None, max_length=100)
     # User-facing season name, e.g. "jun2026" (round 8.0) — see PlotCycleRead.
     cycle_label: str | None = Field(None, max_length=100)
-    lot_no: str | None = Field(None, max_length=100)
-    # PO / P.Code (round 8-5A) — see PlotCycleCreate. lot_no_source/
-    # lot_running_no are SERVER-derived, never accepted from the client.
+    # PO / P.Code (round 8-5A) — see PlotCycleCreate. The system lot is absent
+    # from this schema entirely (round A): a cycle's Auto Lot is decided when
+    # the cycle is created and is immutable afterwards, so an edit has no way
+    # to rewrite, regenerate or clear it. lot_no_source/lot_running_no were
+    # already SERVER-derived and never accepted from the client.
     po_number: str | None = Field(None, max_length=100)
     p_code: str | None = Field(None, max_length=100)
     # Round 8-12A — supplier's own lot number. exclude_unset semantics apply

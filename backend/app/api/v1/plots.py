@@ -268,9 +268,10 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "latitude": "18.7883", "longitude": "98.9853", "rai": "5",
             "crop": "พริก", "variety": "พริกขี้หนู", "cycleLabel": "jun2026",
             "poNumber": "PO25001", "pCode": "Melon-A",
-            "lotNo": "LOT-01",
             # Round 8-12A — the Supplier's OWN lot number, unrelated to the
-            # system's Auto Lot. Free-form; leave blank when there isn't one.
+            # system's Lot No. Free-form; leave blank when there isn't one.
+            # Round A — there is no lotNo column any more: the system generates
+            # the cycle's Lot No itself and it can never be typed here.
             "supplierLotNo": "SUP-LOT-2026-01",
             # Round 8-21A — independent back-office reference fields; leave
             # blank when there is nothing to record for this cycle.
@@ -292,7 +293,6 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "primaryPhone": "0899991234",
             "crop": "พริก", "variety": "พริกหยวก", "cycleLabel": "may2026",
             "poNumber": "PO25002", "pCode": "Chili-B",
-            "lotNo": "LOT-03",
             "supplierLotNo": "SUP-LOT-2026-02",
             # Round 8-21A — example shows a genuine edit: nonblank text is
             # trimmed and saved. Leaving a cell like this blank on an
@@ -316,7 +316,6 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             # this example deliberately leaves it blank (still a fully valid
             # row) to show that. pCode stays required — see below.
             "poNumber": None, "pCode": "Melon-C",
-            "lotNo": "LOT-04",
             # Blank = this cycle has no supplier lot number (also what an
             # older workbook without the column effectively means).
             "supplierLotNo": None,
@@ -337,7 +336,6 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "primaryPhone": "0811112222",
             "crop": "เมล่อน", "variety": "เมล่อนญี่ปุ่น", "cycleLabel": "sep2026",
             "poNumber": None, "pCode": "Melon-D",
-            "lotNo": None,
             "supplierLotNo": None,
             "plantingDate": "2026-09-01", "plantCount": "500",
             "expectedYieldFull": "1500", "expectedYieldUnit": "kg",
@@ -412,7 +410,10 @@ _REFERENCE_COLUMNS: frozenset[str] = frozenset({
     "inspectionPasswordStatus",
 })
 _EDITABLE_COLUMNS: frozenset[str] = frozenset({
-    "crop", "variety", "cycleLabel", "poNumber", "pCode", "lotNo", "supplierLotNo",
+    # Round A — lotNo is gone from this set with the column itself: the system
+    # Lot No is generated at cycle creation and is not editable by anyone.
+    # supplierLotNo (the supplier's own) remains normal, editable input.
+    "crop", "variety", "cycleLabel", "poNumber", "pCode", "supplierLotNo",
     # Round 8-21A — same category as supplierLotNo above: genuine, optional
     # user input, never plot/supplier identity.
     "oracleSupplierCode", "oracleInvoice", "refAccount",
@@ -495,11 +496,11 @@ def _new_cycle_row_values(
     the plot has no active cycle — its fields are then blank, and this
     deliberately never falls back to a closed/historical cycle, so the user
     always fills in a fresh plan rather than accidentally re-importing stale
-    data). lotNo and plantingDate are ALWAYS blank here regardless of the
-    active cycle: lotNo so the Auto Lot generator
-    ({cycleLabel}-{supplierCode}-{pCode}-{running}, round 8-12A) can run when
-    the user leaves it blank; plantingDate because it must be the NEW
-    cycle's planting date, never copied from the old one.
+    data). plantingDate is ALWAYS blank here regardless of the active cycle:
+    it must be the NEW cycle's planting date, never copied from the old one.
+    (Round A — the lotNo column this used to blank for the same reason no
+    longer exists at all: the server always generates the new cycle's Lot No,
+    {cycleLabel}-{supplierCode}-{pCode}-{running}, round 8-12A.)
 
     Round 8-7A pre-filled finalInspectionRecordId here from the cycle's latest
     active record; round 8-10B removed that column (the server resolves the
@@ -526,7 +527,6 @@ def _new_cycle_row_values(
         "cycleLabel": cycle.cycle_label if cycle is not None else None,
         "poNumber": cycle.po_number if cycle is not None else None,
         "pCode": cycle.p_code if cycle is not None else None,
-        "lotNo": None,
         # Round 8-12A — prefill the active cycle's CURRENT supplier lot number
         # so an edit round-trips it unchanged; blank when the cycle has none.
         "supplierLotNo": cycle.supplier_lot_no if cycle is not None else None,
@@ -559,7 +559,7 @@ def _reactivate_row_values(
 ) -> dict[str, str | None]:
     """Sheet 1 row for an INACTIVE plot (round 8-6J Part D): action is always
     reactivate_plot_with_cycle. Unlike _new_cycle_row_values (which always
-    blanks lotNo/plantingDate for a rollover-in-place), every planting-cycle
+    blanks plantingDate for a rollover-in-place), every planting-cycle
     field here is pre-filled from the plot's most recent HISTORICAL cycle
     (`latest_cycle` — any status, batch-loaded by the caller via
     plot_cycle_repository.get_latest_cycles_for_plots) as a starting point
@@ -592,7 +592,6 @@ def _reactivate_row_values(
         "cycleLabel": cycle.cycle_label if cycle is not None else None,
         "poNumber": cycle.po_number if cycle is not None else None,
         "pCode": cycle.p_code if cycle is not None else None,
-        "lotNo": cycle.lot_no if cycle is not None else None,
         # Round 8-12A — the cycle's current supplier lot number.
         "supplierLotNo": cycle.supplier_lot_no if cycle is not None else None,
         # Round 8-21A — the historical cycle's reference fields, same
@@ -1588,7 +1587,7 @@ async def create_plot_with_cycle(
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
             crop=nc.crop, variety=nc.variety, cycle_label=nc.cycle_label,
-            lot_no=nc.lot_no, po_number=nc.po_number, p_code=nc.p_code,
+            po_number=nc.po_number, p_code=nc.p_code,
             supplier_lot_no=nc.supplier_lot_no,
             oracle_supplier_code=nc.oracle_supplier_code, oracle_invoice=nc.oracle_invoice,
             ref_account=nc.ref_account,
@@ -2075,7 +2074,7 @@ async def start_plot_cycle(
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
             crop=payload.crop, variety=payload.variety,
-            cycle_label=payload.cycle_label, lot_no=payload.lot_no,
+            cycle_label=payload.cycle_label,
             po_number=payload.po_number, p_code=payload.p_code,
             supplier_lot_no=payload.supplier_lot_no,
             oracle_supplier_code=payload.oracle_supplier_code,
@@ -2184,27 +2183,13 @@ async def update_plot_cycle(
         p_code=fields.get("p_code", cycle.p_code),
         current_p_code=cycle.p_code,
     )
-    try:
-        await plot_cycle_repo.update_cycle(db, plot, cycle, fields)
-    except AutoLotMissingComponentError as exc:
-        # Round 8-5B.1 / 8-12A — an edit asked to regenerate an Auto Lot (blank
-        # lotNo) but a component of the V2 formula
-        # ({cycleLabel}-{supplierCode}-{pCode}-{running}) is blank. Refuse with
-        # a clean 422 naming the missing FIELD (never a submitted value); the
-        # txn rolls back so the existing lot is preserved (never cleared).
-        raise HTTPException(
-            status_code=422, detail=_auto_lot_missing_detail(exc.missing),
-        ) from exc
-    except LotNumberTooLongError as exc:
-        # A re-resolved Auto Lot would exceed lot_no's 100-char limit — clean
-        # 422 (round 8-5A). Nothing is committed (the flush failed inside).
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except IntegrityError as exc:
-        # Auto Lot running-number collision (uq_plot_cycles_auto_lot_running) —
-        # clean 409, never a 500. Round 8-5A.
-        raise HTTPException(
-            status_code=409, detail="Conflict assigning the planting cycle lot number"
-        ) from exc
+    # Round A — no lot-related failure mode is reachable here any more: an edit
+    # never resolves, regenerates or renumbers a lot (see update_cycle), so the
+    # AutoLotMissingComponentError / LotNumberTooLongError / running-number
+    # IntegrityError handlers this call used to carry are gone with it. Those
+    # three still guard every path that CREATES a cycle, where a lot is
+    # actually generated.
+    await plot_cycle_repo.update_cycle(db, cycle, fields)
     await plot_cycle_repo.sync_plot_mirror_from_cycle(db, plot, cycle)
     # Re-load the onupdate-computed updated_at the flush expired (round 7.7 fix
     # — see start_plot_cycle) before serialising.
@@ -2329,7 +2314,7 @@ async def rollover_plot_cycle(
             closed_by_id=current_user.id,
             close_reason=payload.close_reason or "Closed by rollover",
             crop=nc.crop, variety=nc.variety, cycle_label=nc.cycle_label,
-            lot_no=nc.lot_no, po_number=nc.po_number, p_code=nc.p_code,
+            po_number=nc.po_number, p_code=nc.p_code,
             supplier_lot_no=nc.supplier_lot_no,
             oracle_supplier_code=nc.oracle_supplier_code, oracle_invoice=nc.oracle_invoice,
             ref_account=nc.ref_account,
@@ -2558,7 +2543,7 @@ async def reactivate_plot_with_cycle(
         plot, cycle = await repo.reactivate_plot_with_cycle(
             db, plot,
             crop=payload.crop, variety=payload.variety, cycle_label=payload.cycle_label,
-            lot_no=payload.lot_no, po_number=payload.po_number, p_code=payload.p_code,
+            po_number=payload.po_number, p_code=payload.p_code,
             supplier_lot_no=payload.supplier_lot_no,
             oracle_supplier_code=payload.oracle_supplier_code,
             oracle_invoice=payload.oracle_invoice, ref_account=payload.ref_account,

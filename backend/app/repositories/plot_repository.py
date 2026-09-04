@@ -714,7 +714,6 @@ async def reactivate_plot_with_cycle(
     crop: str | None = None,
     variety: str | None = None,
     cycle_label: str | None = None,
-    lot_no: str | None = None,
     po_number: str | None = None,
     p_code: str | None = None,
     supplier_lot_no: str | None = None,
@@ -734,7 +733,7 @@ async def reactivate_plot_with_cycle(
     Raises PlotAlreadyActiveError / PlotHasActiveCycleError up front, before
     any state changes. Otherwise: flips is_active, then delegates to the
     SAME plot_cycle_repository.create_cycle every other "start a cycle" path
-    uses (cycle_no = max+1, Auto/Manual lot resolution, plot mirror sync) —
+    uses (cycle_no = max+1, Auto Lot generation, plot mirror sync) —
     never a parallel cycle-creation implementation — and finally clears the
     inspection-derived snapshot (create_cycle already synced the master/
     planting mirror to the new cycle; only the inspection half needs
@@ -756,7 +755,7 @@ async def reactivate_plot_with_cycle(
     plot.is_active = True
     cycle = await plot_cycle_repo.create_cycle(
         db, plot,
-        crop=crop, variety=variety, cycle_label=cycle_label, lot_no=lot_no,
+        crop=crop, variety=variety, cycle_label=cycle_label,
         po_number=po_number, p_code=p_code, supplier_lot_no=supplier_lot_no,
         oracle_supplier_code=oracle_supplier_code, oracle_invoice=oracle_invoice,
         ref_account=ref_account,

@@ -155,13 +155,15 @@ def test_new_cycle_row_copies_active_cycle_plan_fields() -> None:
     assert values["expectedYieldUnit"] == "ตัน"
 
 
-# --- item 18: lotNo / plantingDate are ALWAYS blank in Sheet 1 --------------
+# --- item 18: plantingDate is ALWAYS blank in Sheet 1 -----------------------
 
-def test_new_cycle_row_lot_no_and_planting_date_always_blank() -> None:
+def test_new_cycle_row_planting_date_always_blank_and_carries_no_lot() -> None:
     plot = _plot(active_cycle=_cycle(lot_no="EXISTING-LOT-01", planting_date=datetime.date(2026, 1, 1)))
     values = _new_cycle_row_values(plot)
-    assert values["lotNo"] is None
     assert values["plantingDate"] is None
+    # Round A — lotNo is not a column at all any more, so the row cannot carry
+    # one (it used to be exported blank for exactly the same reason).
+    assert "lotNo" not in values
 
 
 def test_workbook_sheet_one_lot_no_and_planting_date_columns_are_empty() -> None:
@@ -314,13 +316,14 @@ def test_sheet_one_data_row_cells_reference_yellow_and_gray_fills_in_styles_xml(
 
 # --- round 8-6A.1: blank editable/example cells still carry their style ----
 
-def test_sheet_one_blank_lot_no_cell_has_yellow_fill_in_styles_xml() -> None:
-    """lotNo is ALWAYS blank in Sheet 1 (Part C) — it must still render
-    yellow, not lose its fill just because there's nothing typed in it."""
+def test_sheet_one_blank_supplier_lot_no_cell_has_yellow_fill_in_styles_xml() -> None:
+    """supplierLotNo is blank in Sheet 1 whenever the cycle has none — it must
+    still render yellow, not lose its fill just because there's nothing typed
+    in it. (Round A — probed here instead of the retired lotNo column.)"""
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
     sheet1 = parts["xl/worksheets/sheet1.xml"]
-    lot_no_col = IMPORT_COLUMNS.index("lotNo") + 1
+    lot_no_col = IMPORT_COLUMNS.index("supplierLotNo") + 1
     ref = f"{_col_letter(lot_no_col)}3"
     style_idx = _cell_style_index(sheet1, ref)
     assert style_idx is not None
@@ -395,7 +398,6 @@ async def test_contextual_workbook_with_blank_editable_cells_still_parses_via_im
 
     assert preview.total_rows == 1
     row = preview.rows[0]
-    assert row.payload.lot_no is None
     assert row.payload.planting_date is None
 
 

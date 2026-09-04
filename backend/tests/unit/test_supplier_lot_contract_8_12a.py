@@ -121,12 +121,14 @@ def test_po_and_lot_fields_are_all_still_present() -> None:
 
 # --- Excel template contract ------------------------------------------------
 
-def test_supplier_lot_no_column_sits_between_lot_no_and_planting_date() -> None:
+def test_supplier_lot_no_column_sits_between_p_code_and_planting_date() -> None:
     cols = IMPORT_COLUMNS
-    assert cols.index("lotNo") + 1 == cols.index("supplierLotNo")
-    # Round 8-21A — oracleSupplierCode/oracleInvoice/refAccount now sit
-    # between supplierLotNo and plantingDate; supplierLotNo itself still
-    # immediately follows lotNo (unchanged by this round).
+    # Round A — lotNo is gone from the input contract, so supplierLotNo (the
+    # one lot column left) now follows pCode directly.
+    assert "lotNo" not in cols
+    assert cols.index("pCode") + 1 == cols.index("supplierLotNo")
+    # Round 8-21A — oracleSupplierCode/oracleInvoice/refAccount sit between
+    # supplierLotNo and plantingDate.
     assert cols.index("supplierLotNo") + 1 == cols.index("oracleSupplierCode")
     assert cols.index("oracleSupplierCode") + 1 == cols.index("oracleInvoice")
     assert cols.index("oracleInvoice") + 1 == cols.index("refAccount")
@@ -146,14 +148,19 @@ def test_supplier_lot_no_is_editable_not_reference_only() -> None:
 def test_row_two_description_explains_it_is_not_the_system_lot() -> None:
     desc = plot_import.TEMPLATE_COLUMN_DESCRIPTIONS["supplierLotNo"]
     assert "Supplier" in desc
-    assert "Auto Lot" in desc          # says it is unrelated to the system lot
+    assert "Lot No" in desc            # says it is unrelated to the system lot
     assert "ไม่เกี่ยวกับ" in desc
-
-
-def test_lot_no_description_now_describes_the_v2_formula() -> None:
-    desc = plot_import.TEMPLATE_COLUMN_DESCRIPTIONS["lotNo"]
+    # Round A — the supplierLotNo description absorbed the V2 formula, since
+    # lotNo no longer has a description row of its own to carry it.
     assert "ชื่อรอบปลูก" in desc and "P.Code" in desc
     assert "plotCode" not in desc      # V1 wording is gone
+
+
+def test_there_is_no_lot_no_column_to_describe() -> None:
+    """Round A — the system lot has no input column, so it must not reappear
+    in the description map either (which is asserted key-for-key against
+    IMPORT_COLUMNS in test_plot_import_template.py)."""
+    assert "lotNo" not in plot_import.TEMPLATE_COLUMN_DESCRIPTIONS
 
 
 def test_example_rows_show_a_supplier_lot_no() -> None:
@@ -232,13 +239,29 @@ async def test_preview_never_shows_the_v1_formula() -> None:
     assert "PO25001" not in proposed
 
 
-async def test_manual_lot_still_wins_over_auto_in_preview() -> None:
-    pv = await _preview([_row(lotNo="HAND-7", supplierLotNo="SUP-OWN-9")])
+async def test_a_hand_typed_lot_is_rejected_not_honoured() -> None:
+    """Round A — a PRE-round-A workbook still carries a lotNo header. A filled
+    -in cell must FAIL loudly rather than be silently ignored (or, as before
+    this round, silently override the generated lot)."""
+    legacy_columns = [*IMPORT_COLUMNS, "lotNo"]
+    pv = await _preview(
+        [_row(lotNo="HAND-7", supplierLotNo="SUP-OWN-9")], columns=legacy_columns,
+    )
     row = pv.rows[0]
-    assert row.lot_mode == "manual"
-    assert row.proposed_lot_no == "HAND-7"
-    # a supplier lot number never flips the Manual/Auto decision
+    assert row.status == "error"
+    assert "lotNo" in row.message
+    # the supplier's own lot number is untouched by that rejection
     assert row.payload.supplier_lot_no == "SUP-OWN-9"
+
+
+async def test_a_legacy_workbook_with_a_BLANK_lot_cell_still_imports() -> None:
+    """The mirror case: an older file is not rejected merely for HAVING the
+    retired column — only for carrying a value in it (same contract round
+    8-10B set for finalYieldUnit)."""
+    legacy_columns = [*IMPORT_COLUMNS, "lotNo"]
+    pv = await _preview([_row(lotNo=None)], columns=legacy_columns)
+    assert pv.error_rows == 0
+    assert pv.rows[0].proposed_lot_no == "2605-SUP010-WM-141-###"
 
 
 async def test_supplier_lot_no_does_not_change_the_auto_decision() -> None:

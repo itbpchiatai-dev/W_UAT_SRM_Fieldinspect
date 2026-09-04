@@ -222,4 +222,7 @@ def test_template_description_documents_the_requirement() -> None:
     from app.services.plot_import import TEMPLATE_COLUMN_DESCRIPTIONS
     desc = TEMPLATE_COLUMN_DESCRIPTIONS["cycleLabel"]
     assert "เริ่มรอบปลูกใหม่ทุกกรณี" in desc
-    assert "Auto" in desc and "Manual" in desc
+    # Round A — the Auto/Manual pair is gone; the label is required because it
+    # BUILDS the Lot No the server always generates.
+    assert "Lot No" in desc
+    assert "Manual" not in desc

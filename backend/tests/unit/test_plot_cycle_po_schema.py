@@ -171,17 +171,20 @@ def test_reactivate_with_cycle_payload_without_po_is_valid() -> None:
 # --- round 8-13A: Auto Lot / Manual Lot both work with no PO at all ---------
 
 def test_auto_lot_create_without_po_but_with_label_and_pcode_is_valid() -> None:
-    # lotNo blank (Auto) + cycleLabel + pCode present + no PO — the schema
-    # itself has nothing more to say about Auto Lot (that's the repository's
-    # job, see test_plot_cycle_lot_resolution.py), but it must not 422 here.
+    # cycleLabel + pCode present + no PO — the schema itself has nothing more
+    # to say about the Auto Lot (that's the repository's job, see
+    # test_plot_cycle_lot_resolution.py), but it must not 422 here.
     created = PlotCycleCreate(cycleLabel="2605", pCode="WM-141")
     assert created.po_number is None
-    assert created.lot_no is None
     assert created.cycle_label == "2605"
     assert created.p_code == "WM-141"
 
 
-def test_manual_lot_create_without_po_is_valid() -> None:
-    created = PlotCycleCreate(lotNo="MANUAL-LOT-1", pCode="X", cycleLabel="jun2026")
-    assert created.po_number is None
-    assert created.lot_no == "MANUAL-LOT-1"
+def test_create_schema_has_no_lot_field_to_supply() -> None:
+    """Round A — a caller cannot name the system lot at all: the field is gone
+    from the schema, so an extra `lotNo` in the body is not bound to anything
+    and can never reach the repository."""
+    assert "lot_no" not in PlotCycleCreate.model_fields
+    created = PlotCycleCreate(cycleLabel="jun2026", pCode="X", lotNo="MANUAL-LOT-1")
+    assert not hasattr(created, "lot_no")
+    assert created.p_code == "X"

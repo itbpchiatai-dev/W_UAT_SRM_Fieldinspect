@@ -206,4 +206,5 @@ async def test_update_cycle_changing_to_a_new_nonblank_label_is_allowed() -> Non
          patch(f"{_P}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
         await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
     mk_update.assert_awaited_once()
-    assert mk_update.call_args.args[3]["cycle_label"] == "jul2026"
+    # update_cycle(db, cycle, fields) — round A dropped the `plot` argument.
+    assert mk_update.call_args.args[2]["cycle_label"] == "jul2026"

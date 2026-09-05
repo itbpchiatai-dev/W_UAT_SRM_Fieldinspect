@@ -44,6 +44,10 @@ export interface PublicRecordCreatePayload {
   // client-writable; PublicRecordCreate would 422 (extra="forbid") a client
   // that tried to send it.
   yieldQuantityKg?: number | null;
+  /** Round C — ผลผลิตหลังทำความสะอาด (records.final_yield_after_clean).
+   * Optional/nullable: only a ผลผลิตสุดท้าย inspection carries a value, and a
+   * client that predates this round never sends the key at all. */
+  finalYieldAfterClean?: number | null;
   weatherCondition: string | null;
   fieldPrepScore: number | null;
   weatherScore: number | null;
@@ -133,7 +137,15 @@ export interface PublicInspectionFormFields {
   yieldPct: number | null;
   // Round 8-8B — kg is the primary input; null until a plot with a
   // comparable kg target is selected (contract #12: never a faked 100%).
+  // Round C — on the เก็บเกี่ยว / ผลผลิตสุดท้าย stages this same number is
+  // relabelled "ผลผลิตที่เก็บได้": it is measured there, not forecast. One
+  // field, one column, two names — never two boxes.
   yieldQuantityKg: number | null;
+  // Round C — ผลผลิตหลังทำความสะอาด, collected ONLY on the ผลผลิตสุดท้าย
+  // stage (lib/inspection-stages.ts) and null on every other. Optional on the
+  // type so a draft queued OFFLINE before this round — whose stored `fields`
+  // object simply has no such key — still satisfies it when it syncs later.
+  finalYieldAfterClean?: number | null;
   weatherCondition: string;
   fieldPrepScore: number | null;
   weatherScore: number | null;
@@ -164,6 +176,12 @@ export function buildPublicRecordPayload(
     growthStage: fields.growthStage.trim() || null,
     yieldPct: fields.yieldPct,
     yieldQuantityKg: fields.yieldQuantityKg,
+    // Round C — `?? null` is load-bearing, not defensive noise: a draft queued
+    // offline by a PREVIOUS app version has no finalYieldAfterClean key at
+    // all, and sending `undefined` would drop the key from the JSON body. Null
+    // says the same thing to the backend explicitly, and keeps the payload
+    // shape identical for every draft regardless of when it was captured.
+    finalYieldAfterClean: fields.finalYieldAfterClean ?? null,
     weatherCondition: fields.weatherCondition.trim() || null,
     fieldPrepScore: fields.fieldPrepScore,
     weatherScore: fields.weatherScore,

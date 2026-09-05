@@ -30,7 +30,16 @@ from app.db.session import close_db, get_db_session, init_db
 # (type, [values...])  · variety carries a parent crop.  Admin edits via UI.
 _MASTER_DATA: dict[str, list[str]] = {
     "crop": ["พริก", "เมล่อน", "ฟักทอง", "แตงโม", "แตงกวา"],
-    "growth_stage": ["ระยะงอก", "เจริญเติบโต", "ออกดอก", "ติดผล", "เก็บเกี่ยว"],
+    # Round C appended "ผลผลิตสุดท้าย" — the stage on which the field team
+    # records ผลผลิตหลังทำความสะอาด. It deliberately has NO inspection protocol
+    # (services/inspection_protocols.DEFAULT_PROTOCOLS covers the first five
+    # only), so the 4-score section simply doesn't render for it: a
+    # non-protocol stage is a supported, gated pass-through, not a
+    # misconfiguration. Appended LAST so it sorts after เก็บเกี่ยว, which is
+    # the order the work actually happens in.
+    "growth_stage": [
+        "ระยะงอก", "เจริญเติบโต", "ออกดอก", "ติดผล", "เก็บเกี่ยว", "ผลผลิตสุดท้าย",
+    ],
     "weather": ["แจ่มใส", "มีเมฆ", "ฝนตก", "ร้อนจัด", "ลมแรง"],
     # level / severity / irrigation / fertilizer removed round 8-14F — no
     # production consumer (Record Form only ever read growth_stage/weather;

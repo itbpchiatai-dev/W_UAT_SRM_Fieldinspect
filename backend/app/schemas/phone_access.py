@@ -181,3 +181,15 @@ class PublicPhoneAccessSelectPlotResponse(CamelBaseModel):
     current_yield_pct: Decimal | None = None
     current_stage: str | None = None
     last_inspected_at: datetime | None = None
+    # Round C — the EXACT kg the cycle's most recent inspection reported
+    # (records.yield_quantity_kg), so the form can pre-fill "ผลผลิตที่เก็บได้"
+    # on a follow-up "ผลผลิตสุดท้าย" inspection with the number that was
+    # actually entered.
+    #
+    # Deliberately not derived from current_yield_pct above: recovering kg from
+    # a stored percentage is a round-trip through NUMERIC(5,1) and comes back
+    # off by a rounding step (enter 1,250 and the form would suggest 1,248),
+    # which is exactly the kind of quiet drift a "carried forward" number must
+    # not have. None when the cycle has no record yet, or when its latest one
+    # predates the kg-first input (round 8-8A).
+    last_yield_quantity_kg: Decimal | None = None

@@ -55,6 +55,13 @@ export interface YieldQuantityInputProps {
    * (initial-value defaulting is the caller's job, lib/yield-planning.ts's
    * computeInitialYieldValue, run once when a plot/cycle is selected). */
   latestYieldPct?: string | number | null;
+  /** Round C — what the kg box is called for THIS growth stage. Defaults to
+   * the forecast wording; the harvest and final-yield stages pass
+   * "ผลผลิตที่เก็บได้" instead (lib/inspection-stages.ts), because there the
+   * number is measured, not predicted. Same field and same column either way —
+   * only the name changes, so the two stages never grow a second kg box that
+   * means almost the same thing. */
+  quantityLabel?: string;
   disabled?: boolean;
   onChange: (value: { quantityKg: number | null; yieldPct: number | null }) => void;
   error?: string | null;
@@ -77,6 +84,7 @@ export function YieldQuantityInput({
   expectedYieldFull,
   expectedYieldUnit,
   latestYieldPct,
+  quantityLabel = 'ผลผลิตที่คาดว่าจะได้',
   disabled,
   onChange,
   error,
@@ -107,7 +115,7 @@ export function YieldQuantityInput({
   return (
     <div className="space-y-4">
       <div>
-        <label className="mb-1 block text-sm font-medium text-gray-700">ผลผลิตที่คาดว่าจะได้</label>
+        <label className="mb-1 block text-sm font-medium text-gray-700">{quantityLabel}</label>
         <div className="flex items-center gap-2">
           <input
             type="number"

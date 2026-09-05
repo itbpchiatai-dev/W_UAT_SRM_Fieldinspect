@@ -13,6 +13,7 @@ import {
 import { getScoreDisplayItems } from '../../lib/inspection-protocol-snapshot';
 import { describeCycleStatus, recordCycleDisplayName } from '../../lib/plot-cycle';
 import { formatYieldQuantity, YIELD_WARNING_PCT } from '../../lib/yield-planning';
+import { isActualYieldStage, showsFinalYieldAfterClean } from '../../lib/inspection-stages';
 import { toNumberOrNull } from '../../lib/numeric';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -80,15 +81,23 @@ function YieldSection({ r }: { r: RecordDetail }) {
   const yieldPct = r.yieldPct != null ? parseFloat(r.yieldPct) : null;
   const quantityKg = toNumberOrNull(r.yieldQuantityKg);
   const targetKg = toNumberOrNull(r.yieldTargetKgSnapshot);
+  // Round C — ผลผลิตหลังทำความสะอาด, present only on a ผลผลิตสุดท้าย record.
+  const afterCleanKg = toNumberOrNull(r.finalYieldAfterClean ?? null);
+  // The kg on a harvest/final record is what was MEASURED, not forecast — the
+  // same distinction the form makes when it labels the input.
+  const measured = isActualYieldStage(r.growthStage);
 
-  if (quantityKg == null && yieldPct == null) return null;
+  if (quantityKg == null && yieldPct == null && afterCleanKg == null) return null;
 
   return (
-    <Section title="ผลผลิต (Yield)">
+    <Section title={showsFinalYieldAfterClean(r.growthStage) ? 'ผลผลิตสุดท้าย' : 'ผลผลิต (Yield)'}>
       <dl className="divide-y divide-gray-100">
         {quantityKg != null && (
           <>
-            <Field label="ปริมาณผลผลิตที่คาดว่าจะได้" value={formatYieldQuantity(quantityKg, 'kg')} />
+            <Field
+              label={measured ? 'ผลผลิตที่เก็บได้' : 'ปริมาณผลผลิตที่คาดว่าจะได้'}
+              value={formatYieldQuantity(quantityKg, 'kg')}
+            />
             {targetKg != null ? (
               <Field label="เป้าผลิตที่ใช้คำนวณ" value={formatYieldQuantity(targetKg, 'kg')} />
             ) : (
@@ -98,6 +107,13 @@ function YieldSection({ r }: { r: RecordDetail }) {
               />
             )}
           </>
+        )}
+        {/* Round C — shown right after the harvested figure it is measured
+            against, and NOT part of the percentage below: the percentage is
+            always against ผลผลิตที่เก็บได้, so a cycle's numbers stay
+            comparable across every stage of its life. */}
+        {afterCleanKg != null && (
+          <Field label="ผลผลิตหลังทำความสะอาด" value={formatYieldQuantity(afterCleanKg, 'kg')} />
         )}
         {yieldPct != null && (
           <Field

@@ -13,7 +13,7 @@
  * "filled by" are auto-system (not editable). Photos = 4 fixed labeled slots.
  * Only คำแนะนำ / หมายเหตุ are free text.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -49,6 +49,11 @@ import { formatFixed, toNumberOrNull } from '../../lib/numeric';
 import { bangkokToday } from '../../lib/business-date';
 import { YieldQuantityInput } from '../../components/farmlog/YieldQuantityInput';
 import { computeInitialYieldValue, targetToKg, validateYieldQuantityKg } from '../../lib/yield-planning';
+import {
+  isActualYieldStage,
+  showsFinalYieldAfterClean,
+  yieldQuantityLabel,
+} from '../../lib/inspection-stages';
 import { canViewVariety } from '../../lib/variety-visibility';
 
 interface FormState {
@@ -63,6 +68,9 @@ interface FormState {
   // comparable kg target is selected (contract #12: never a faked 100%).
   yieldQuantityKg: number | null;
   yieldPct: number | null;
+  // Round C — ผลผลิตหลังทำความสะอาด, collected ONLY on the ผลผลิตสุดท้าย stage
+  // (lib/inspection-stages.ts). Null on every other stage.
+  finalYieldAfterClean: number | null;
   fieldPrepScore: number | null;
   weatherScore: number | null;
   careScore: number | null;
@@ -76,7 +84,7 @@ interface FormState {
 const EMPTY: FormState = {
   supplierId: '', plotId: '', submittedByName: '',
   growthStage: null, weatherCondition: null,
-  yieldQuantityKg: null, yieldPct: null,
+  yieldQuantityKg: null, yieldPct: null, finalYieldAfterClean: null,
   fieldPrepScore: null, weatherScore: null, careScore: null,
   varietyResistanceScore: null, recommendation: '', notes: '',
   latitude: null, longitude: null,
@@ -197,6 +205,29 @@ export function RecordForm() {
     staleTime: 5 * 60_000,
   });
   const stageProtocol = findProtocolForStage(protocols, form.growthStage);
+  // Round C — true once the user typed in the kg box themselves; only an
+  // untouched box is ever pre-filled by the carry-forward below.
+  const yieldTouchedRef = useRef(false);
+
+  /** Round C — picking ผลผลิตสุดท้าย carries this cycle's last reported kg
+   * forward, so the field team confirms one number instead of re-measuring it.
+   * The logged-in form has no exact last-kg field on its plot read model, so it
+   * uses the same expected×pct basis the initial prefill already uses
+   * (computeInitialYieldValue) rather than inventing a second source. */
+  function handleGrowthStageChange(next: string | null) {
+    set('growthStage', next);
+    if (!showsFinalYieldAfterClean(next) || yieldTouchedRef.current) return;
+    if (form.yieldQuantityKg != null) return;      // already has a figure
+    const carried = computeInitialYieldValue(
+      selectedPlot?.activeCycleExpectedYieldFull,
+      selectedPlot?.activeCycleExpectedYieldUnit,
+      selectedPlot?.currentYieldPct,
+    );
+    if (carried.quantityKg == null) return;
+    setForm(prev => ({
+      ...prev, yieldQuantityKg: carried.quantityKg, yieldPct: carried.yieldPct,
+    }));
+  }
 
   const { data: suppliers = [] } = useQuery({
     queryKey: ['suppliers', 'all'],
@@ -359,6 +390,9 @@ export function RecordForm() {
       // (round 8-8A). A null kg means null pct too — never a stray 100.
       yieldQuantityKg: form.yieldQuantityKg,
       yieldPct: form.yieldPct,
+      // Round C — null on every stage but ผลผลิตสุดท้าย, where it is the one
+      // genuinely new figure the field team records.
+      finalYieldAfterClean: form.finalYieldAfterClean,
       fieldPrepScore: form.fieldPrepScore,
       weatherScore: form.weatherScore,
       careScore: form.careScore,
@@ -467,7 +501,7 @@ export function RecordForm() {
             <div className="sm:col-span-2">
               <Field label="ระยะการเจริญเติบโต">
                 <MasterDataButtons type="growth_stage" value={form.growthStage}
-                  onChange={v => set('growthStage', v)} />
+                  onChange={handleGrowthStageChange} />
               </Field>
             </div>
 
@@ -538,17 +572,65 @@ export function RecordForm() {
 
         {/* Yield */}
         <section className="rounded-lg border border-green-200 bg-green-50/50 p-5 shadow-sm">
-          <h2 className="mb-1 text-base font-semibold text-foreground">ผลผลิต (Yield)</h2>
-          <p className="mb-4 text-xs text-muted-foreground">กรอกปริมาณที่คาดว่าจะได้เป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าผลิตให้อัตโนมัติ</p>
+          <h2 className="mb-1 text-base font-semibold text-foreground">
+            {showsFinalYieldAfterClean(form.growthStage) ? 'ผลผลิตสุดท้าย' : 'ผลผลิต (Yield)'}
+          </h2>
+          <p className="mb-4 text-xs text-muted-foreground">
+            {isActualYieldStage(form.growthStage)
+              ? 'กรอกผลผลิตที่เก็บได้จริงเป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าผลิตให้อัตโนมัติ'
+              : 'กรอกปริมาณที่คาดว่าจะได้เป็น kg — ระบบคำนวณเปอร์เซ็นต์เทียบเป้าผลิตให้อัตโนมัติ'}
+          </p>
           <YieldQuantityInput
             quantityKg={form.yieldQuantityKg}
             yieldPct={form.yieldPct}
             expectedYieldFull={selectedPlot?.activeCycleExpectedYieldFull}
             expectedYieldUnit={selectedPlot?.activeCycleExpectedYieldUnit}
             latestYieldPct={selectedPlot?.currentYieldPct}
-            onChange={({ quantityKg, yieldPct }) => setForm(prev => ({ ...prev, yieldQuantityKg: quantityKg, yieldPct }))}
+            // Round C — measured, not forecast, on the harvest/final stages.
+            quantityLabel={yieldQuantityLabel(form.growthStage)}
+            onChange={({ quantityKg, yieldPct }) => {
+              // A hand edit ends the carry-forward — see handleGrowthStageChange.
+              yieldTouchedRef.current = true;
+              setForm(prev => ({ ...prev, yieldQuantityKg: quantityKg, yieldPct }));
+            }}
             error={yieldFormError}
           />
+          {/* Round C — ผลผลิตหลังทำความสะอาด, paired directly under the kg it
+              is compared against so the two read as "before" and "after". */}
+          {showsFinalYieldAfterClean(form.growthStage) && (
+            <div className="mt-4">
+              <label
+                htmlFor="record-final-yield-after-clean"
+                className="mb-1 block text-sm font-medium text-gray-700"
+              >
+                ผลผลิตหลังทำความสะอาด
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="record-final-yield-after-clean"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step={0.01}
+                  value={form.finalYieldAfterClean ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      set('finalYieldAfterClean', null);
+                      return;
+                    }
+                    const n = Number(raw);
+                    if (Number.isFinite(n)) set('finalYieldAfterClean', n);
+                  }}
+                  className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                />
+                <span className="shrink-0 text-sm text-gray-500">kg</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                ผลผลิตที่เหลือหลังคัดและทำความสะอาดแล้ว (ไม่บังคับ) — ไม่นำไปคิดเปอร์เซ็นต์เทียบเป้าผลิต
+              </p>
+            </div>
+          )}
           {selectedPlot && latestYieldPct != null && (
             <p className="mt-2 text-xs text-muted-foreground">
               ค่าเริ่มต้นดึงจากการตรวจล่าสุดของแปลงนี้

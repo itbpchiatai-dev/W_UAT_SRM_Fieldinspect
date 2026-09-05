@@ -369,7 +369,9 @@ async def test_select_success_mints_phone_bound_inspection_token() -> None:
     access = _access("primary")
     token = _phone_token([access.id])
     with patch(f"{_M}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=access)), \
-         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)):
+         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)):
         res = await _select(
             payload=PublicPhoneAccessSelectPlotRequest(
                 phoneAccessSessionToken=token, plotId=plot.id, inspectorType="farmer"),
@@ -392,7 +394,9 @@ async def test_select_all_inspector_types(itype: str) -> None:
     access = _access("additional")
     token = _phone_token([access.id])
     with patch(f"{_M}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=access)), \
-         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)):
+         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)):
         res = await _select(
             payload=PublicPhoneAccessSelectPlotRequest(
                 phoneAccessSessionToken=token, plotId=plot.id, inspectorType=itype),
@@ -428,7 +432,9 @@ async def test_select_inactive_plot_generic_404() -> None:
     access = _access("primary")
     token = _phone_token([access.id])
     with patch(f"{_M}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=access)), \
-         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)):
+         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc:
             await _select(
                 payload=PublicPhoneAccessSelectPlotRequest(
@@ -444,7 +450,9 @@ async def test_select_no_active_cycle_409_public_safe() -> None:
     access = _access("primary")
     token = _phone_token([access.id])
     with patch(f"{_M}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=access)), \
-         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)):
+         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc:
             await _select(
                 payload=PublicPhoneAccessSelectPlotRequest(
@@ -473,7 +481,9 @@ async def test_select_returns_plot_current_status_snapshot_verbatim() -> None:
     access = _access("primary")
     token = _phone_token([access.id])
     with patch(f"{_M}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=access)), \
-         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)):
+         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)):
         res = await _select(
             payload=PublicPhoneAccessSelectPlotRequest(
                 phoneAccessSessionToken=token, plotId=plot.id, inspectorType="farmer"),
@@ -495,7 +505,9 @@ async def test_select_null_current_status_snapshot_returns_null() -> None:
     access = _access("primary")
     token = _phone_token([access.id])
     with patch(f"{_M}.phone_repo.get_access_row_for_plot_from_ids", AsyncMock(return_value=access)), \
-         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)):
+         patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)):
         res = await _select(
             payload=PublicPhoneAccessSelectPlotRequest(
                 phoneAccessSessionToken=token, plotId=plot.id, inspectorType="farmer"),

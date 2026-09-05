@@ -42,6 +42,10 @@ import { LazyPlotQrScan } from '../../components/farmlog/LazyPlotQrScan';
 import { PublicMasterDataButtons } from '../../components/farmlog/PublicMasterDataButtons';
 import { OfflineInspectionQueuePanel } from '../../components/farmlog/OfflineInspectionQueuePanel';
 import { parsePlotQr, parseDeepLinkParams, type PlotQrLocator } from '../../lib/plot-qr';
+import {
+  showsFinalYieldAfterClean,
+  yieldQuantityLabel,
+} from '../../lib/inspection-stages';
 import { normalizeThaiMobile } from '../../lib/phone';
 import { bangkokToday } from '../../lib/business-date';
 import {
@@ -75,7 +79,9 @@ import {
   inspectorTypeLabel as sharedInspectorTypeLabel,
 } from '../../lib/inspection-attribution';
 import { formatFixed, toNumberOrNull } from '../../lib/numeric';
-import { computeInitialYieldValue, targetToKg, validateYieldQuantityKg } from '../../lib/yield-planning';
+import {
+  computeInitialYieldValue, quantityKgToPct, targetToKg, validateYieldQuantityKg,
+} from '../../lib/yield-planning';
 import { YieldQuantityInput } from '../../components/farmlog/YieldQuantityInput';
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 import {
@@ -169,7 +175,10 @@ const EMPTY_FIELDS: PublicInspectionFormFields = {
   growthStage: '',
   // Round 8-8B — null until a plot with a comparable kg target is selected
   // (fieldsForSelectedPlot below); never a faked 100% (contract #12).
-  yieldQuantityKg: null, yieldPct: null, weatherCondition: '',
+  yieldQuantityKg: null, yieldPct: null,
+  // Round C — only a ผลผลิตสุดท้าย inspection ever sets this.
+  finalYieldAfterClean: null,
+  weatherCondition: '',
   fieldPrepScore: null, weatherScore: null, careScore: null, varietyResistanceScore: null,
   recommendation: '', notes: '',
   latitude: null, longitude: null,
@@ -503,6 +512,30 @@ export function PublicInspect() {
   const [formBaseline, setFormBaseline] = useState<PublicInspectionFormFields>(EMPTY_FIELDS);
   const set = <K extends keyof PublicInspectionFormFields>(key: K, value: PublicInspectionFormFields[K]) =>
     setFields((prev) => ({ ...prev, [key]: value }));
+  // Round C — true once the user has typed in the kg box themselves. Only an
+  // UNTOUCHED box is ever pre-filled; a figure someone entered is never
+  // replaced by a carried-forward one. Same principle the plot-select prefill
+  // already follows (fieldsForSelectedPlot runs once, imperatively, never from
+  // a refetching effect that could clobber a value mid-typing).
+  const yieldTouchedRef = useRef(false);
+
+  /** Round C — picking ผลผลิตสุดท้าย carries the harvested kg forward from the
+   * cycle's most recent inspection, so the field team confirms one number
+   * instead of re-measuring it. Guarded three ways: only onto that stage, only
+   * when the server actually has a figure, and only while the box is
+   * untouched. */
+  function handleGrowthStageChange(next: string) {
+    set('growthStage', next);
+    if (!showsFinalYieldAfterClean(next) || yieldTouchedRef.current) return;
+    const carried = toNumberOrNull(plotInfo?.lastYieldQuantityKg ?? null);
+    if (carried == null) return;
+    set('yieldQuantityKg', carried);
+    // Keep the pair consistent the same way YieldQuantityInput does when the
+    // user types a kg — never leave a stale percentage beside a new quantity.
+    set('yieldPct', quantityKgToPct(
+      carried, targetToKg(plotInfo?.expectedYieldFull, plotInfo?.expectedYieldUnit),
+    ));
+  }
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState('');
   const [photos, setPhotos] = useState<(File | null)[]>(emptyPhotoSlots());
@@ -1466,7 +1499,7 @@ export function PublicInspect() {
             <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
               <GroupField label="ระยะการเจริญเติบโต">
                 <PublicMasterDataButtons type="growth_stage" value={fields.growthStage || null}
-                  onChange={(v) => set('growthStage', v ?? '')} />
+                  onChange={(v) => handleGrowthStageChange(v ?? '')} />
               </GroupField>
               <GroupField label="สภาพอากาศ (เลือกได้หลายตัวเลือก)">
                 <PublicMasterDataButtons type="weather" value={fields.weatherCondition || null}
@@ -1475,19 +1508,66 @@ export function PublicInspect() {
             </section>
 
             <section className="rounded-lg border border-green-200 bg-green-50/50 p-4 shadow-sm">
-              <h2 className="mb-1 text-sm font-medium text-gray-700">ผลผลิต (Yield)</h2>
+              <h2 className="mb-1 text-sm font-medium text-gray-700">
+                {showsFinalYieldAfterClean(fields.growthStage) ? 'ผลผลิตสุดท้าย' : 'ผลผลิต (Yield)'}
+              </h2>
               <YieldQuantityInput
                 quantityKg={fields.yieldQuantityKg}
                 yieldPct={fields.yieldPct}
                 expectedYieldFull={plotInfo?.expectedYieldFull}
                 expectedYieldUnit={plotInfo?.expectedYieldUnit}
                 latestYieldPct={plotInfo?.currentYieldPct}
+                // Round C — "ผลผลิตที่เก็บได้" on the harvest and final-yield
+                // stages, where the number is measured rather than forecast.
+                quantityLabel={yieldQuantityLabel(fields.growthStage)}
                 onChange={({ quantityKg, yieldPct }) => {
+                  // Any hand edit ends the carry-forward: a later stage change
+                  // must never overwrite a figure the user typed themselves.
+                  yieldTouchedRef.current = true;
                   set('yieldQuantityKg', quantityKg);
                   set('yieldPct', yieldPct);
                 }}
                 error={yieldFieldError}
               />
+              {/* Round C — ผลผลิตหลังทำความสะอาด: the ONE genuinely new figure
+                  this round collects, and only on the stage that means it.
+                  Deliberately below the kg box and visibly paired with it, so
+                  the two read as "before" and "after" rather than as two
+                  unrelated inputs. */}
+              {showsFinalYieldAfterClean(fields.growthStage) && (
+                <div className="mt-4">
+                  <label
+                    htmlFor="final-yield-after-clean"
+                    className="mb-1 block text-sm font-medium text-gray-700"
+                  >
+                    ผลผลิตหลังทำความสะอาด
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="final-yield-after-clean"
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      step={0.01}
+                      value={fields.finalYieldAfterClean ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '') {
+                          set('finalYieldAfterClean', null);
+                          return;
+                        }
+                        const n = Number(raw);
+                        if (Number.isFinite(n)) set('finalYieldAfterClean', n);
+                      }}
+                      className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    />
+                    <span className="shrink-0 text-sm text-gray-500">kg</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    ผลผลิตที่เหลือหลังคัดและทำความสะอาดแล้ว (ไม่บังคับ) — ไม่นำไปคิดเปอร์เซ็นต์เทียบเป้าผลิต
+                  </p>
+                </div>
+              )}
               {(() => {
                 const latestYieldPct = toNumberOrNull(plotInfo?.currentYieldPct ?? null);
                 if (latestYieldPct == null) return null;

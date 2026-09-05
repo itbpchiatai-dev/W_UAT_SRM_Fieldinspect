@@ -23,6 +23,44 @@ const EMPTY_FIELDS: PublicInspectionFormFields = {
   longitude: null,
 };
 
+describe('buildPublicRecordPayload — finalYieldAfterClean (round C)', () => {
+  it('carries the entered value through', () => {
+    const payload = buildPublicRecordPayload('tok', '2026-07-01', {
+      ...EMPTY_FIELDS, finalYieldAfterClean: 1180.5,
+    });
+    expect(payload.finalYieldAfterClean).toBe(1180.5);
+  });
+
+  it('sends an explicit null when the stage never collected one', () => {
+    const payload = buildPublicRecordPayload('tok', '2026-07-01', EMPTY_FIELDS);
+    expect(payload.finalYieldAfterClean).toBeNull();
+  });
+
+  it('sends null — never undefined — for a draft queued BEFORE this round', () => {
+    // A draft captured offline by an older app version stored a `fields`
+    // object with no such key at all. `undefined` would be dropped by
+    // JSON.stringify and the key would vanish from the body; null keeps every
+    // submission the same shape regardless of when it was captured.
+    const legacyFields = { ...EMPTY_FIELDS };
+    delete (legacyFields as Partial<PublicInspectionFormFields>).finalYieldAfterClean;
+
+    const payload = buildPublicRecordPayload('tok', '2026-07-01', legacyFields);
+    expect(payload.finalYieldAfterClean).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(payload, 'finalYieldAfterClean')).toBe(true);
+    expect(JSON.parse(JSON.stringify(payload))).toHaveProperty('finalYieldAfterClean', null);
+  });
+
+  it('never turns the after-cleaning figure into the yield quantity', () => {
+    // They are two different measurements of two different things; the
+    // percentage is always against ผลผลิตที่เก็บได้.
+    const payload = buildPublicRecordPayload('tok', '2026-07-01', {
+      ...EMPTY_FIELDS, yieldQuantityKg: 1250, finalYieldAfterClean: 1180,
+    });
+    expect(payload.yieldQuantityKg).toBe(1250);
+    expect(payload.finalYieldAfterClean).toBe(1180);
+  });
+});
+
 describe('buildPublicRecordPayload', () => {
   it('carries the token and record date through unchanged', () => {
     const payload = buildPublicRecordPayload('tok-123', '2026-07-01', EMPTY_FIELDS);

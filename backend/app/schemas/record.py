@@ -21,6 +21,14 @@ from app.schemas.base import CamelBaseModel
 # + non-comparable target" numeric-overflow path (round 8-8A.1 bug #2).
 YieldQuantityKg = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)]
 
+# Round C — the SAME idea for ผลผลิตหลังทำความสะอาด, mirroring records.
+# final_yield_after_clean's own column type (NUMERIC(14,2), migration 0054),
+# which in turn matches plot_cycles.final_yield_after_clean — the column this
+# value is copied into when the cycle is closed. Wider than YieldQuantityKg
+# (14 vs 12 digits) because that target column is wider; the >2-decimal-places
+# rejection is identical, so a typo is a 422 rather than a silent round.
+FinalYieldAfterClean = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=2)]
+
 
 class RecordCreate(CamelBaseModel):
     plot_id: UUID
@@ -53,6 +61,14 @@ class RecordCreate(CamelBaseModel):
     # client field, see Record model). Bounded by YieldQuantityKg (round
     # 8-8A.1) — see its own comment above.
     yield_quantity_kg: YieldQuantityKg | None = None
+
+    # Round C — ผลผลิตหลังทำความสะอาด, entered on a "ผลผลิตสุดท้าย" inspection
+    # alongside yield_quantity_kg (which is ผลผลิตที่เก็บได้, before cleaning).
+    # Optional everywhere: every other growth stage leaves it null, and a
+    # client that predates this round simply never sends it. It NEVER feeds
+    # yield_pct — the percentage is always measured against ผลผลิตที่เก็บได้,
+    # the same basis every earlier stage uses.
+    final_yield_after_clean: FinalYieldAfterClean | None = None
 
     weather_condition: str | None = Field(None, max_length=255)
     field_prep_score: int | None = Field(None, ge=1, le=10)
@@ -182,6 +198,9 @@ class RecordRead(CamelBaseModel):
     # yield_calculation.py). Both None for a legacy record / legacy client.
     yield_quantity_kg: Decimal | None = None
     yield_target_kg_snapshot: Decimal | None = None
+    # Round C — ผลผลิตหลังทำความสะอาด as captured on the record. Defaulted so
+    # every record created before this round reads null.
+    final_yield_after_clean: Decimal | None = None
 
     weather_condition: str | None
     field_prep_score: int | None
@@ -242,6 +261,8 @@ class RecordSummary(CamelBaseModel):
     # Both None for a legacy record / legacy client, same as RecordRead.
     yield_quantity_kg: Decimal | None = None
     yield_target_kg_snapshot: Decimal | None = None
+    # Round C — see RecordRead. Same read-only, sourced-from-the-row contract.
+    final_yield_after_clean: Decimal | None = None
     field_prep_score: int | None
     weather_score: int | None
     care_score: int | None
@@ -310,6 +331,9 @@ class PublicRecordCreate(CamelBaseModel):
     # YIELD_WARNING_PCT) — never enforced here.
     yield_pct: Decimal | None = Field(Decimal("100"), ge=0, le=Decimal("9999.9"))
     yield_quantity_kg: YieldQuantityKg | None = None
+    # Round C — same field, same bound as RecordCreate (see its comment): one
+    # boundary shared by both create flows, never duplicated or drifted.
+    final_yield_after_clean: FinalYieldAfterClean | None = None
 
     weather_condition: str | None = None
     field_prep_score: int | None = None

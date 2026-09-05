@@ -27,6 +27,11 @@ export interface RecordSummary {
   // Round 8-8C — same read-only, server-derived fields as RecordDetail (see
   // its own comment below); both null for a legacy record / legacy client.
   yieldQuantityKg: string | number | null;
+  /** Round C — ผลผลิตหลังทำความสะอาด as captured on this record
+   * (records.final_yield_after_clean). Null on every record but a
+   * ผลผลิตสุดท้าย one, and on every record created before that round.
+   * Optional so an older cached response still typechecks. */
+  finalYieldAfterClean?: string | number | null;
   yieldTargetKgSnapshot: string | number | null;
   fieldPrepScore: number | null;
   weatherScore: number | null;
@@ -86,6 +91,11 @@ export interface RecordDetail {
   // yieldTargetKgSnapshot is NEVER accepted on RecordCreatePayload below —
   // a client can't forge it, same as backend's RecordCreate schema.
   yieldQuantityKg: string | number | null;
+  /** Round C — ผลผลิตหลังทำความสะอาด as captured on this record
+   * (records.final_yield_after_clean). Null on every record but a
+   * ผลผลิตสุดท้าย one, and on every record created before that round.
+   * Optional so an older cached response still typechecks. */
+  finalYieldAfterClean?: string | number | null;
   yieldTargetKgSnapshot: string | number | null;
   weatherCondition: string | null;
   fieldPrepScore: number | null;
@@ -143,6 +153,9 @@ export interface RecordCreatePayload {
   // only yieldPct is unaffected). yieldTargetKgSnapshot is deliberately NOT
   // a field here — server-derived only, never client-writable.
   yieldQuantityKg?: number | null;
+  /** Round C — ผลผลิตหลังทำความสะอาด. Send null on every stage but
+   * ผลผลิตสุดท้าย; the backend never derives it. */
+  finalYieldAfterClean?: number | null;
   weatherCondition?: string | null;
   fieldPrepScore?: number | null;
   weatherScore?: number | null;

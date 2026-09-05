@@ -584,6 +584,13 @@ async def phone_access_select_plot(
         # nothing. Stable machine code, no PII.
         raise HTTPException(status_code=409, detail={"code": "no_active_cycle"})
 
+    # Round C — the cycle's latest reported kg, for the form's carry-forward
+    # pre-fill (see PublicPhoneAccessSelectPlotResponse.last_yield_quantity_kg).
+    # One extra query, on a single-plot endpoint only; the plots LIST never
+    # pays for it. Reuses the same "latest active record of this cycle" helper
+    # the close-time snapshot uses, so "latest" means one thing in this system.
+    latest_record = await plot_cycle_repo.get_latest_active_record_for_cycle(db, cycle.id)
+
     token, expires_in = encode_inspection_session_token(
         plot_id=plot.id,
         supplier_id=supplier.id,
@@ -619,4 +626,7 @@ async def phone_access_select_plot(
         current_yield_pct=plot.current_yield_pct,
         current_stage=plot.current_stage,
         last_inspected_at=plot.last_inspected_at,
+        last_yield_quantity_kg=(
+            latest_record.yield_quantity_kg if latest_record is not None else None
+        ),
     )

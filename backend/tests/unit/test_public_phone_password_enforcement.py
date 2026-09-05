@@ -507,6 +507,8 @@ async def _select(token, live, plot_id):
         fetched = SimpleNamespace(**{**vars(fetched), "supplier": supplier})
     with _enforcement(True), \
          patch(f"{_M}.plot_repo.get_plot", AsyncMock(return_value=fetched)), \
+         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.credential_repo.list_active_access_rows_by_grants",
                AsyncMock(return_value=live)):
         return await _select_fn(

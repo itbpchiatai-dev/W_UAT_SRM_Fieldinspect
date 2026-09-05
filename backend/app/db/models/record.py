@@ -97,6 +97,13 @@ class Record(Base, UUIDMixin, TimestampMixin):
             "yield_target_kg_snapshot IS NULL OR yield_target_kg_snapshot >= 0",
             name="yield_target_kg_snapshot_non_negative",
         ),
+        # Round C (migration 0054) — mirrors
+        # ck_plot_cycles_final_yield_after_clean_non_negative, the constraint on
+        # the column this value is ultimately copied into.
+        CheckConstraint(
+            "final_yield_after_clean IS NULL OR final_yield_after_clean >= 0",
+            name="final_yield_after_clean_non_negative",
+        ),
     )
 
     plot_id: Mapped[UUID] = mapped_column(
@@ -167,6 +174,22 @@ class Record(Base, UUIDMixin, TimestampMixin):
     # plot_cycle_id / the phone-access columns below).
     yield_quantity_kg: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     yield_target_kg_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+
+    # ผลผลิตหลังทำความสะอาด, captured in the field (round C, migration 0054).
+    # The companion of yield_quantity_kg, not a duplicate of it: on a
+    # "ผลผลิตสุดท้าย" inspection the two read as "ผลผลิตที่เก็บได้" (before
+    # cleaning) and "หลังทำความสะอาด". NUMERIC(14,2) matches
+    # plot_cycles.final_yield_after_clean, where round D copies it when the
+    # cycle is closed; it is NOT a mirror of yield_quantity_kg's NUMERIC(12,2).
+    #
+    # Never feeds yield_pct: the percentage a record reports is always measured
+    # against ผลผลิตที่เก็บได้ (yield_quantity_kg), the same basis every earlier
+    # growth stage uses, so a cycle's percentages stay comparable across its
+    # whole life. NULL for every record that isn't a final-yield one, and for
+    # every record created before this round (no backfill).
+    final_yield_after_clean: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
 
     # Assessment — multi-select on the forms: holds a ", "-joined list of
     # master-data weather values (kept a plain string; every reader shows it

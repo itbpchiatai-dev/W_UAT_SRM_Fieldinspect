@@ -187,6 +187,14 @@ export interface PublicSelectPlotResult {
   currentYieldPct: string | number | null;
   currentStage: string | null;
   lastInspectedAt: string | null;
+  /** Round C — the EXACT kg this cycle's most recent inspection reported, so a
+   * follow-up ผลผลิตสุดท้าย inspection can carry the harvested figure forward
+   * instead of asking for it twice. Deliberately not recovered from
+   * currentYieldPct: that round-trip comes back a rounding step off (enter
+   * 1,250 and it suggests 1,248), which is exactly the quiet drift a
+   * carried-forward number must not have. Null when the cycle has no record
+   * yet, or its latest one predates the kg-first input. */
+  lastYieldQuantityKg?: string | number | null;
 }
 
 /**

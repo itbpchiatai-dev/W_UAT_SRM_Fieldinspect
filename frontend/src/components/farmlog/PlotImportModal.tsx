@@ -560,18 +560,16 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                 mentioned final_plot, row 2 said "3 แบบ", and the sheet showed
                 4 examples including a final_plot row nothing explained. */}
             <p className="font-medium text-foreground">
-              การกระทำหลัก 5 แบบ (คอลัมน์ <span className="font-mono">action</span>) — มีตัวอย่างครบทุกแบบในไฟล์:
+              การกระทำ 3 แบบ (คอลัมน์ <span className="font-mono">action</span>) — มีตัวอย่างครบทุกแบบในไฟล์:
             </p>
             <ul className="mt-1.5 list-disc space-y-1 pl-4">
               <li><span className="font-mono">create_plot_with_cycle</span> — สร้างแปลงพร้อมรอบแรก</li>
-              <li><span className="font-mono">update_current_cycle</span> — แก้รอบปลูกปัจจุบัน</li>
-              <li><span className="font-mono">start_next_cycle</span> — เริ่มรอบถัดไป (แปลงที่ใช้งานอยู่)</li>
-              <li><span className="font-mono">reactivate_plot_with_cycle</span> — เปิดแปลงที่ปิดอยู่ + เริ่มรอบใหม่</li>
+              <li><span className="font-mono">update_current_cycle</span> — แก้รอบปลูกของแปลงที่มีอยู่แล้ว</li>
               <li><span className="font-mono">final_plot</span> — ปิดรอบเป็นเก็บเกี่ยวแล้ว + บันทึกผลผลิตจริง (แปลงยังใช้งานอยู่)</li>
             </ul>
             <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-800">
-              ระบบจะตรวจสถานะแปลงให้เอง หากไม่มีรอบเปิดอยู่จะเริ่มรอบใหม่ทันที
-              หากมีรอบเปิดอยู่จะปิดรอบเดิมเป็นเก็บเกี่ยวแล้วและเริ่มรอบใหม่ในครั้งเดียว
+              ปิดรอบด้วย <span className="font-mono">final_plot</span> เว้นช่องผลผลิตว่างไว้ได้
+              ระบบจะใช้ตัวเลขที่บันทึกไว้จากหน้าตรวจแปลงให้เอง
             </p>
             <p className="mt-2">
               วันที่ปลูกใช้รูปแบบ <span className="font-mono">YYYY-MM-DD</span> · 1 แถวต่อแปลงต่อไฟล์ ·
@@ -604,24 +602,18 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
               </summary>
               <div className="space-y-2 border-t border-border px-2 py-2">
                 <p className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1.5 text-blue-800">
-                  แปลงที่ปิดใช้งานอยู่: ใช้ <span className="font-mono">reactivate_plot_with_cycle</span> เท่านั้น
-                  (ใช้ <span className="font-mono">start_next_cycle</span> กับแปลงปิดใช้งานไม่ได้) —
-                  เมื่อยืนยันนำเข้าระบบจะเปิดแปลงกลับมาใช้งานและเริ่มรอบปลูกใหม่ในครั้งเดียว
+                  <span className="font-medium">1 แปลง = 1 รอบปลูก</span> — แปลงที่ปิดรอบแล้วจะไม่เปิดรอบใหม่
+                  ฤดูถัดไปให้สร้างแปลงใหม่ด้วย <span className="font-mono">create_plot_with_cycle</span>
+                  (เว้น <span className="font-mono">plotCode</span> ว่างไว้ ระบบจะสร้างรหัสให้)
                 </p>
                 <p>
-                  <span className="font-medium text-foreground">รหัสแปลง (plotCode):</span>{' '}
-                  สำหรับ <span className="font-mono">create_plot_with_cycle</span> เว้นว่างได้ —
-                  ระบบจะสร้างให้เป็น <span className="font-mono">{'{รหัส Supplier}-{ปีเดือน}-{เลขรัน}'}</span>{' '}
-                  (เช่น <span className="font-mono">JPS-2605-001</span>) โดยใช้เดือนจากวันที่ปลูก ·
-                  ส่วน action อื่นยังต้องกรอก เพราะใช้ระบุว่าจะแก้แปลงไหน
+                  <span className="font-medium text-foreground">ไฟล์เก่า:</span>{' '}
+                  ไฟล์ที่ดาวน์โหลดไว้ก่อนหน้านี้และยังมี action เดิม (เช่น{' '}
+                  <span className="font-mono">start_next_cycle</span>,{' '}
+                  <span className="font-mono">reactivate_plot_with_cycle</span>)
+                  ยังนำเข้าได้ตามปกติ — แต่ไฟล์ที่โหลดใหม่จะมีให้เลือกแค่ 3 action ข้างต้น
                 </p>
-                <p>
-                  <span className="font-medium text-foreground">กรณีพิเศษ/ไฟล์เก่า:</span>{' '}
-                  <span className="font-mono">start_new_cycle</span> และ{' '}
-                  <span className="font-mono">close_and_start_new_cycle</span> ยังใช้งานได้เหมือนเดิม
-                  (ไม่จำเป็นต้องเลือกเองแล้วสำหรับงานประจำวัน — ใช้ start_next_cycle แทนได้)
-                </p>
-                <p>ต้องระบุชื่อรอบปลูก (cycleLabel) เมื่อใช้ start_next_cycle</p>
+                <p>ต้องระบุชื่อรอบปลูก (cycleLabel) ทุกครั้งที่เปิดรอบปลูกใหม่</p>
                 {/* Round 8-12B — the Auto Lot V2 contract. Round A — there is
                     no lotNo column any more, so this explains what the server
                     does rather than what to type. */}

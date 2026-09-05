@@ -129,9 +129,39 @@ ACTION_REACTIVATE_WITH_CYCLE = "reactivate_plot_with_cycle"
 # never flips is_active — the one action that is neither "open a cycle" nor
 # "change the plot's activation state".
 ACTION_FINAL = "final_plot"
+
+# Round E — the import contract is THREE actions: create, update, final.
+#
+# The rule behind it is "one plot, one cycle": a plot is registered for a
+# season, inspected through it, and finalized. It is never reopened for a
+# second season — next season is a new plot with its own code
+# ({supplierCode}-{YYMM}-{running}, round B) and its own QR. The four actions
+# that existed only to start ANOTHER cycle on an existing plot therefore have
+# no job left, and a file naming one is REJECTED with a message pointing at the
+# three that remain — never silently reinterpreted.
+#
+# Their validate/execute branches are deliberately left in place and simply
+# unreachable from a file: the single-plot API endpoints they share code with
+# (start / rollover / reactivate-with-cycle) still exist — round E hides their
+# buttons rather than deleting the endpoints — so bringing the policy back is a
+# one-line change here, not a rewrite. Deleting that code is a large mechanical
+# change with no user-visible effect and is not part of this round.
+RETIRED_ACTIONS: tuple[str, ...] = (
+    ACTION_START, ACTION_ROLLOVER, ACTION_START_NEXT, ACTION_REACTIVATE_WITH_CYCLE,
+)
+# What a file may still CONTAIN. Deliberately wider than OFFERED_ACTIONS: a
+# template someone downloaded last week, or an in-flight file already being
+# filled in, keeps importing. Nothing in the app produces these any more.
 SUPPORTED_ACTIONS: tuple[str, ...] = (
     ACTION_CREATE, ACTION_START, ACTION_UPDATE, ACTION_ROLLOVER, ACTION_START_NEXT,
     ACTION_REACTIVATE_WITH_CYCLE, ACTION_FINAL,
+)
+
+# What the app OFFERS: the template's rows and examples, the column
+# descriptions, and the import dialog's help text all name exactly these three.
+# This is the user-facing contract round E narrows to — see RETIRED_ACTIONS.
+OFFERED_ACTIONS: tuple[str, ...] = (
+    ACTION_CREATE, ACTION_UPDATE, ACTION_FINAL,
 )
 
 # New-cycle actions that require pCode nonblank (round 8-13A: poNumber is no
@@ -294,29 +324,25 @@ TEMPLATE_DESCRIPTION_MARKER = "คำอธิบาย (ระบบไม่�
 # and matched by prefix, so this text can keep changing across rounds without
 # breaking the skip detection of any file (old or new) that starts with it.
 TEMPLATE_DESCRIPTION_ACTION = (
-    TEMPLATE_DESCRIPTION_MARKER + " — action หลักมี 5 แบบ (ดูตัวอย่างแถวถัดไป): "
-    "create_plot_with_cycle = สร้างแปลงใหม่พร้อมรอบปลูกแรก, "
-    "update_current_cycle = แก้ข้อมูลรอบปลูกที่กำลังเปิดอยู่ โดยไม่สร้างรอบใหม่, "
-    "start_next_cycle = เริ่มรอบถัดไป ระบบจะตรวจสถานะแปลงและปิดรอบเดิมให้อัตโนมัติ"
-    "ถ้ายังมีรอบเปิดอยู่ (ต้องระบุ cycleLabel), "
-    "reactivate_plot_with_cycle = เปิดแปลงที่ปิดใช้งานอยู่กลับมาใช้ พร้อมเริ่มรอบใหม่ "
-    "(ใช้ start_next_cycle กับแปลงที่ปิดอยู่ไม่ได้), "
-    "final_plot = ปิดรอบปลูกปัจจุบันเป็นเก็บเกี่ยวแล้ว และบันทึกผลผลิตจริง "
-    "(ตัวแปลงยังใช้งานอยู่). "
-    "start_new_cycle/close_and_start_new_cycle ยังใช้งานได้เหมือนเดิม "
-    "(ไม่แสดงเป็นตัวอย่างหลักอีกต่อไป)"
+    TEMPLATE_DESCRIPTION_MARKER + " — action มี 3 แบบ (ดูตัวอย่างแถวถัดไป): "
+    "create_plot_with_cycle = สร้างแปลงใหม่พร้อมรอบปลูก "
+    "(เว้น plotCode ว่างได้ ระบบจะสร้างรหัสให้), "
+    "update_current_cycle = แก้ข้อมูลรอบปลูกของแปลงที่มีอยู่แล้ว, "
+    "final_plot = ปิดรอบปลูกเป็นเก็บเกี่ยวแล้ว และบันทึกผลผลิตจริง "
+    "(เว้นช่องผลผลิตว่างได้ ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้). "
+    "1 แปลง = 1 รอบปลูก — แปลงที่ปิดรอบแล้วไม่เปิดรอบใหม่ ให้สร้างแปลงใหม่แทน"
 )
 
 # One Thai description per import column, keyed by the exact technical header so
 # the description row can never drift from IMPORT_COLUMNS — the template builds
 # row 2 as [TEMPLATE_COLUMN_DESCRIPTIONS[col] for col in IMPORT_COLUMNS]. The
 # `action` column's own cell is the skip marker itself (it doubles as the
-# "not imported" note); the three example rows below it (rows 3-5) document
-# the three everyday action values (round 8-2.7.1).
+# "not imported" note); the example rows below it document every action the
+# app offers — three of them since round E (OFFERED_ACTIONS).
 TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     "action": TEMPLATE_DESCRIPTION_ACTION,
     "supplierCode": "รหัส Supplier ที่มีอยู่ในระบบ เช่น SUP001 (จำเป็นทุก action)",
-    "plotCode": "รหัสแปลง เช่น P001: สร้างใหม่ต้องไม่ซ้ำ; action อื่นต้องเป็นแปลงที่มีอยู่แล้ว",
+    "plotCode": "รหัสแปลง เช่น JPS-2605-001: create_plot_with_cycle เว้นว่างได้ (ระบบสร้างให้ {รหัส Supplier}-{ปีเดือน}-{เลขรัน}) หรือกรอกเองก็ได้แต่ต้องไม่ซ้ำ; action อื่นต้องเป็นรหัสของแปลงที่มีอยู่แล้ว",
     "plotName": "ชื่อแปลง (จำเป็นเฉพาะ create_plot_with_cycle)",
     "primaryPhone": "เบอร์หลักสำหรับเข้าตรวจแปลง เช่น 0845552162; "
                     "เว้นว่างทั้งเบอร์หลักและเบอร์เสริมเพื่อคงค่าเดิมในแปลงที่มีอยู่",

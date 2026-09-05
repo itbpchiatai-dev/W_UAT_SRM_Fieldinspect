@@ -69,29 +69,31 @@ def _unzip_rows(plots, latest_cycles=None):
 
 # --- item 1/2/3: active -> start_next_cycle, inactive -> reactivate_plot_with_cycle, mixed -----
 
-def test_active_plot_row_uses_start_next_cycle_action():
+def test_active_plot_row_uses_update_current_cycle_action():
     _headers, by_no = _unzip_rows([_plot(plot_code="P001", is_active=True, active_cycle=_cycle(status="active"))])
     row = next(iter(by_no.values()))
-    assert row["action"] == plot_import.ACTION_START_NEXT
+    assert row["action"] == plot_import.ACTION_UPDATE
     assert row["currentPlotStatus"] == _CURRENT_PLOT_STATUS_ACTIVE_LABEL
 
 
-def test_inactive_plot_row_uses_reactivate_plot_with_cycle_action():
+def test_an_inactive_plot_gets_no_row_at_all():
+    """Round E — reactivate_plot_with_cycle was the only action that ever
+    applied to a deactivated plot, and it is retired: under "one plot, one
+    cycle" a finished plot is finished. Exporting a row with no valid action
+    would just be an invitation to a rejected file."""
     _headers, by_no = _unzip_rows([_plot(plot_code="P002", is_active=False)])
-    row = next(iter(by_no.values()))
-    assert row["action"] == plot_import.ACTION_REACTIVATE_WITH_CYCLE
-    assert row["currentPlotStatus"] == _CURRENT_PLOT_STATUS_INACTIVE_LABEL
+    assert by_no == {}
 
 
-def test_mixed_active_and_inactive_plots_each_get_the_right_action():
+def test_only_the_active_plots_of_a_mixed_list_get_rows():
     plots = [
         _plot(plot_code="P001", is_active=True, active_cycle=_cycle(status="active")),
         _plot(plot_code="P002", is_active=False),
     ]
     _headers, by_no = _unzip_rows(plots)
     by_code = {v["plotCode"]: v for v in by_no.values()}
-    assert by_code["P001"]["action"] == plot_import.ACTION_START_NEXT
-    assert by_code["P002"]["action"] == plot_import.ACTION_REACTIVATE_WITH_CYCLE
+    assert set(by_code) == {"P001"}
+    assert by_code["P001"]["action"] == plot_import.ACTION_UPDATE
 
 
 # --- item 7: inactive plot's row is seeded from its latest historical cycle -
@@ -132,12 +134,11 @@ def test_reactivate_row_with_no_cycle_history_is_blank_never_invented():
         assert values[field] is None, field
 
 
-def test_workbook_still_includes_a_row_for_inactive_plot_with_no_history():
+def test_an_inactive_plot_with_no_history_gets_no_row_either():
+    """Same rule as above — the absence of cycle history was never what decided
+    it; being deactivated is."""
     _headers, by_no = _unzip_rows([_plot(plot_code="P999", is_active=False, cycles=[])])
-    assert len(by_no) == 1
-    row = next(iter(by_no.values()))
-    assert row["action"] == plot_import.ACTION_REACTIVATE_WITH_CYCLE
-    assert row.get("crop") is None
+    assert by_no == {}
 
 
 # --- item 8: batch latest-cycle loader is ONE query, not N+1 ----------------
@@ -184,14 +185,17 @@ def test_current_plot_status_is_a_reference_not_editable_column():
     assert "currentPlotStatus" not in _EDITABLE_COLUMNS
 
 
-def test_workbook_sheet_one_reactivate_row_current_plot_status_cell_is_reference_style():
-    rows = _new_cycle_sheet([_plot(is_active=False)])
+def test_current_plot_status_cell_is_reference_style():
+    """currentPlotStatus is exported so the user can SEE the plot's state; the
+    importer never reads it. Gray/reference, so it never invites editing.
+    (Round E — probed on an ACTIVE plot: an inactive one no longer gets a row.)"""
+    rows = _new_cycle_sheet([_plot(is_active=True, active_cycle=_cycle(status="active"))])
     data_row = rows[2]
     idx = _PLOT_TEMPLATE_HEADERS.index("currentPlotStatus")
     cell = data_row[idx]
     assert isinstance(cell, StyledCell)
     assert cell.style == _STYLE_REFERENCE
-    assert cell.value == _CURRENT_PLOT_STATUS_INACTIVE_LABEL
+    assert cell.value == _CURRENT_PLOT_STATUS_ACTIVE_LABEL
 
 
 # --- item 11: editing currentPlotStatus in an uploaded file has zero effect -
@@ -231,8 +235,12 @@ async def test_editing_current_plot_status_cell_never_changes_the_row_action():
 
 # --- item 17: blank cells in a reactivate row still carry their style ------
 
-def test_reactivate_row_blank_editable_columns_still_carry_yellow_style():
-    rows = _new_cycle_sheet([_plot(is_active=False)])  # no history at all -> every editable col blank
+def test_blank_editable_columns_still_carry_yellow_style():
+    """A cell being empty must not cost it its fill — the yellow is what tells
+    the user which columns they may edit. (Round E — an ACTIVE plot with no
+    cycle leaves every editable cycle column blank, which is the same shape the
+    retired reactivate row used to provide.)"""
+    rows = _new_cycle_sheet([_plot(is_active=True, active_cycle=None)])
     data_row = rows[2]
     for col, cell in zip(_PLOT_TEMPLATE_HEADERS, data_row, strict=True):
         assert isinstance(cell, StyledCell)

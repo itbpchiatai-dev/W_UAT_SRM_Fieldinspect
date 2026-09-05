@@ -19,6 +19,11 @@ import {
   ReactivatePlotModal, ReactivatePlotWithCycleModal,
 } from '../../../components/farmlog/PlotCycleModals';
 import { plotCodeSourceBadge } from '../../../lib/plot-code';
+import {
+  canReactivateWithCycle,
+  canRolloverCycle,
+  canStartFirstCycle,
+} from '../../../lib/plot-lifecycle';
 import { PlotAccessPhoneModal } from '../../../components/farmlog/PlotAccessPhoneModal';
 import { PlotInspectionPasswordModal } from '../../../components/farmlog/PlotInspectionPasswordModal';
 import { useHasPermission } from '../../../hooks/useHasPermission';
@@ -158,12 +163,17 @@ function YieldPlanningSection({
   plot,
   activeCycle,
   canUpdate,
+  // Round E — the plot's FULL cycle history size (any status). A closed cycle
+  // counts: it is what tells "never started" apart from "already finished",
+  // which is the only thing the start button may still be offered for.
+  cycleCount,
   onStart,
   onEdit,
 }: {
   plot: PlotDetailData;
   activeCycle: PlotCycle | null;
   canUpdate: boolean;
+  cycleCount: number;
   onStart: () => void;
   onEdit: () => void;
 }) {
@@ -183,14 +193,21 @@ function YieldPlanningSection({
                 warning band (not an exact duplicate of "แปลงนี้ปิดใช้งานอยู่"). */}
             {plot.isActive ? 'รอเริ่มรอบปลูก' : 'แปลงปิดใช้งานอยู่ ยังตั้งแผนผลผลิตไม่ได้'}
           </p>
-          <p className="mt-1 text-xs text-gray-400">ตั้งแผนผลผลิตได้หลังเริ่มรอบปลูกใหม่</p>
-          {plot.isActive && canUpdate && (
+          <p className="mt-1 text-xs text-gray-400">
+            {canStartFirstCycle(cycleCount)
+              ? 'ตั้งแผนผลผลิตได้หลังเริ่มรอบปลูก'
+              : 'แปลงนี้ปิดรอบปลูกไปแล้ว — 1 แปลง = 1 รอบปลูก'}
+          </p>
+          {/* Round E — offered only while the plot has never had a cycle: the
+              "reserve the plot now, plan the season later" flow. A plot whose
+              cycle is finished is finished; next season is a new plot. */}
+          {plot.isActive && canUpdate && canStartFirstCycle(cycleCount) && (
             <button
               type="button"
               onClick={onStart}
               className="mt-3 inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700"
             >
-              <Sprout className="h-4 w-4" /> เริ่มรอบปลูกใหม่
+              <Sprout className="h-4 w-4" /> เริ่มรอบปลูกแรก
             </button>
           )}
         </div>
@@ -284,6 +301,8 @@ function CurrentCycleSection({
   plot,
   activeCycle,
   canUpdate,
+  // Round E — see YieldPlanningSection above.
+  cycleCount,
   cyclesLoading,
   onStart,
   onEdit,
@@ -294,6 +313,7 @@ function CurrentCycleSection({
   plot: PlotDetailData;
   activeCycle: PlotCycle | null;
   canUpdate: boolean;
+  cycleCount: number;
   cyclesLoading: boolean;
   onStart: () => void;
   onEdit: () => void;
@@ -314,17 +334,25 @@ function CurrentCycleSection({
                 the plot was active even when it wasn't; the warning band
                 above the header already says so, but this line must not
                 contradict it. */}
-            {plot.isActive
-              ? 'แปลงนี้ยังใช้งานอยู่ แต่ยังไม่มีรอบปลูกที่เปิดอยู่'
-              : 'แปลงนี้ปิดใช้งานอยู่ — เปิดใช้งานแปลงก่อนจึงจะเริ่มรอบปลูกใหม่ได้'}
+            {/* Must not be an EXACT duplicate of the header warning band's
+                own "แปลงนี้ปิดใช้งานอยู่" — the two are read together, and an
+                identical string reads as a stutter (and makes either one
+                ambiguous to query). Same rule round 8-6I Part F set here. */}
+            {!plot.isActive
+              ? 'แปลงนี้ปิดใช้งานอยู่ — เปิดใช้งานแปลงก่อนจึงจะจัดการรอบปลูกได้'
+              : canStartFirstCycle(cycleCount)
+                ? 'แปลงนี้ยังใช้งานอยู่ แต่ยังไม่มีรอบปลูกที่เปิดอยู่'
+                : 'รอบปลูกของแปลงนี้ปิดแล้ว — 1 แปลง = 1 รอบปลูก ฤดูถัดไปให้สร้างแปลงใหม่'}
           </p>
-          {plot.isActive && canUpdate && (
+          {/* Round E — see the yield-planning card above for why this is gated
+              on "has never had a cycle" rather than on plot.isActive alone. */}
+          {plot.isActive && canUpdate && canStartFirstCycle(cycleCount) && (
             <button
               type="button"
               onClick={onStart}
               className="mt-3 inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700"
             >
-              <Sprout className="h-4 w-4" /> เริ่มรอบปลูกใหม่
+              <Sprout className="h-4 w-4" /> เริ่มรอบปลูกแรก
             </button>
           )}
         </div>
@@ -402,7 +430,11 @@ function CurrentCycleSection({
               header actions. Only offered on a still-open plot, once cycles
               have finished loading (avoids a flash before the active cycle is
               known). */}
-          {plot.isActive && !cyclesLoading && (
+          {/* Round E — rollover exists only to start a SECOND cycle on the
+              same plot, so the policy leaves it no valid state. Closing a
+              cycle on its own is unaffected, and that is where the season's
+              actual harvest is now recorded (round D). */}
+          {canRolloverCycle() && plot.isActive && !cyclesLoading && (
             <button
               type="button"
               onClick={onRollover}
@@ -1277,7 +1309,11 @@ export function PlotDetail() {
             recommended choice) then "เปิดใช้งานแปลงเท่านั้น" (secondary). */}
         {(canCreateRecords || canUpdatePlot || plot.qrKey || (!plot.isActive && canReactivate)) && (
           <div className="flex flex-wrap gap-2 sm:justify-end">
-            {!plot.isActive && canReactivate && canUpdatePlot && (
+            {/* Round E — reopening a plot AND starting another season is the
+                same move as rollover, so it goes with it. Plain reactivation
+                (next button) stays: an accidental deactivation must remain
+                undoable, and reopening without a cycle breaks no rule. */}
+            {canReactivateWithCycle() && !plot.isActive && canReactivate && canUpdatePlot && (
               <button
                 type="button"
                 onClick={() => setReactivatingWithCycle(true)}
@@ -1359,6 +1395,7 @@ export function PlotDetail() {
         <CurrentCycleSection
           plot={plot}
           activeCycle={activeCycle}
+          cycleCount={cycles.length}
           canUpdate={canUpdatePlot}
           cyclesLoading={cyclesLoading}
           onStart={() => setStartingCycle(true)}
@@ -1371,6 +1408,7 @@ export function PlotDetail() {
         <YieldPlanningSection
           plot={plot}
           activeCycle={activeCycle}
+          cycleCount={cycles.length}
           canUpdate={canUpdatePlot}
           onStart={() => setStartingCycle(true)}
           onEdit={() => activeCycle && setEditingCycle(activeCycle)}

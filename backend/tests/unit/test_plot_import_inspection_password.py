@@ -823,11 +823,11 @@ def test_template_exports_only_the_configured_status_never_a_secret() -> None:
 def test_template_new_password_cells_are_blank_for_current_data_rows() -> None:
     """A downloaded template must never carry an existing password (or an
     example one) on a REAL plot row — only the highlighted example sheet."""
-    from app.api.v1.plots import _new_cycle_row_values, _reactivate_row_values
+    from app.api.v1.plots import _update_cycle_row_values, _reactivate_row_values
 
     plot = _template_plot()
     for values in (
-        _new_cycle_row_values(plot, password_configured=True),
+        _update_cycle_row_values(plot, password_configured=True),
         _reactivate_row_values(plot, None, password_configured=True),
     ):
         assert values["newInspectionPassword"] is None
@@ -835,9 +835,9 @@ def test_template_new_password_cells_are_blank_for_current_data_rows() -> None:
 
 
 def test_not_configured_plots_report_that_status() -> None:
-    from app.api.v1.plots import _new_cycle_row_values
+    from app.api.v1.plots import _update_cycle_row_values
 
-    values = _new_cycle_row_values(_template_plot(), password_configured=False)
+    values = _update_cycle_row_values(_template_plot(), password_configured=False)
     assert values["inspectionPasswordStatus"] == "not_configured"
 
 
@@ -857,11 +857,11 @@ def test_sheet_one_row_carries_password_status_only() -> None:
     test also covered are gone, so Sheet 1 is the only place a password
     status can now be exported. The guarantee is unchanged: a status word,
     never the password/hash/digest itself."""
-    from app.api.v1.plots import _new_cycle_row_values
+    from app.api.v1.plots import _update_cycle_row_values
 
     plot = _template_plot()
-    configured = _new_cycle_row_values(plot, password_configured=True)
-    unconfigured = _new_cycle_row_values(plot, password_configured=False)
+    configured = _update_cycle_row_values(plot, password_configured=True)
+    unconfigured = _update_cycle_row_values(plot, password_configured=False)
     assert configured["inspectionPasswordStatus"] == "configured"
     assert unconfigured["inspectionPasswordStatus"] == "not_configured"
     for values in (configured, unconfigured):

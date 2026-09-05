@@ -89,8 +89,9 @@ def test_sheet_one_carries_every_header_but_no_example_rows() -> None:
 def test_the_examples_live_on_sheet_two() -> None:
     parts = _unzip(_plot_template_workbook([_fake_supplier()]))
     sheet2 = parts["xl/worksheets/sheet2.xml"]
-    for action in ("create_plot_with_cycle", "update_current_cycle",
-                   "start_next_cycle", "reactivate_plot_with_cycle", "final_plot"):
+    from app.services.plot_import import OFFERED_ACTIONS
+
+    for action in OFFERED_ACTIONS:
         assert action in sheet2
 
 
@@ -169,59 +170,65 @@ def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
         assert desc[col] == TEMPLATE_COLUMN_DESCRIPTIONS[col]
 
 
-def test_row_two_action_description_explains_the_three_common_workflows() -> None:
-    """Round 8-2.7.1: the A2 marker cell doubles as the visible guidance for
-    the action column, so it must name the three current common workflows
-    (create/update/start_next_cycle) and still mention the two legacy actions
-    start_next_cycle unifies — without losing its job as the exact skip
-    marker prefix (pinned by the previous test)."""
+def test_row_two_action_description_names_the_three_offered_actions() -> None:
+    """The A2 marker cell doubles as the visible guidance for the action
+    column, so it must name every action the app offers — three since round E —
+    without losing its job as the exact skip marker prefix (pinned by the
+    previous test)."""
+    from app.services.plot_import import OFFERED_ACTIONS
+
     _headers, by_no = _rows_by_number([_fake_supplier()])
     desc = by_no[2]["action"]
-    for action in ("create_plot_with_cycle", "update_current_cycle", "start_next_cycle"):
-        assert action in desc
-    assert "start_new_cycle" in desc
-    assert "close_and_start_new_cycle" in desc
+    for action in OFFERED_ACTIONS:
+        assert action in desc, action
+    # The retired ones must not be advertised, even though a file that still
+    # carries them is accepted.
+    for action in ("start_next_cycle", "reactivate_plot_with_cycle"):
+        assert action not in desc, action
 
 
-def test_example_sheet_rows_are_the_five_common_workflows_in_order() -> None:
-    """Round 8-2.7.1: the default template's worked examples are create,
-    update, and start_next_cycle (the unified "advance to the next cycle"
-    action) — start_new_cycle/close_and_start_new_cycle are special-cased out
-    of the defaults (see test_legacy_rollover_actions_are_not_default_example_
-    rows) so a working-level user never has to choose between them. Round
-    8-7A adds final_plot as a worked example. Round 8-27D adds
-    reactivate_plot_with_cycle (row 6, pushing final_plot to row 7): it was
-    named in the import dialog but had no example here, which is exactly what
-    made the file confusing to follow."""
+def test_example_sheet_rows_are_the_offered_workflows_in_order() -> None:
+    """The worked examples are the three actions the app offers, in the order
+    the work actually happens: register the plot with its cycle, edit that
+    cycle's plan, close it and record the real harvest.
+
+    Round E dropped start_next_cycle and reactivate_plot_with_cycle along with
+    the "start another cycle on this plot" idea itself — a plot carries one
+    cycle for its whole life now, so there is no next one to start and nothing
+    to reopen."""
     _headers, by_no = _example_rows([_fake_supplier()])
     assert by_no[4]["action"] == "create_plot_with_cycle"
     assert by_no[5]["action"] == "update_current_cycle"
-    assert by_no[6]["action"] == "start_next_cycle"
-    assert by_no[7]["action"] == "reactivate_plot_with_cycle"
-    assert by_no[8]["action"] == "final_plot"
-    assert 9 not in by_no
+    assert by_no[6]["action"] == "final_plot"
+    assert 7 not in by_no
 
 
-def test_template_example_rows_are_exactly_five_common_actions() -> None:
+def test_template_example_rows_are_exactly_the_offered_actions() -> None:
+    """Round E — one worked example per action the app offers, in the order the
+    work actually happens: register the plot, edit its plan, close it."""
     _headers, by_no = _example_rows([_fake_supplier()])
-    example_actions = [by_no[n]["action"] for n in (4, 5, 6, 7, 8)]
+    example_actions = [by_no[n]["action"] for n in (4, 5, 6)]
     assert example_actions == [
-        "create_plot_with_cycle", "update_current_cycle", "start_next_cycle",
-        "reactivate_plot_with_cycle", "final_plot",
+        "create_plot_with_cycle", "update_current_cycle", "final_plot",
     ]
-    assert len(example_actions) == 5
+    # by_no also holds the header/description rows, so count the data rows.
+    assert sorted(n for n in by_no if n >= 4) == [4, 5, 6]
 
 
-def test_row_two_names_the_same_five_actions_the_example_rows_show() -> None:
-    """Round 8-27D — the file's own description row and its worked examples
-    are the two places a user looks; they disagreeing ("3 แบบ" over four
-    example rows) is what this round fixed. Pinned here so they can only
-    drift together."""
+def test_row_two_names_the_same_actions_the_example_rows_show() -> None:
+    """Round 8-27D — the file's own description row and its worked examples are
+    the two places a user looks; them disagreeing is what that round fixed.
+    Pinned here so they can only drift together. Round E — three of each."""
+    from app.services.plot_import import OFFERED_ACTIONS
+
     _h1, sheet1 = _rows_by_number([_fake_supplier()])
     _h2, examples = _example_rows([_fake_supplier()])
     description = sheet1[2]["action"]
-    example_actions = [examples[n]["action"] for n in (4, 5, 6, 7, 8)]
-    assert "5 แบบ" in description
+    # examples also holds the header/description rows — only the data rows
+    # (row >= 4) carry a real action value.
+    example_actions = [row["action"] for n, row in examples.items() if n >= 4]
+    assert "3 แบบ" in description
+    assert set(example_actions) == set(OFFERED_ACTIONS)
     for action in example_actions:
         assert action in description, action
 
@@ -241,13 +248,14 @@ def test_legacy_rollover_actions_are_not_default_example_rows() -> None:
     assert "close_and_start_new_cycle" in SUPPORTED_ACTIONS
 
 
-def test_start_next_cycle_example_row_has_a_cycle_label() -> None:
-    """cycleLabel is required for start_next_cycle (round 8-2.7.1 Part B item
-    6) — the shipped example must actually carry one, or it would be a broken
-    worked example when a user tries it verbatim."""
+def test_the_create_example_row_has_a_cycle_label() -> None:
+    """cycleLabel is required on every action that opens a cycle — the shipped
+    example must actually carry one, or it would be a broken worked example
+    when a user tries it verbatim. (Round E — create_plot_with_cycle is the
+    only remaining example that opens one.)"""
     _headers, by_no = _example_rows([_fake_supplier()])
-    assert by_no[6]["action"] == "start_next_cycle"
-    assert by_no[6]["cycleLabel"]
+    assert by_no[4]["action"] == "create_plot_with_cycle"
+    assert by_no[4]["cycleLabel"]
 
 
 # --- round 8-13A: poNumber is optional -------------------------------------
@@ -258,14 +266,13 @@ def test_po_number_description_says_optional_not_required() -> None:
     assert "จำเป็น" not in desc  # no requiredness marker of any kind
 
 
-def test_start_next_cycle_example_row_has_a_blank_po_number() -> None:
-    """Round 8-13A — at least one new-cycle worked example deliberately
-    leaves poNumber blank, to show a user it's a genuinely valid row without
-    one. pCode stays present (still required)."""
+def test_the_final_plot_example_row_has_a_blank_po_number() -> None:
+    """Round 8-13A — poNumber is optional, and the examples show it. Round E
+    retired the new-cycle example that used to demonstrate that, so the check
+    moves to a row that also legitimately carries no PO."""
     _headers, by_no = _example_rows([_fake_supplier()])
-    assert by_no[6]["action"] == "start_next_cycle"
+    assert by_no[6]["action"] == "final_plot"
     assert "poNumber" not in by_no[6]  # blank cell => key omitted by the reader
-    assert by_no[6]["pCode"] == "Melon-C"
 
 
 def test_create_example_row_still_carries_a_po_number() -> None:
@@ -300,7 +307,7 @@ def test_create_example_row_has_the_full_spec_values() -> None:
     }
 
 
-def test_update_rollover_example_cycle_values_match_spec() -> None:
+def test_update_example_cycle_values_match_spec() -> None:
     _headers, by_no = _example_rows([_fake_supplier("SUP001")])
     assert (by_no[5]["plotCode"], by_no[5]["crop"], by_no[5]["variety"],
             by_no[5]["cycleLabel"], by_no[5]["plantingDate"],
@@ -308,12 +315,9 @@ def test_update_rollover_example_cycle_values_match_spec() -> None:
             by_no[5]["expectedYieldUnit"]) == (
         "P002", "พริก", "พริกหยวก", "may2026", "2026-05-15",
         "800", "1000", "kg")
-    assert (by_no[6]["plotCode"], by_no[6]["crop"], by_no[6]["variety"],
-            by_no[6]["cycleLabel"], by_no[6]["plantingDate"],
-            by_no[6]["plantCount"], by_no[6]["expectedYieldFull"],
-            by_no[6]["expectedYieldUnit"]) == (
-        "P003", "แตงโม", "กินรี", "aug2026", "2026-08-01",
-        "600", "3000", "kg")
+    # Round E — row 6 is the final_plot example now; it closes a cycle rather
+    # than describing a plan, so it carries no crop/variety/yield columns.
+    assert by_no[6]["action"] == "final_plot"
     # Round A — no example row can show a lotNo: the column is gone.
     assert "lotNo" not in by_no[5] and "lotNo" not in by_no[6]
 
@@ -325,18 +329,18 @@ def test_non_create_examples_leave_physical_plot_fields_empty() -> None:
     _headers, by_no = _example_rows([_fake_supplier()])
     physical = ("plotName", "village", "district", "province",
                 "latitude", "longitude", "rai")
-    for n in (5, 6, 7, 8):
+    for n in (5, 6):
         # Blank cells are omitted by the reader, so absence == empty.
         assert not any(f in by_no[n] for f in physical), by_no[n]
 
 
 def test_examples_use_the_first_visible_supplier_code() -> None:
     _headers, by_no = _example_rows([_fake_supplier("SUP042")])
-    for n in (4, 5, 6, 7, 8):
+    for n in (4, 5, 6):
         assert by_no[n]["supplierCode"] == "SUP042"
 
 
 def test_no_suppliers_falls_back_to_sup001_in_examples() -> None:
     _headers, by_no = _example_rows([])
-    for n in (4, 5, 6, 7, 8):
+    for n in (4, 5, 6):
         assert by_no[n]["supplierCode"] == "SUP001"

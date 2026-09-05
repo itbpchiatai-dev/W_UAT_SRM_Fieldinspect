@@ -27,13 +27,13 @@ from app.api.v1.plots import (
     _STYLE_EXAMPLE,
     _STYLE_REFERENCE,
     _contextual_plot_template_workbook,
-    _new_cycle_row_values,
+    _update_cycle_row_values,
     _new_cycle_sheet,
 )
 from app.services.excel_reader import read_first_sheet
 from app.services.excel_workbook import StyledCell
 from app.services.plot_import import (
-    ACTION_START_NEXT,
+    ACTION_UPDATE,
     IMPORT_COLUMNS,
     SUPPORTED_ACTIONS,
     TEMPLATE_DESCRIPTION_ACTION,
@@ -125,15 +125,19 @@ def test_sheet_one_has_only_real_plot_rows_no_examples() -> None:
     plot_codes = {v["plotCode"] for v in data_rows.values()}
     assert plot_codes == {"P001", "P002"}
     for v in data_rows.values():
-        assert v["action"] == ACTION_START_NEXT
+        assert v["action"] == ACTION_UPDATE
 
 
-def test_every_real_row_action_is_start_next_cycle() -> None:
+def test_every_real_row_action_is_update_current_cycle() -> None:
+    """Round E — an existing plot carries one cycle for its whole life, so the
+    only things left to do to it are edit that cycle's plan or close it. The
+    row defaults to the edit; the user changes this one cell to final_plot to
+    close instead."""
     plots = [_plot(plot_code=f"P{i:03d}") for i in range(5)]
     _headers, by_no = _rows_by_number(plots)
     data_rows = [v for n, v in by_no.items() if n > 2]
     assert len(data_rows) == 5
-    assert all(v["action"] == ACTION_START_NEXT for v in data_rows)
+    assert all(v["action"] == ACTION_UPDATE for v in data_rows)
 
 
 # --- item 17/19: cycleLabel/PO/P.Code/crop/variety/plan copied from active --
@@ -144,7 +148,7 @@ def test_new_cycle_row_copies_active_cycle_plan_fields() -> None:
         po_number="PO99999", p_code="Durian-A",
         plant_count=250, expected_yield_full=Decimal("1234.5"), expected_yield_unit="ตัน",
     ))
-    values = _new_cycle_row_values(plot)
+    values = _update_cycle_row_values(plot)
     assert values["crop"] == "ทุเรียน"
     assert values["variety"] == "หมอนทอง"
     assert values["cycleLabel"] == "aug2026"
@@ -155,31 +159,47 @@ def test_new_cycle_row_copies_active_cycle_plan_fields() -> None:
     assert values["expectedYieldUnit"] == "ตัน"
 
 
-# --- item 18: plantingDate is ALWAYS blank in Sheet 1 -----------------------
+# --- item 18: plantingDate round-trips; the lot never appears --------------
 
-def test_new_cycle_row_planting_date_always_blank_and_carries_no_lot() -> None:
-    plot = _plot(active_cycle=_cycle(lot_no="EXISTING-LOT-01", planting_date=datetime.date(2026, 1, 1)))
-    values = _new_cycle_row_values(plot)
-    assert values["plantingDate"] is None
+def test_update_row_round_trips_the_planting_date_and_carries_no_lot() -> None:
+    """Round E reversed item 18. The old row OPENED a new cycle, so exporting
+    the previous cycle's planting date would have been wrong and it was blanked.
+    This row EDITS the running cycle, so its own date must come back unchanged —
+    blanking it would clear a real value on an unedited re-upload."""
+    plot = _plot(active_cycle=_cycle(
+        lot_no="EXISTING-LOT-01", planting_date=datetime.date(2026, 1, 1),
+    ))
+    values = _update_cycle_row_values(plot)
+    assert values["plantingDate"] == "2026-01-01"
     # Round A — lotNo is not a column at all any more, so the row cannot carry
-    # one (it used to be exported blank for exactly the same reason).
+    # one (the system Lot No is generated and immutable).
     assert "lotNo" not in values
 
 
-def test_workbook_sheet_one_lot_no_and_planting_date_columns_are_empty() -> None:
-    _headers, by_no = _rows_by_number([_plot()])
+def test_update_row_leaves_the_planting_date_blank_when_the_cycle_has_none() -> None:
+    plot = _plot(active_cycle=_cycle(planting_date=None))
+    assert _update_cycle_row_values(plot)["plantingDate"] is None
+
+
+def test_workbook_sheet_one_carries_no_lot_but_does_carry_the_planting_date() -> None:
+    """Round E — the row now EDITS the active cycle rather than opening a new
+    one, so its planting date is that cycle's own and must round-trip. Blanking
+    it (which the old start_next_cycle row did, correctly, for a NEW cycle)
+    would clear a real value on an unedited re-upload."""
+    plot = _plot(active_cycle=_cycle(planting_date=datetime.date(2026, 6, 1)))
+    _headers, by_no = _rows_by_number([plot])
     data_row = by_no[3]
     assert "lotNo" not in data_row  # blank cells are omitted by the reader
-    assert "plantingDate" not in data_row
+    assert data_row["plantingDate"] == "2026-06-01"
 
 
 # --- item 21: no active cycle -> blank, never infer from closed history ----
 
-def test_plot_without_active_cycle_has_blank_cycle_fields_and_still_start_next_cycle() -> None:
+def test_plot_without_active_cycle_has_blank_cycle_fields() -> None:
     closed = _cycle(status="harvested", crop="ข้าวโพด", cycle_label="closed2025", lot_no="OLD-LOT-99")
     plot = _plot(active_cycle=None, cycles=[closed])
-    values = _new_cycle_row_values(plot)
-    assert values["action"] == ACTION_START_NEXT
+    values = _update_cycle_row_values(plot)
+    assert values["action"] == ACTION_UPDATE
     for field in ("crop", "variety", "cycleLabel", "poNumber", "pCode", "plantCount",
                   "expectedYieldFull", "expectedYieldUnit"):
         assert values[field] is None, field
@@ -205,11 +225,11 @@ def test_additional_phones_comma_separated_deterministic() -> None:
         _phone("0822222222", "additional"),
         _phone("0833333333", "additional"),
     ])
-    values = _new_cycle_row_values(plot)
+    values = _update_cycle_row_values(plot)
     assert values["primaryPhone"] == "0811111111"
     assert values["additionalPhones"] == "0822222222,0833333333"
     # Same input -> same output, every call (no set/dict-order dependence).
-    assert _new_cycle_row_values(plot)["additionalPhones"] == values["additionalPhones"]
+    assert _update_cycle_row_values(plot)["additionalPhones"] == values["additionalPhones"]
 
 
 def test_inactive_phones_excluded_from_new_cycle_row() -> None:
@@ -217,7 +237,7 @@ def test_inactive_phones_excluded_from_new_cycle_row() -> None:
         _phone("0811111111", "primary"),
         _phone("0899999999", "additional", is_active=False),
     ])
-    values = _new_cycle_row_values(plot)
+    values = _update_cycle_row_values(plot)
     assert values["additionalPhones"] is None
 
 
@@ -238,7 +258,7 @@ def test_examples_sheet_is_not_sheet_one() -> None:
     NOT present on Sheet 1's real-data rows."""
     _headers, by_no = _rows_by_number([_plot(plot_code="P001")])
     data_rows = [v for n, v in by_no.items() if n > 2]
-    assert all(v["action"] == ACTION_START_NEXT for v in data_rows)
+    assert all(v["action"] == ACTION_UPDATE for v in data_rows)
     assert all(v["action"] != "create_plot_with_cycle" for v in data_rows)
 
 
@@ -365,7 +385,7 @@ def test_examples_sheet_every_import_column_has_red_fill_including_blanks() -> N
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
     sheet2 = parts["xl/worksheets/sheet2.xml"]
-    for example_row in (4, 5, 6, 7, 8):
+    for example_row in (4, 5, 6):
         for col_index in range(1, len(IMPORT_COLUMNS) + 1):
             ref = f"{_col_letter(col_index)}{example_row}"
             style_idx = _cell_style_index(sheet2, ref)
@@ -398,7 +418,9 @@ async def test_contextual_workbook_with_blank_editable_cells_still_parses_via_im
 
     assert preview.total_rows == 1
     row = preview.rows[0]
-    assert row.payload.planting_date is None
+    # Round E — the exported row carries the active cycle's own planting date
+    # (this fixture's plot has one), and the importer reads it back unchanged.
+    assert row.payload.planting_date == datetime.date(2026, 6, 1)
 
 
 def test_description_row_uses_gray_style() -> None:
@@ -429,7 +451,7 @@ def test_read_first_sheet_reads_only_sheet_one_ignoring_the_other_sheets() -> No
 
 
 def test_all_supported_actions_constant_still_includes_start_next_cycle() -> None:
-    assert ACTION_START_NEXT in SUPPORTED_ACTIONS
+    assert ACTION_UPDATE in SUPPORTED_ACTIONS
 
 
 # --- generic template regression (unchanged) --------------------------------

@@ -929,7 +929,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     expect((await screen.findAllByText('รอบที่ 2 · พริก · LOT-01')).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows "รอเริ่มรอบปลูก" with a "เริ่มรอบปลูกใหม่" button when there is no active cycle', async () => {
+  it('shows "รอเริ่มรอบปลูก" with a "เริ่มรอบปลูกแรก" button when there is no active cycle', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([]);
 
@@ -939,10 +939,10 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     // hero card independently show the no-active-cycle state.
     expect((await screen.findAllByText('รอเริ่มรอบปลูก')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('แปลงนี้ยังใช้งานอยู่ แต่ยังไม่มีรอบปลูกที่เปิดอยู่')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: 'เริ่มรอบปลูกแรก' }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('hides "เริ่มรอบปลูกใหม่" without plots.update', async () => {
+  it('hides "เริ่มรอบปลูกแรก" without plots.update', async () => {
     allowedPerms = new Set(['plots.read', 'records.create']);
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([]);
@@ -950,7 +950,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     renderPage();
 
     await screen.findAllByText('รอเริ่มรอบปลูก');
-    expect(screen.queryByRole('button', { name: 'เริ่มรอบปลูกใหม่' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'เริ่มรอบปลูกแรก' })).toBeNull();
   });
 
   it('disables ตรวจแปลง with an explanatory tooltip when the plot has no active cycle', async () => {
@@ -973,9 +973,9 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     renderPage();
 
     // Round 8.0.4 — both the current-cycle section AND the yield-planning
-    // hero card show a "เริ่มรอบปลูกใหม่" button when there's no active
+    // hero card show a "เริ่มรอบปลูกแรก" button when there's no active
     // cycle; either one opens the same StartCycleModal.
-    fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' }))[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกแรก' }))[0]);
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
     await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
@@ -985,7 +985,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     await waitFor(() => expect(createPlotCycleMock).toHaveBeenCalledWith('plot-1', expect.any(Object)));
     // Modal closed and the section now reflects the (refetched) active cycle
     // — "กำลังปลูก" renders twice (current-cycle section + its history row).
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'เริ่มรอบปลูกใหม่' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'เริ่มรอบปลูกแรก' })).toBeNull());
     await waitFor(() => expect(screen.getAllByText('กำลังปลูก').length).toBeGreaterThanOrEqual(1));
   });
 
@@ -996,7 +996,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     renderPage();
 
-    fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' }))[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกแรก' }))[0]);
     const labelInput = await screen.findByPlaceholderText('เช่น jun2026 หรือ may2026');
     fireEvent.change(labelInput, { target: { value: 'jul2026' } });
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
@@ -1165,7 +1165,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     renderPage(qc);
 
-    fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' }))[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกแรก' }))[0]);
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
     await pickCropAndVariety();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
@@ -1365,164 +1365,31 @@ describe('PlotDetail — actual harvest (round 8-7A/8-7B)', () => {
   });
 });
 
-describe('PlotDetail — cycle rollover (round 7.9C)', () => {
-  it('shows "จบรอบ + เริ่มรอบใหม่" when the plot is active, has plots.update, and has an active cycle', async () => {
+describe('PlotDetail — rollover is retired (round E)', () => {
+  it('never offers "จบรอบ + เริ่มรอบใหม่", even on an active plot with an active cycle', async () => {
+    // Rollover exists only to start a SECOND cycle on the same plot, which
+    // "one plot, one cycle" does not allow. The button is gone in every state
+    // it used to appear in; closing a cycle on its own is unaffected, and is
+    // where the season's actual harvest is now recorded (round D).
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([oneCycle()]);
 
     renderPage();
 
-    expect(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' })).toBeTruthy();
-  });
-
-  it('hides the rollover button when there is no active cycle', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([]);
-
-    renderPage();
-
-    await screen.findAllByText('รอเริ่มรอบปลูก');
+    await screen.findByRole('button', { name: 'ปิดรอบปลูก' });
     expect(screen.queryByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' })).toBeNull();
+    expect(rolloverPlotCycleMock).not.toHaveBeenCalled();
   });
 
-  it('hides the rollover button on a permanently-closed (inactive) plot even if an active cycle somehow remains', async () => {
-    getPlotMock.mockResolvedValue(basePlot({ isActive: false }));
-    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
-
-    renderPage();
-
-    await waitFor(() => expect(screen.getAllByText('กำลังปลูก').length).toBeGreaterThanOrEqual(1));
-    expect(screen.queryByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' })).toBeNull();
-  });
-
-  it('hides the rollover button without plots.update', async () => {
-    allowedPerms = new Set(['plots.read', 'records.create']);
+  it('still offers ปิดรอบปลูก — closing a cycle is not what was retired', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([oneCycle()]);
 
     renderPage();
 
-    await waitFor(() => expect(screen.getAllByText('กำลังปลูก').length).toBeGreaterThanOrEqual(1));
-    expect(screen.queryByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' })).toBeNull();
-  });
-
-  it('clicking the button opens the modal showing the current cycle read-only', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
-
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
-
-    expect(await screen.findByText('จบรอบเดิม + เริ่มรอบใหม่ — รอบที่ 1')).toBeTruthy();
-    // readonly current-cycle fields from oneCycle() — the underlying page
-    // (CurrentCycleSection) still renders behind the modal overlay, so these
-    // also appear there; assert at least one match rather than exactly one.
-    expect(screen.getAllByText('LOT-01').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('2026-06-01').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('1,000 kg').length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('shows copy confirming the QR key stays valid and history/records are preserved', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
-
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
-
-    expect(await screen.findByText('QR เดิมของแปลงยังใช้ต่อได้')).toBeTruthy();
-    expect(screen.getByText('ระบบจะปิดรอบเดิมและเปิดรอบใหม่ในครั้งเดียว')).toBeTruthy();
-    expect(screen.getByText('ประวัติรอบเดิมและบันทึกการตรวจเดิมจะไม่หาย')).toBeTruthy();
-  });
-
-  it('submitting calls ONLY rolloverPlotCycle — never closePlotCycle/createPlotCycle separately — with no record/photo/QR fields in the payload', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValueOnce([oneCycle()]).mockResolvedValue([
-      oneCycle({ id: 'cycle-2', cycleNo: 2 }),
-    ]);
-    rolloverPlotCycleMock.mockResolvedValue({
-      plotId: 'plot-1', activeCycleId: 'cycle-2', activeCycleNo: 2,
-      closedCycle: oneCycle({ status: 'harvested' }),
-      newCycle: oneCycle({ id: 'cycle-2', cycleNo: 2 }),
-    });
-
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    await pickCropAndVariety();
-    // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
-    fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
-    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันจบรอบ + เริ่มรอบใหม่' }));
-
-    await waitFor(() => expect(rolloverPlotCycleMock).toHaveBeenCalledOnce());
-    expect(rolloverPlotCycleMock).toHaveBeenCalledWith('plot-1', 'cycle-1', expect.any(Object));
-    expect(closePlotCycleMock).not.toHaveBeenCalled();
-    expect(createPlotCycleMock).not.toHaveBeenCalled();
-
-    // the payload sent is exactly { closeStatus, closeReason, newCycle: {...} }
-    // — no record/photo/qrKey field of any kind.
-    const payload = rolloverPlotCycleMock.mock.calls[0][2] as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(['closeReason', 'closeStatus', 'newCycle']);
-    const newCycle = payload.newCycle as Record<string, unknown>;
-    for (const forbidden of ['recordId', 'photoUrls', 'qrKey', 'inspectionSessionToken']) {
-      expect(Object.prototype.hasOwnProperty.call(payload, forbidden)).toBe(false);
-      expect(Object.prototype.hasOwnProperty.call(newCycle, forbidden)).toBe(false);
-    }
-  });
-
-  it('invalidates plot, plot-cycles, plots, and the plot-status report after a successful rollover', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValueOnce([oneCycle()]).mockResolvedValue([
-      oneCycle({ id: 'cycle-2', cycleNo: 2 }),
-    ]);
-    rolloverPlotCycleMock.mockResolvedValue({
-      plotId: 'plot-1', activeCycleId: 'cycle-2', activeCycleNo: 2,
-      closedCycle: oneCycle({ status: 'harvested' }),
-      newCycle: oneCycle({ id: 'cycle-2', cycleNo: 2 }),
-    });
-
-    renderPage(qc);
-    fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    await pickCropAndVariety();
-    // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
-    fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
-    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันจบรอบ + เริ่มรอบใหม่' }));
-
-    await waitFor(() => expect(rolloverPlotCycleMock).toHaveBeenCalledOnce());
-    const keys = invalidateSpy.mock.calls
-      .map((c) => (c[0] as { queryKey?: unknown[] })?.queryKey)
-      .filter(Boolean) as unknown[][];
-    const firstKeys = keys.map((k) => k[0]);
-    expect(firstKeys).toContain('plots');
-    expect(firstKeys).toContain('report-plot-status');
-    expect(keys.some((k) => k[0] === 'plot' && k[1] === 'plot-1')).toBe(true);
-    expect(keys.some((k) => k[0] === 'plot-cycles' && k[1] === 'plot-1')).toBe(true);
-  });
-
-  it('shows an understandable message on a 409 (someone else changed the cycle) without crashing', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
-    rolloverPlotCycleMock.mockRejectedValue({ isAxiosError: true, response: { status: 409 } });
-
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' }));
-    fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    await pickCropAndVariety();
-    // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
-    fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
-    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันจบรอบ + เริ่มรอบใหม่' }));
-
-    expect(await screen.findByText(
-      'ไม่สามารถจบรอบได้ อาจมีการเปลี่ยนแปลงรอบปลูกจากผู้ใช้อื่น กรุณารีเฟรชแล้วลองใหม่',
-    )).toBeTruthy();
-    // modal stays open on error (not silently dismissed)
-    expect(screen.getByText('จบรอบเดิม + เริ่มรอบใหม่ — รอบที่ 1')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'ปิดรอบปลูก' })).toBeTruthy();
   });
 });
-
-// --- round 8-3C: access-phone section + management modal --------------------
 
 describe('PlotDetail — access phones (round 8-3C)', () => {
   it('shows the full formatted primary and additional numbers', async () => {
@@ -1610,14 +1477,19 @@ describe('PlotDetail — reactivation (round 8-6I)', () => {
     expect(screen.queryByText('แปลงนี้ปิดใช้งานอยู่')).toBeNull();
   });
 
-  it('shows both reactivate buttons with plots.delete + plots.update', async () => {
+  it('offers plain reactivation only — never reactivate-with-a-new-cycle (round E)', async () => {
+    // Reopening a plot AND starting another season is the same move as
+    // rollover, so it went with it. Plain reactivation stays: an accidental
+    // deactivation must remain undoable, and reopening a plot without
+    // starting a cycle breaks no rule.
     getPlotMock.mockResolvedValue(inactivePlot());
     listPlotCyclesMock.mockResolvedValue([]);
     allowedPerms = new Set(['plots.delete', 'plots.update', 'plots.read']);
     renderPage();
 
-    expect(await screen.findByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูกใหม่' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'เปิดใช้งานแปลงเท่านั้น' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'เปิดใช้งานแปลงเท่านั้น' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูกใหม่' })).toBeNull();
+    expect(reactivatePlotWithCycleMock).not.toHaveBeenCalled();
   });
 
   it('shows only the secondary button with plots.delete but not plots.update', async () => {
@@ -1662,14 +1534,14 @@ describe('PlotDetail — reactivation (round 8-6I)', () => {
     expect(screen.queryByRole('button', { name: /ตรวจแปลง/ })).toBeNull();
   });
 
-  it('never shows "เริ่มรอบปลูกใหม่" for an inactive plot — StartCycleModal must not be reachable', async () => {
+  it('never shows "เริ่มรอบปลูกแรก" for an inactive plot — StartCycleModal must not be reachable', async () => {
     getPlotMock.mockResolvedValue(inactivePlot());
     listPlotCyclesMock.mockResolvedValue([]);
     allowedPerms = new Set(['plots.update', 'plots.delete', 'plots.read']);
     renderPage();
 
     await screen.findByText('แปลงนี้ปิดใช้งานอยู่');
-    expect(screen.queryByRole('button', { name: 'เริ่มรอบปลูกใหม่' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'เริ่มรอบปลูกแรก' })).toBeNull();
   });
 
   it('reactivate-only calls reactivatePlot exactly once, shows success, and invalidates every required key', async () => {
@@ -1696,32 +1568,19 @@ describe('PlotDetail — reactivation (round 8-6I)', () => {
     }
   });
 
-  it('reactivate-with-cycle calls reactivatePlotWithCycle exactly once with the cycle payload, and shows success', async () => {
+  it('reactivate-with-cycle is unreachable — the flow retired with rollover (round E)', async () => {
+    // The endpoint and its modal still exist; nothing in the UI opens them.
+    // Reopening a plot AND starting another season is the same move rollover
+    // made, and "one plot, one cycle" allows neither.
     getPlotMock.mockResolvedValue(inactivePlot());
     listPlotCyclesMock.mockResolvedValue([]);
-    reactivatePlotWithCycleMock.mockResolvedValue({
-      plot: { ...inactivePlot(), isActive: true },
-      cycle: oneCycle(),
-    });
     allowedPerms = new Set(['plots.delete', 'plots.update', 'plots.read']);
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูกใหม่' }));
-    await screen.findByPlaceholderText('เช่น PO25001');
-
-    fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25009' } });
-    await pickCropAndVariety('พริกจินดา');
-    // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
-    fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
-    fireEvent.click(screen.getByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูก' }));
-
-    await waitFor(() => expect(reactivatePlotWithCycleMock).toHaveBeenCalledTimes(1));
-    expect(reactivatePlotMock).not.toHaveBeenCalled();
-    const [calledPlotId, payload] = reactivatePlotWithCycleMock.mock.calls[0] as [string, { poNumber: string; pCode: string }];
-    expect(calledPlotId).toBe('plot-1');
-    expect(payload.poNumber).toBe('PO25009');
-    expect(payload.pCode).toBe('Melon-Z');
-    expect(await screen.findByText('เปิดใช้งานแปลงและเริ่มรอบปลูกใหม่แล้ว')).toBeTruthy();
+    await screen.findByRole('button', { name: 'เปิดใช้งานแปลงเท่านั้น' });
+    expect(screen.queryByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูกใหม่' })).toBeNull();
+    // and no path reaches the API even indirectly
+    expect(reactivatePlotWithCycleMock).not.toHaveBeenCalled();
   });
 
   it('404 shows the mapped Thai message and the modal stays open', async () => {
@@ -1805,7 +1664,7 @@ describe('PlotDetail — reactivation (round 8-6I)', () => {
     expect(reactivatePlotWithCycleMock).not.toHaveBeenCalled();
   });
 
-  it('regression: active-plot workflows (ตรวจแปลง, เริ่มรอบปลูกใหม่, แก้ไขแปลง) are unaffected', async () => {
+  it('regression: active-plot workflows (ตรวจแปลง, เริ่มรอบปลูกแรก, แก้ไขแปลง) are unaffected', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([]);
     allowedPerms = new Set(['plots.update', 'plots.delete', 'plots.read', 'records.create']);
@@ -1813,9 +1672,9 @@ describe('PlotDetail — reactivation (round 8-6I)', () => {
 
     expect(await screen.findByRole('link', { name: 'แก้ไขแปลง' })).toBeTruthy();
     // Both the current-cycle section and the yield-planning hero card show
-    // their own "เริ่มรอบปลูกใหม่" button when there's no active cycle
+    // their own "เริ่มรอบปลูกแรก" button when there's no active cycle
     // (pre-existing behavior, unchanged by this round).
-    expect((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกใหม่' })).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกแรก' })).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole('button', { name: 'เปิดใช้งานแปลงเท่านั้น' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'เปิดใช้งานและเริ่มรอบปลูกใหม่' })).toBeNull();
   });

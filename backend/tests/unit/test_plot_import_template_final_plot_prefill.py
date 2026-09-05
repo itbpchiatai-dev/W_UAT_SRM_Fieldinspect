@@ -27,7 +27,7 @@ from app.api.v1.plots import (
     _PLOT_TEMPLATE_HEADERS,
     _REFERENCE_COLUMNS,
     _contextual_plot_template_workbook,
-    _new_cycle_row_values,
+    _update_cycle_row_values,
     _new_cycle_sheet,
     _plot_template_workbook,
     _template_example_rows,
@@ -145,7 +145,7 @@ def test_the_final_plot_example_row_has_neither_column():
 def test_a_downloaded_row_no_longer_carries_a_record_id():
     """The row a user downloads and edits must not contain a record id at all —
     there is nowhere left to put one."""
-    values = _new_cycle_row_values(_plot())
+    values = _update_cycle_row_values(_plot())
     for column in REMOVED_COLUMNS:
         assert column not in values
 

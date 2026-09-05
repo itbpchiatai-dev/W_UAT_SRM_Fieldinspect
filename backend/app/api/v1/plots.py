@@ -274,15 +274,15 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
     "ตัวอย่าง" sheet (Part E) — extracted so both stay byte-identical example
     data instead of maintaining two copies.
 
-    Round 8-27D — five rows, one per action a user actually types:
-    create / update / start_next_cycle / reactivate_plot_with_cycle /
-    final_plot. reactivate_plot_with_cycle was the gap that made this file
-    confusing: it was named in the import dialog but had no example here,
-    while final_plot had an example here but was named nowhere in the dialog,
-    and the row-2 description still said "3 แบบ" above four example rows.
-    All three now list the same five. Legacy start_new_cycle /
-    close_and_start_new_cycle stay out (see
-    test_legacy_rollover_actions_are_not_default_example_rows)."""
+    Round E — THREE rows, one per action the app offers
+    (plot_import.OFFERED_ACTIONS): create / update / final_plot.
+    start_next_cycle and reactivate_plot_with_cycle went with the "one plot,
+    one cycle" rule — a plot is registered, inspected, and finalized, never
+    reopened for a second season. The importer still ACCEPTS them so a
+    template downloaded before this round keeps working, but nothing in the
+    app produces or documents them any more, which is why they have no
+    example here. Legacy start_new_cycle / close_and_start_new_cycle were
+    already out (see test_legacy_rollover_actions_are_not_default_example_rows)."""
     return [
         {
             "action": "create_plot_with_cycle",
@@ -331,40 +331,6 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "expectedYieldFull": "1000", "expectedYieldUnit": "kg",
             "inspectionPasswordStatus": "configured",
             "newInspectionPassword": "135790",
-        },
-        {
-            "action": "start_next_cycle",
-            "supplierCode": supplier_code, "plotCode": "P003",
-            "primaryPhone": "0866661234", "additionalPhones": "0877771234,0888881234",
-            "crop": "แตงโม", "variety": "กินรี", "cycleLabel": "aug2026",
-            # Round 8-13A — PO Number is OPTIONAL on every new-cycle action;
-            # this example deliberately leaves it blank (still a fully valid
-            # row) to show that. pCode stays required — see below.
-            "poNumber": None, "pCode": "Melon-C",
-            # Blank = this cycle has no supplier lot number (also what an
-            # older workbook without the column effectively means).
-            "supplierLotNo": None,
-            "plantingDate": "2026-08-01", "plantCount": "600",
-            "expectedYieldFull": "3000", "expectedYieldUnit": "kg",
-            # Blank = keep the plot's existing password (the common case).
-            "inspectionPasswordStatus": "configured",
-        },
-        {
-            # Round 8-27D — reactivate_plot_with_cycle: the ONLY action that
-            # works on a plot that has been deactivated (start_next_cycle is
-            # rejected for one). It reopens the plot and starts a fresh cycle
-            # in a single row, so it carries the same new-cycle requirements
-            # as start_next_cycle above: cycleLabel + pCode, and a variety
-            # (round 8-26C — a pCode must belong to one).
-            "action": "reactivate_plot_with_cycle",
-            "supplierCode": supplier_code, "plotCode": "P004",
-            "primaryPhone": "0811112222",
-            "crop": "เมล่อน", "variety": "เมล่อนญี่ปุ่น", "cycleLabel": "sep2026",
-            "poNumber": None, "pCode": "Melon-D",
-            "supplierLotNo": None,
-            "plantingDate": "2026-09-01", "plantCount": "500",
-            "expectedYieldFull": "1500", "expectedYieldUnit": "kg",
-            "inspectionPasswordStatus": "configured",
         },
         {
             # Round 8-7A — final_plot: closes the active cycle as harvested
@@ -450,7 +416,7 @@ _EDITABLE_COLUMNS: frozenset[str] = frozenset({
     # inspection record itself, so neither was ever a real user decision.
     "harvestYield", "finalYieldAfterClean", "harvestDate", "finalNote",
     # Round 8-9B.1 — the ONE password input column: genuine user input, so
-    # editable/yellow. Always exported BLANK (see _new_cycle_row_values) — a
+    # editable/yellow. Always exported BLANK (see _update_cycle_row_values) — a
     # downloaded template never carries an existing password back out.
     "newInspectionPassword",
 })
@@ -511,31 +477,37 @@ def _inspection_password_status(configured: bool) -> str:
     )
 
 
-def _new_cycle_row_values(
+def _update_cycle_row_values(
     plot: Plot, *, password_configured: bool = False,
 ) -> dict[str, str | None]:
-    """Sheet 1 ("นำเข้ารอบใหม่") row for one real active Plot (Part C).
+    """Sheet 1 row for one existing, ACTIVE Plot (round E).
 
-    action is always start_next_cycle. Physical-plot fields come from the
-    Plot itself; planting-cycle fields come from Plot.active_cycle (None when
-    the plot has no active cycle — its fields are then blank, and this
-    deliberately never falls back to a closed/historical cycle, so the user
-    always fills in a fresh plan rather than accidentally re-importing stale
-    data). plantingDate is ALWAYS blank here regardless of the active cycle:
-    it must be the NEW cycle's planting date, never copied from the old one.
-    (Round A — the lotNo column this used to blank for the same reason no
-    longer exists at all: the server always generates the new cycle's Lot No,
-    {cycleLabel}-{supplierCode}-{pCode}-{running}, round 8-12A.)
+    action is update_current_cycle — edit the plan of the cycle that is already
+    running. The user may change that one cell to final_plot to close the cycle
+    and record its actual harvest instead; those are the only two things an
+    existing plot supports now that a plot carries exactly one cycle for its
+    whole life.
 
-    Round 8-7A pre-filled finalInspectionRecordId here from the cycle's latest
-    active record; round 8-10B removed that column (the server resolves the
-    record itself at import time), so this row no longer needs the record at
-    all — and the template download no longer queries for it.
+    Every planting-cycle field is pre-filled from Plot.active_cycle so an
+    unedited re-upload is a no-op rather than a plan that quietly loses values.
+    That includes plantingDate, which the previous start_next_cycle version of
+    this row deliberately BLANKED: that row opened a NEW cycle, so copying the
+    old date forward would have been wrong. This row edits the SAME cycle, so
+    the opposite is true — blanking it would clear a real value.
+
+    A plot with no active cycle leaves the cycle fields blank; this never falls
+    back to a closed/historical cycle, so stale data can't be re-imported by
+    accident.
+
+    The final_plot columns (harvestYield / finalYieldAfterClean / harvestDate)
+    are exported BLANK on purpose: round D fills them from the field team's own
+    inspection records when the row is committed, so an admin closing a cycle
+    types nothing at all in the common case.
     """
     cycle = plot.active_cycle
     primary_phone, additional_phones = _plot_access_phone_fields(plot)
     return {
-        "action": plot_import.ACTION_START_NEXT,
+        "action": plot_import.ACTION_UPDATE,
         "supplierCode": plot.supplier.code if plot.supplier is not None else None,
         "plotCode": plot.plot_code,
         "plotName": plot.name,
@@ -564,7 +536,10 @@ def _new_cycle_row_values(
         "oracleSupplierCode": cycle.oracle_supplier_code if cycle is not None else None,
         "oracleInvoice": cycle.oracle_invoice if cycle is not None else None,
         "refAccount": cycle.ref_account if cycle is not None else None,
-        "plantingDate": None,
+        "plantingDate": (
+            cycle.planting_date.isoformat()
+            if cycle is not None and cycle.planting_date is not None else None
+        ),
         "plantCount": str(cycle.plant_count) if cycle is not None and cycle.plant_count is not None else None,
         "expectedYieldFull": (
             str(cycle.expected_yield_full)
@@ -583,8 +558,9 @@ def _reactivate_row_values(
     plot: Plot, latest_cycle: PlotCycle | None, *, password_configured: bool = False,
 ) -> dict[str, str | None]:
     """Sheet 1 row for an INACTIVE plot (round 8-6J Part D): action is always
-    reactivate_plot_with_cycle. Unlike _new_cycle_row_values (which always
-    blanks plantingDate for a rollover-in-place), every planting-cycle
+    reactivate_plot_with_cycle. Round E retired that action, so this builder
+    is no longer called by the template — it is kept only for its existing
+    tests. Every planting-cycle
     field here is pre-filled from the plot's most recent HISTORICAL cycle
     (`latest_cycle` — any status, batch-loaded by the caller via
     plot_cycle_repository.get_latest_cycles_for_plots) as a starting point
@@ -639,7 +615,7 @@ def _reactivate_row_values(
         "expectedYieldUnit": cycle.expected_yield_unit if cycle is not None else None,
         "currentPlotStatus": _CURRENT_PLOT_STATUS_INACTIVE_LABEL,
         "inspectionPasswordStatus": _inspection_password_status(password_configured),
-        # ALWAYS blank — see _new_cycle_row_values.
+        # ALWAYS blank — see _update_cycle_row_values.
         "newInspectionPassword": None,
     }
 
@@ -657,12 +633,20 @@ def _new_cycle_sheet(
     rows: list[list[Cell]] = [_header_row(), _description_row()]
     for plot in plots:
         configured = credential_status.get(plot.id, (False, 0))[0]
-        if plot.is_active:
-            values = _new_cycle_row_values(plot, password_configured=configured)
-        else:
-            values = _reactivate_row_values(
-                plot, latest_cycles.get(plot.id), password_configured=configured,
-            )
+        # Round E — every existing plot gets ONE row, action
+        # update_current_cycle, pre-filled from its ACTIVE cycle. The user
+        # edits the plan and re-uploads, or changes the action cell to
+        # final_plot to close the cycle instead — the two things an existing
+        # plot can still have done to it under "one plot, one cycle".
+        #
+        # An INACTIVE plot is skipped: reactivate_plot_with_cycle was the only
+        # action that ever applied to one, and it is retired. Offering a row
+        # with no valid action would just be an invitation to a rejected file.
+        # Filtered HERE rather than at the two call sites so the rule lives in
+        # one place, next to the row it governs.
+        if not plot.is_active:
+            continue
+        values = _update_cycle_row_values(plot, password_configured=configured)
         rows.append([
             StyledCell(
                 values.get(col),

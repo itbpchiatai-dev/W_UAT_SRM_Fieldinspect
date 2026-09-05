@@ -29,7 +29,7 @@ from pydantic import ValidationError
 
 from app.api.v1.plots import (
     _EDITABLE_COLUMNS,
-    _new_cycle_row_values,
+    _update_cycle_row_values,
     _reactivate_row_values,
     _template_example_rows,
 )
@@ -903,7 +903,7 @@ def test_new_cycle_row_prefills_active_cycles_reference_fields() -> None:
         oracle_supplier_code="ORC-ACTIVE", oracle_invoice="INV-ACTIVE", ref_account="ACC-ACTIVE",
     )
     plot = _plot_stub(is_active=True, active_cycle=cycle)
-    values = _new_cycle_row_values(plot)
+    values = _update_cycle_row_values(plot)
     assert values["oracleSupplierCode"] == "ORC-ACTIVE"
     assert values["oracleInvoice"] == "INV-ACTIVE"
     assert values["refAccount"] == "ACC-ACTIVE"
@@ -911,7 +911,7 @@ def test_new_cycle_row_prefills_active_cycles_reference_fields() -> None:
 
 def test_new_cycle_row_blank_when_no_active_cycle() -> None:
     plot = _plot_stub(is_active=True, active_cycle=None)
-    values = _new_cycle_row_values(plot)
+    values = _update_cycle_row_values(plot)
     assert values["oracleSupplierCode"] is None
     assert values["oracleInvoice"] is None
     assert values["refAccount"] is None

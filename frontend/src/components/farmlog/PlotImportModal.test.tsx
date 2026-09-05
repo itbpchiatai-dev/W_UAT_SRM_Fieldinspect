@@ -463,35 +463,36 @@ describe('PlotImportModal — workflow help copy (round 8-2.7.1)', () => {
   // dialog used to list 4 without final_plot while the sheet shipped a
   // final_plot example row nothing explained, and its row-2 description said
   // "3 แบบ" — three sources, three different answers.
-  it('shows the five common workflows as the primary help copy, matching the Excel file', () => {
+  it('shows the three offered workflows as the primary help copy, matching the Excel file', () => {
+    // Round E — "one plot, one cycle": register the plot with its cycle, edit
+    // that cycle, close it. There is no next cycle to start and nothing to
+    // reopen, so the two actions that did those things are gone from the list.
     renderModal();
 
-    expect(screen.getByText(/การกระทำหลัก 5 แบบ/)).toBeTruthy();
+    expect(screen.getByText(/การกระทำ 3 แบบ/)).toBeTruthy();
     const items = screen.getAllByRole('listitem');
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(3);
     const actionNames = items.map((li) => li.querySelector('span.font-mono')?.textContent);
     expect(actionNames).toEqual([
-      'create_plot_with_cycle', 'update_current_cycle', 'start_next_cycle',
-      'reactivate_plot_with_cycle', 'final_plot',
+      'create_plot_with_cycle', 'update_current_cycle', 'final_plot',
     ]);
   });
 
-  it('shows the start_next_cycle auto-detect warning copy', () => {
+  it('tells the user the final_plot yield cells may be left blank', () => {
+    // Round D/E — the field team already recorded those figures; an admin
+    // closing a cycle should not have to retype them.
     renderModal();
 
-    expect(screen.getByText(
-      'ระบบจะตรวจสถานะแปลงให้เอง หากไม่มีรอบเปิดอยู่จะเริ่มรอบใหม่ทันที '
-      + 'หากมีรอบเปิดอยู่จะปิดรอบเดิมเป็นเก็บเกี่ยวแล้วและเริ่มรอบใหม่ในครั้งเดียว',
-    )).toBeTruthy();
+    expect(screen.getByText(/เว้นช่องผลผลิตว่างไว้ได้/)).toBeTruthy();
   });
 
   // Round 8-27C — the per-column rules moved into a collapsed <details> so
   // the default view is short enough that the file picker and Confirm button
   // stay reachable. Nothing was deleted; it is one click away.
-  it('collapses the per-column rules by default, keeping the 5 actions visible', () => {
+  it('collapses the per-column rules by default, keeping the 3 actions visible', () => {
     renderModal();
 
-    expect(screen.getByText(/การกระทำหลัก 5 แบบ/)).toBeTruthy();
+    expect(screen.getByText(/การกระทำ 3 แบบ/)).toBeTruthy();
     const details = document.querySelector('details');
     expect(details).toBeTruthy();
     expect(details!.hasAttribute('open')).toBe(false);
@@ -503,8 +504,10 @@ describe('PlotImportModal — workflow help copy (round 8-2.7.1)', () => {
     const details = document.querySelector('details')!;
     const text = details.textContent ?? '';
     for (const rule of [
+      // Round E — still NAMED, as the "an old file still imports" note; it is
+      // no longer one of the actions the app offers.
       'reactivate_plot_with_cycle',
-      'กรณีพิเศษ/ไฟล์เก่า',
+      'ไฟล์เก่า',
       'Lot No ระบบ',
       'Supplier Lot No',
       'Oracle Supplier Code',
@@ -525,22 +528,26 @@ describe('PlotImportModal — workflow help copy (round 8-2.7.1)', () => {
     // defeat the point of the box.
     expect(details.textContent).not.toContain('ระบบจะตรวจสถานะแปลงให้เอง');
     expect(details.textContent).not.toContain('YYYY-MM-DD');
-    expect(screen.getByText(/ระบบจะตรวจสถานะแปลงให้เอง/)).toBeTruthy();
+    expect(screen.getByText(/เว้นช่องผลผลิตว่างไว้ได้/)).toBeTruthy();
     expect(screen.getByText(/YYYY-MM-DD/)).toBeTruthy();
   });
 
-  it('puts start_new_cycle and close_and_start_new_cycle under a "กรณีพิเศษ/ไฟล์เก่า" note, not among the three common workflows', () => {
+  it('mentions the retired actions only as an "old file still imports" note (round E)', () => {
     renderModal();
 
-    const specialCase = screen.getByText('กรณีพิเศษ/ไฟล์เก่า:');
-    expect(specialCase.parentElement?.textContent).toContain('start_new_cycle');
-    expect(specialCase.parentElement?.textContent).toContain('close_and_start_new_cycle');
-    // The three bulleted workflow items are exactly create/update/start_next —
-    // neither legacy rollover action is one of them.
+    const legacyNote = screen.getByText('ไฟล์เก่า:');
+    const noteText = legacyNote.parentElement?.textContent ?? '';
+    expect(noteText).toContain('start_next_cycle');
+    expect(noteText).toContain('reactivate_plot_with_cycle');
+    // ...and none of them is offered as a workflow to choose.
     const items = screen.getAllByRole('listitem');
     const actionNames = items.map((li) => li.querySelector('span.font-mono')?.textContent);
-    expect(actionNames).not.toContain('start_new_cycle');
-    expect(actionNames).not.toContain('close_and_start_new_cycle');
+    for (const retired of [
+      'start_new_cycle', 'close_and_start_new_cycle',
+      'start_next_cycle', 'reactivate_plot_with_cycle',
+    ]) {
+      expect(actionNames).not.toContain(retired);
+    }
   });
 });
 

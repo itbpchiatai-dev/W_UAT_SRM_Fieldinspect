@@ -17,6 +17,7 @@ import {
   createPlotCycle,
   updatePlotCycle,
   closePlotCycle,
+  getPlotCycleClosePreview,
   deactivatePlot,
   rolloverPlotCycle,
   reactivatePlot,
@@ -24,6 +25,7 @@ import {
   type PlotCycle,
   type PlotCycleCreatePayload,
   type PlotCycleUpdatePayload,
+  type PlotCycleClosePayload,
   type PlotCycleRolloverPayload,
 } from '../../api/plots';
 import { MasterDataSelect } from './MasterDataSelect';
@@ -841,6 +843,13 @@ export function EditCycleModal({
 const closeSchema = z.object({
   status: z.enum(['harvested', 'cancelled']),
   closeReason: z.string().optional().or(z.literal('')),
+  // Round D — the ACTUAL harvest, pre-filled from the field team's own report
+  // and editable. Left blank they are simply not sent, and the server carries
+  // the reported figures forward itself; the form does not re-implement that
+  // fallback, so the two can never disagree.
+  harvestYield: optionalNumberInput,
+  finalYieldAfterClean: optionalNumberInput,
+  harvestDate: z.string().optional().or(z.literal('')),
 });
 type CloseFormValues = z.infer<typeof closeSchema>;
 
@@ -849,21 +858,57 @@ export function CloseCycleModal({
 }: {
   plotId: string; cycle: PlotCycle; onClose: () => void; onSaved: () => void;
 }) {
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<CloseFormValues>({
+  const { register, handleSubmit, watch, reset, formState: { errors, isSubmitting } } = useForm<CloseFormValues>({
     resolver: zodResolver(closeSchema),
     defaultValues: { status: 'harvested', closeReason: '' },
   });
 
+  // Round D — what the server WILL record if the admin just confirms. Read-only
+  // and side-effect-free; the close itself is still the POST below.
+  const previewQ = useQuery({
+    queryKey: ['plot-cycle-close-preview', plotId, cycle.id],
+    queryFn: () => getPlotCycleClosePreview(plotId, cycle.id),
+  });
+
+  // Pre-fill ONCE, when the figures arrive — never from a refetching effect
+  // that could overwrite something the admin has already corrected. `reset`
+  // (not per-field setValue) so the boxes count as pristine defaults rather
+  // than edits the user made.
+  const prefilledRef = useRef(false);
+  useEffect(() => {
+    const p = previewQ.data;
+    if (!p || !p.resolved || prefilledRef.current) return;
+    prefilledRef.current = true;
+    reset({
+      status: 'harvested',
+      closeReason: '',
+      harvestYield: p.harvestYield != null ? Number(p.harvestYield) : undefined,
+      finalYieldAfterClean:
+        p.finalYieldAfterClean != null ? Number(p.finalYieldAfterClean) : undefined,
+      harvestDate: p.harvestDate ?? '',
+    });
+  }, [previewQ.data, reset]);
+
+  const status = watch('status');
+  const recordingHarvest = status === 'harvested';
+
   const closeM = useMutation({
-    mutationFn: (p: { status: 'harvested' | 'cancelled'; closeReason: string | null }) =>
-      closePlotCycle(plotId, cycle.id, p),
+    mutationFn: (p: PlotCycleClosePayload) => closePlotCycle(plotId, cycle.id, p),
   });
 
   async function onSubmit(values: CloseFormValues) {
-    await closeM.mutateAsync({
+    const payload: PlotCycleClosePayload = {
       status: values.status,
       closeReason: values.closeReason?.trim() || null,
-    });
+    };
+    // A cancelled cycle was never harvested — the backend rejects figures sent
+    // with one, so the form never sends them either.
+    if (values.status === 'harvested') {
+      payload.harvestYield = values.harvestYield ?? null;
+      payload.finalYieldAfterClean = values.finalYieldAfterClean ?? null;
+      payload.harvestDate = values.harvestDate?.trim() || null;
+    }
+    await closeM.mutateAsync(payload);
     onSaved();
   }
 
@@ -879,6 +924,46 @@ export function CloseCycleModal({
             <option value="cancelled">ยกเลิก</option>
           </select>
         </Field>
+
+        {/* Round D — the actual harvest, pre-filled from the field team's own
+            report. The admin confirms or corrects; nobody retypes. Hidden for a
+            cancelled close, which records no harvest at all. */}
+        {recordingHarvest && (
+          <section className="space-y-3 rounded-md border border-border bg-secondary/30 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-medium text-foreground">ผลผลิตจริง</h3>
+              {previewQ.isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            </div>
+            {previewQ.data?.resolved ? (
+              <p className="text-xs text-muted-foreground">
+                ดึงจากบันทึกการตรวจ
+                {previewQ.data.sourceGrowthStage ? ` ระยะ "${previewQ.data.sourceGrowthStage}"` : ''}
+                {previewQ.data.sourceRecordDate ? ` วันที่ ${previewQ.data.sourceRecordDate}` : ''}
+                {' '}— ตรวจสอบและแก้ไขได้
+              </p>
+            ) : (
+              !previewQ.isLoading && (
+                <p className="text-xs text-muted-foreground">
+                  รอบนี้ยังไม่มีบันทึกผลผลิตจากหน้าตรวจแปลง — เว้นว่างไว้ได้ หรือกรอกเองให้ครบทั้ง 3 ช่อง
+                </p>
+              )
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Field label="ผลผลิตที่เก็บได้ (kg)" error={errors.harvestYield?.message}>
+                <input {...register('harvestYield')} type="number" step="0.01" min={0}
+                  className="field-input" placeholder="0.00" />
+              </Field>
+              <Field label="หลังทำความสะอาด (kg)" error={errors.finalYieldAfterClean?.message}>
+                <input {...register('finalYieldAfterClean')} type="number" step="0.01" min={0}
+                  className="field-input" placeholder="0.00" />
+              </Field>
+              <Field label="วันที่เก็บเกี่ยว" error={errors.harvestDate?.message}>
+                <input {...register('harvestDate')} type="date" className="field-input" />
+              </Field>
+            </div>
+          </section>
+        )}
+
         <Field label="เหตุผล (ไม่บังคับ)" error={errors.closeReason?.message}>
           <textarea {...register('closeReason')} rows={3} className="field-input" />
         </Field>

@@ -77,6 +77,13 @@ CYCLE_CLOSED_STATUSES: tuple[str, ...] = (CYCLE_STATUS_HARVESTED, CYCLE_STATUS_C
 # 8-6J will wire the template/UI; this round only reserves the constant).
 CYCLE_STATUS_NONE = "none"
 
+# The unit every ACTUAL-harvest figure is recorded in (round 8-7A/8-10B, made
+# a shared constant in round D). Server-stamped, never chosen: the field form
+# collects kilograms, the Excel importer stamps kilograms, and the web close
+# flow stamps kilograms. It lives beside the columns it describes so the three
+# writers of final_yield_unit read it from one place.
+ACTUAL_HARVEST_YIELD_UNIT = "kg"
+
 # How lot_no was derived (round 8-5A, migration 0042). 'auto' = server-
 # generated — {cycleLabel}-{supplierCode}-{pCode}-{running} (V2, round 8-12A;
 # see auto_lot_series_key below for how a V2 row is told apart from a V1 one).

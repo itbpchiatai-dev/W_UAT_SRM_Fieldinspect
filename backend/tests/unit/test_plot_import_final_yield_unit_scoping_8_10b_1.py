@@ -275,6 +275,8 @@ async def test_final_plot_commit_still_writes_the_fixed_kg_unit():
     q1, q2, q3, q4, q5 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with q1, q2, q3, q4, q5, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.set_actual_harvest") as mk_set, \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)):

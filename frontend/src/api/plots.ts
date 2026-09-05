@@ -1403,6 +1403,19 @@ export type PlotCycleUpdatePayload = Partial<PlotCycleCreatePayload>;
 export interface PlotCycleClosePayload {
   status: 'harvested' | 'cancelled';
   closeReason?: string | null;
+  /** Round D — the cycle's ACTUAL harvest, recorded as part of the close.
+   * All optional: omit a field and the server fills it in from the cycle's own
+   * inspection records (getPlotCycleClosePreview shows what that will be), so
+   * an admin confirms the field team's numbers instead of retyping them. Send
+   * a value to override one.
+   *
+   * Only meaningful on status 'harvested' — a cancelled cycle was never
+   * harvested, and sending figures with one is a 422. There is no unit field:
+   * the figures are always kilograms, stamped server-side. */
+  harvestYield?: number | null;
+  finalYieldAfterClean?: number | null;
+  harvestDate?: string | null;
+  finalNote?: string | null;
 }
 
 /** Round 8-10A — optional paging for GET /plots/{plotId}/cycles. The backend
@@ -1442,6 +1455,36 @@ export async function updatePlotCycle(
   const res = await apiClient.patch<PlotCycle>(
     `/api/v1/plots/${plotId}/cycles/${cycleId}`,
     payload,
+  );
+  return res.data;
+}
+
+/** Round D — what closing this cycle WOULD record as its actual harvest,
+ * resolved server-side from the cycle's own inspection records. Read-only: it
+ * writes nothing and reserves nothing, so the close screen can show the field
+ * team's numbers for an admin to confirm instead of an empty form.
+ *
+ * `resolved: false` means the cycle has no usable report yet — the close can
+ * still go ahead (recording no actual harvest), or the admin can type the
+ * figures in. */
+export interface PlotCycleCloseHarvestPreview {
+  resolved: boolean;
+  sourceRecordId: string | null;
+  sourceRecordDate: string | null;
+  sourceGrowthStage: string | null;
+  harvestYield: string | number | null;
+  finalYieldAfterClean: string | number | null;
+  harvestDate: string | null;
+  /** Always "kg" when resolved — echoed so the screen never hard-codes it. */
+  finalYieldUnit: string | null;
+}
+
+export async function getPlotCycleClosePreview(
+  plotId: string,
+  cycleId: string,
+): Promise<PlotCycleCloseHarvestPreview> {
+  const res = await apiClient.get<PlotCycleCloseHarvestPreview>(
+    `/api/v1/plots/${plotId}/cycles/${cycleId}/close-preview`,
   );
   return res.data;
 }

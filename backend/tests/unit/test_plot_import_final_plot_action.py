@@ -177,14 +177,36 @@ async def test_final_plot_row_never_gets_a_fabricated_lot_preview():
 
 
 @pytest.mark.parametrize("missing_field", ["harvestYield", "finalYieldAfterClean", "harvestDate"])
-async def test_missing_required_field_is_invalid(missing_field):
+async def test_a_blank_figure_previews_cleanly_now(missing_field):
+    """Round D — the three actual-harvest cells are OPTIONAL. Round C moved
+    their capture to the inspection form, so a blank cell means "use what the
+    field team already reported" and Preview must not block on it.
+
+    Whether the blanks are actually fillable is a COMMIT-time question (it
+    depends on the cycle's records, re-read under the lock) — see
+    test_commit_fails_the_file_when_a_partial_set_cannot_be_completed."""
     plot = _plot()
     cycle = _cycle()
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with p1, p2, p3, p4:
         preview = await build_preview(AsyncMock(), _xlsx([_row(**{missing_field: ""})]), ctx=_ctx())
-    assert preview.error_rows == 1
-    assert missing_field in preview.rows[0].message
+    assert preview.error_rows == 0
+    assert missing_field not in preview.rows[0].message
+
+
+async def test_all_three_blank_previews_cleanly_too():
+    """The common case after round C: the admin downloads the template, marks
+    the row final_plot, and leaves every figure to the field report."""
+    plot = _plot()
+    cycle = _cycle()
+    p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
+    with p1, p2, p3, p4:
+        preview = await build_preview(
+            AsyncMock(),
+            _xlsx([_row(harvestYield="", finalYieldAfterClean="", harvestDate="")]),
+            ctx=_ctx(),
+        )
+    assert preview.error_rows == 0
 
 
 async def test_final_note_is_optional():
@@ -500,6 +522,8 @@ async def test_preview_never_calls_close_cycle_or_set_actual_harvest():
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close, \
          patch(f"{_M}.plot_cycle_repo.set_actual_harvest", AsyncMock()) as mk_set, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock()) as mk_lock, \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock()) as mk_cycle_lock:
         await build_preview(AsyncMock(), _xlsx([_row()]), ctx=_ctx())
     mk_close.assert_not_awaited()
@@ -547,6 +571,8 @@ async def test_commit_writes_actual_harvest_fields_and_closes_harvested():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(side_effect=_closer)) as mk_close:
         result = await commit_import(
@@ -587,6 +613,8 @@ async def test_commit_hands_close_cycle_the_server_resolved_record():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=latest)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)) as mk_close:
         await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
@@ -602,6 +630,8 @@ async def test_commit_writes_the_fixed_kg_unit_onto_the_cycle():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.set_actual_harvest") as mk_set, \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)):
@@ -620,6 +650,8 @@ async def test_commit_blank_record_id_uses_latest_as_the_snapshot_source():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=latest)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)) as mk_close:
         await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
@@ -633,6 +665,8 @@ async def test_commit_plot_stays_active_never_reactivated_never_deactivated():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)):
         await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
@@ -646,6 +680,8 @@ async def test_commit_never_calls_create_cycle_or_reactivate_helper():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock()) as mk_create, \
@@ -684,6 +720,8 @@ async def test_replay_after_cycle_already_closed_is_rejected_and_does_not_write(
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=cycle, latest_record=None)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close:
         with pytest.raises(plot_import.ImportPreviewStateConflict) as exc:
@@ -722,6 +760,8 @@ async def test_stale_cycle_label_at_commit_time_is_rejected():
     p1, p2, p3, p4 = _patch_lookups(plot=plot, active=preview_cycle, latest_record=None)
     with p1, p2, p3, p4, \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=locked_cycle)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close:
         with pytest.raises(plot_import.ImportPreviewStateConflict) as exc:

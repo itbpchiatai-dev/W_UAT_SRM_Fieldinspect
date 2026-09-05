@@ -773,17 +773,72 @@ class PlotCycleClose(CamelBaseModel):
     """POST /plots/{plotId}/cycles/{cycleId}/close — close the active cycle
     (round 7.2B). status is constrained to the two terminal states — 'active'
     (or anything else) is a 422, so the close endpoint can never re-activate
-    or mis-set a status."""
+    or mis-set a status.
+
+    Round D — a close may also record the cycle's ACTUAL harvest, which until
+    now only the Excel final_plot action could write. All three figures are
+    OPTIONAL and default to what the field team already reported: leave them
+    out and the server fills them in from the cycle's own records (see
+    plot_cycle_repository.get_actual_harvest_source_record), which is the whole
+    point of the round — an admin confirms numbers instead of retyping them.
+    Send a value to override one.
+
+    finalYieldUnit is deliberately absent: the figures are always kilograms
+    (ACTUAL_HARVEST_YIELD_UNIT), server-stamped, exactly as the Excel path has
+    done since round 8-10B. So is any way to write the final-ESTIMATE snapshot
+    (final_yield_pct / final_estimated_yield / final_inspection_record_id) —
+    close_cycle derives those itself, from the cycle's latest record."""
 
     status: Literal["harvested", "cancelled"]
     close_reason: str | None = None
 
-    @field_validator("close_reason")
+    # Round D — the ACTUAL harvest. Bounded exactly like the record-level
+    # fields they are carried forward from (app/schemas/record.py), so a figure
+    # that would not fit plot_cycles' own NUMERIC(14,2) columns is a clean 422
+    # here rather than a DataError at flush.
+    harvest_yield: Decimal | None = Field(None, ge=0, max_digits=14, decimal_places=2)
+    final_yield_after_clean: Decimal | None = Field(
+        None, ge=0, max_digits=14, decimal_places=2
+    )
+    harvest_date: date | None = None
+    final_note: str | None = None
+
+    @field_validator("close_reason", "final_note")
     @classmethod
     def _trim_close_reason(cls, v: str | None) -> str | None:
         if v is None:
             return None
         return v.strip() or None
+
+
+class PlotCycleCloseHarvestPreview(CamelBaseModel):
+    """GET /plots/{plotId}/cycles/{cycleId}/close-preview — what a close WOULD
+    record if the admin confirms without changing anything (round D).
+
+    Read-only and side-effect-free: it reserves nothing, writes nothing, and
+    closing is still an explicit POST. Its job is to let the close screen show
+    the field team's own numbers before an admin agrees to them, instead of
+    presenting an empty form and asking them to be retyped.
+
+    `resolved` is false when the cycle has no usable report yet (no record with
+    a harvested quantity). The cycle can still be closed — with no actual-harvest
+    figures at all, exactly as before this round — or the admin can type them
+    in; the flag is what lets the UI say which situation it is instead of
+    showing four ambiguous blanks."""
+
+    resolved: bool
+    # The record the figures come from, so the screen can say "จากบันทึกวันที่
+    # …" and the admin knows what they are confirming. Null when unresolved.
+    source_record_id: UUID | None = None
+    source_record_date: date | None = None
+    source_growth_stage: str | None = None
+
+    harvest_yield: Decimal | None = None
+    final_yield_after_clean: Decimal | None = None
+    harvest_date: date | None = None
+    # Always "kg" when resolved — echoed so the screen never has to hard-code
+    # the unit it displays beside the numbers.
+    final_yield_unit: str | None = None
 
 
 class PlotCycleRollover(CamelBaseModel):

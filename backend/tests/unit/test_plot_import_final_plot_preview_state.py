@@ -126,7 +126,9 @@ def _commit_patches(*, plot, cycle, latest_record=None):
         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", AsyncMock(return_value=cycle)),
         patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle", AsyncMock(return_value=latest_record)),
         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)),
-        patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)),
+        patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
+         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)),
         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()),
     )
 
@@ -137,8 +139,8 @@ async def test_final_plot_only_commit_without_preview_state_is_rejected():
     plot = _plot()
     cycle = _cycle()
     content, _ = await _final_preview_state([_row()], plot=plot, active=cycle)
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=None)
     assert exc.value.reason == "missing_preview_state"
@@ -153,8 +155,8 @@ async def test_final_plot_only_commit_with_stale_digest_is_rejected():
         [_row(finalNote="โน้ตเก่า")], plot=plot, active=cycle,
     )
     content = _xlsx([_row(finalNote="โน้ตใหม่")])
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=stale_state)
     assert exc.value.reason == "file_digest_mismatch"
@@ -167,8 +169,8 @@ async def test_final_plot_row_missing_from_snapshot_is_rejected():
     cycle = _cycle()
     content, preview_state = await _final_preview_state([_row()], plot=plot, active=cycle)
     empty_state = preview_state.model_copy(update={"final_plot_rows": []})
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=empty_state)
     assert exc.value.reason == "row_set_mismatch"
@@ -185,8 +187,8 @@ async def test_final_plot_extra_row_in_snapshot_is_rejected():
     two_row_state = preview_state.model_copy(
         update={"final_plot_rows": [*preview_state.final_plot_rows, extra_row]}
     )
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=two_row_state)
     assert exc.value.reason == "row_set_mismatch"
@@ -201,8 +203,8 @@ async def test_final_plot_plot_code_identity_mismatch_is_rejected():
     content, preview_state = await _final_preview_state([_row()], plot=plot, active=cycle)
     bad_row = preview_state.final_plot_rows[0].model_copy(update={"plot_code": "P999"})
     bad_state = preview_state.model_copy(update={"final_plot_rows": [bad_row]})
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=bad_state)
     assert exc.value.reason == "resolution_changed"
@@ -218,8 +220,8 @@ async def test_final_plot_plot_updated_at_changed_is_rejected():
     # Something about the plot changed between Preview and Commit (e.g. an
     # unrelated edit) — the SAME plot id, but a newer updated_at under lock.
     plot.updated_at = plot.updated_at + datetime.timedelta(hours=1)
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
     assert exc.value.reason == "resolution_changed"
@@ -232,8 +234,8 @@ async def test_final_plot_active_cycle_id_changed_is_rejected():
     preview_cycle = _cycle()
     content, preview_state = await _final_preview_state([_row()], plot=plot, active=preview_cycle)
     different_cycle = _cycle(cycle_label="jul2026")  # fresh id
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=different_cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=different_cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
     assert exc.value.reason == "resolution_changed"
@@ -247,8 +249,8 @@ async def test_final_plot_active_cycle_no_changed_is_rejected():
         id=preview_cycle.id, cycle_label="jul2026",
         updated_at=preview_cycle.updated_at, cycle_no=preview_cycle.cycle_no + 1,
     )
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=drifted_cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=drifted_cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
     assert exc.value.reason == "resolution_changed"
@@ -262,8 +264,8 @@ async def test_final_plot_active_cycle_updated_at_changed_is_rejected():
         id=preview_cycle.id, cycle_label="jul2026", cycle_no=preview_cycle.cycle_no,
         updated_at=preview_cycle.updated_at + datetime.timedelta(minutes=5),
     )
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=drifted_cycle)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=drifted_cycle)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
     assert exc.value.reason == "resolution_changed"
@@ -282,8 +284,8 @@ async def test_final_plot_latest_record_changed_after_preview_is_rejected():
         [_row()], plot=plot, active=cycle, latest_record=old_record,
     )
     new_record = _record(plot_id=plot.id, plot_cycle_id=cycle.id)  # a fresh id
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(plot=plot, cycle=cycle, latest_record=new_record)
-    with p1, p2, p3, p4, p5, p6, p7:
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(plot=plot, cycle=cycle, latest_record=new_record)
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
     assert exc.value.reason == "resolution_changed"
@@ -303,10 +305,10 @@ async def test_final_plot_preview_had_no_record_but_commit_finds_one_is_rejected
     assert preview_state.final_plot_rows[0].resolved_final_inspection_record_id is None
 
     appeared = _record(plot_id=plot.id, plot_cycle_id=cycle.id)
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(
         plot=plot, cycle=cycle, latest_record=appeared,
     )
-    with p1, p2, p3, p4, p5, p6, p7:
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         with pytest.raises(plot_import.ImportPreviewStateConflict) as exc:
             await commit_import(AsyncMock(), content, ctx=_ctx(), preview_state=preview_state)
     assert exc.value.reason == "resolution_changed"
@@ -320,10 +322,10 @@ async def test_final_plot_no_record_at_preview_and_none_at_commit_succeeds():
     content, preview_state = await _final_preview_state(
         [_row()], plot=plot, active=cycle, latest_record=None,
     )
-    p1, p2, p3, p4, p5, p6, p7 = _commit_patches(
+    p1, p2, p3, p4, p5, p6, p7, p8 = _commit_patches(
         plot=plot, cycle=cycle, latest_record=None,
     )
-    with p1, p2, p3, p4, p5, p6, p7:
+    with p1, p2, p3, p4, p5, p6, p7, p8:
         result = await commit_import(
             AsyncMock(), content, ctx=_ctx(), preview_state=preview_state,
         )
@@ -378,6 +380,8 @@ async def test_conflict_on_one_row_blocks_execution_of_a_valid_row_too():
          patch(f"{_M}.plot_cycle_repo.get_latest_active_record_for_cycle", AsyncMock(return_value=None)), \
 \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(side_effect=_get_plot_for_update)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(side_effect=_get_active_for_update)), \
          patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close:
         with pytest.raises(ImportPreviewStateConflict) as exc:
@@ -405,6 +409,8 @@ async def test_legacy_action_file_still_needs_no_preview_state_after_this_round(
          patch(f"{_M}.plot_repo.get_plot_by_code", AsyncMock(return_value=plot)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
+         patch(f"{_M}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_M}.plot_cycle_repo.update_cycle", AsyncMock()), \
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()), \

@@ -294,6 +294,8 @@ async def test_close_cycle_success_clears_mirror_and_snapshot(close_status: str)
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update",
                AsyncMock(return_value=cycle)), \
+         patch(f"{_P}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)) as mk_close, \
          patch(f"{_P}.plot_cycle_repo.clear_plot_cycle_mirror_and_inspection_snapshot",
                AsyncMock()) as mk_clear:
@@ -321,7 +323,9 @@ async def test_close_cycle_race_lock_lost_becomes_409() -> None:
              patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
              patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update",
                    AsyncMock(return_value=locked)), \
-             patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close:
+             patch(f"{_P}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
+         patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close:
             with pytest.raises(HTTPException) as exc:
                 await close_plot_cycle(plot_id=plot.id, cycle_id=cycle.id,
                                        payload=PlotCycleClose(status="harvested"),
@@ -335,6 +339,8 @@ async def test_close_cycle_rejects_non_active_409() -> None:
     cycle = _cycle(plot_id=plot.id, status="cancelled")
     with patch(f"{_P}.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
+         patch(f"{_P}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock()) as mk_close:
         with pytest.raises(HTTPException) as exc:
             await close_plot_cycle(plot_id=plot.id, cycle_id=cycle.id,
@@ -492,6 +498,8 @@ async def test_close_cycle_refreshes_cycle_before_serialise() -> None:
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update",
                AsyncMock(return_value=cycle)), \
+         patch(f"{_P}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.clear_plot_cycle_mirror_and_inspection_snapshot", AsyncMock()):
         await _assert_refreshes_cycle_before_serialise(

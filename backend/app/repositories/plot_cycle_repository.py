@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.plot import Plot
 from app.db.models.plot_cycle import (
+    ACTUAL_HARVEST_YIELD_UNIT,
     CYCLE_CLOSED_STATUSES,
     CYCLE_STATUS_ACTIVE,
     LOT_SOURCE_AUTO,
@@ -458,6 +459,94 @@ async def get_latest_active_record_for_cycle(db: AsyncSession, cycle_id: UUID) -
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def get_actual_harvest_source_record(
+    db: AsyncSession, cycle_id: UUID
+) -> Record | None:
+    """The record a cycle's ACTUAL-harvest figures should be taken from
+    (round D) — the field report that closing the cycle confirms.
+
+    Preference order, both scoped to this cycle's ACTIVE records:
+
+      1. the newest record carrying a final_yield_after_clean. Only a
+         "ผลผลิตสุดท้าย" inspection sets that column (round C), so this finds
+         the final-yield report WITHOUT the backend having to match a Thai
+         stage name — the data says what the record is.
+      2. otherwise the newest record carrying a yield_quantity_kg, i.e. the
+         most recent report of a harvested quantity.
+
+    Returns None when neither exists: a cycle can still be closed, it simply
+    has no figures to carry forward and an admin must type them (or close it
+    with none at all, exactly as before this round).
+
+    Newest is by created_at — monotonic insert time, never record_date, which
+    is field-reported and can be backdated. Same rule as
+    get_latest_active_record_for_cycle above, so "latest" means one thing
+    throughout this module."""
+    base = (
+        select(Record)
+        .where(Record.plot_cycle_id == cycle_id, Record.is_active.is_(True))
+        .order_by(Record.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(
+        base.where(Record.final_yield_after_clean.is_not(None))
+    )
+    record = result.scalar_one_or_none()
+    if record is not None:
+        return record
+    result = await db.execute(base.where(Record.yield_quantity_kg.is_not(None)))
+    return result.scalar_one_or_none()
+
+
+def actual_harvest_from_record(record: Record | None) -> dict:
+    """The ACTUAL-harvest figures a close should use, read off an
+    already-resolved record (round D). Pure — no DB I/O — so the close
+    endpoint, its read-only preview and the Excel importer can all derive the
+    same answer from the same row.
+
+    Returns the four all-or-none columns
+    (ck_plot_cycles_actual_harvest_all_or_none) plus final_note, or every value
+    None when there is nothing usable to carry forward:
+
+      harvest_yield           — record.yield_quantity_kg, i.e. ผลผลิตที่เก็บได้
+                                before cleaning. Required: without it the
+                                all-or-none set cannot be completed, so a
+                                record that has only an after-cleaning figure
+                                yields nothing rather than a half set the DB
+                                would reject.
+      final_yield_after_clean — record.final_yield_after_clean (round C); None
+                                on a plain harvest report, which is a legitimate
+                                gap for an admin to fill in.
+      harvest_date            — the SOURCE record's own record_date. The report
+                                that states the harvested quantity is the report
+                                of the harvest, so its date is the harvest date;
+                                deriving it any other way would need the
+                                backend to match stage names.
+      final_yield_unit        — always kilograms (ACTUAL_HARVEST_YIELD_UNIT),
+                                never chosen by anyone.
+      final_note              — deliberately NOT taken from the record's notes:
+                                a closing note is the admin's own remark about
+                                the close, not the field team's inspection
+                                comment. Always None here.
+    """
+    empty = {
+        "harvest_yield": None,
+        "final_yield_after_clean": None,
+        "final_yield_unit": None,
+        "harvest_date": None,
+        "final_note": None,
+    }
+    if record is None or record.yield_quantity_kg is None:
+        return empty
+    return {
+        "harvest_yield": record.yield_quantity_kg,
+        "final_yield_after_clean": record.final_yield_after_clean,
+        "final_yield_unit": ACTUAL_HARVEST_YIELD_UNIT,
+        "harvest_date": record.record_date,
+        "final_note": None,
+    }
 
 
 async def get_latest_active_records_for_cycles(

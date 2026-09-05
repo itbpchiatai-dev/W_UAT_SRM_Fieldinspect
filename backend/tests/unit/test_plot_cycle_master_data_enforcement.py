@@ -271,6 +271,8 @@ async def test_close_cycle_never_calls_master_data_validation() -> None:
     with patch(f"{_P}.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
+         patch(f"{_P}.plot_cycle_repo.get_actual_harvest_source_record",
+               AsyncMock(return_value=None)), \
          patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock(return_value=closed)), \
          patch(f"{_P}.master_data_validation.assert_crop_variety_valid", AsyncMock()) as mk_assert:
         await close_plot_cycle(

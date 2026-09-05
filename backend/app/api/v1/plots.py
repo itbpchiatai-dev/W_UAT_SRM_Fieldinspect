@@ -14,7 +14,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.plot_cycle import CYCLE_STATUS_ACTIVE, PlotCycle
+from app.db.models.plot_cycle import (
+    ACTUAL_HARVEST_YIELD_UNIT,
+    CYCLE_STATUS_ACTIVE,
+    CYCLE_STATUS_CANCELLED,
+    CYCLE_STATUS_HARVESTED,
+    PlotCycle,
+)
 
 from app.api.deps.scope import _resolve_scope, get_rls_context, get_supplier_scope_filter
 from app.auth.dependencies import CurrentUser, require_any_permission, require_permission
@@ -44,6 +50,7 @@ from app.schemas.plot import (
     PlotAssignRequest,
     PlotCreate,
     PlotCycleClose,
+    PlotCycleCloseHarvestPreview,
     PlotCycleCreate,
     PlotCycleRead,
     PlotCycleRollover,
@@ -2244,6 +2251,54 @@ async def update_plot_cycle(
     return PlotCycleRead.model_validate(cycle)
 
 
+@router.get(
+    "/{plot_id}/cycles/{cycle_id}/close-preview",
+    response_model=PlotCycleCloseHarvestPreview,
+    dependencies=[
+        Depends(require_permission(PermissionKey.PLOTS_UPDATE)),
+        Depends(get_rls_context),
+    ],
+)
+async def preview_plot_cycle_close(
+    plot_id: UUID,
+    cycle_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> PlotCycleCloseHarvestPreview:
+    """What closing this cycle WOULD record as its actual harvest (round D).
+
+    Read-only: no lock, no write, nothing reserved — closing stays an explicit
+    POST. This exists so the close screen can show the field team's own numbers
+    for an admin to confirm, instead of an empty form to retype them into.
+    Gated by the same plots.update permission as the close itself, so it can
+    never reveal figures to someone who could not close the cycle anyway.
+
+    Deliberately allowed on a CLOSED cycle too: after the fact it answers "what
+    was this closed from?", and it writes nothing either way.
+    """
+    plot = await repo.get_plot(db, plot_id)
+    if plot is None:
+        raise HTTPException(status_code=404, detail="Plot not found")
+    cycle = await plot_cycle_repo.get_cycle_for_plot(db, plot_id, cycle_id)
+    if cycle is None:
+        raise HTTPException(status_code=404, detail="Plot cycle not found")
+
+    source = await plot_cycle_repo.get_actual_harvest_source_record(db, cycle.id)
+    figures = plot_cycle_repo.actual_harvest_from_record(source)
+    resolved = figures["harvest_yield"] is not None
+    return PlotCycleCloseHarvestPreview(
+        resolved=resolved,
+        # Only reported when the figures actually came from it — naming a
+        # record whose numbers were not used would be misleading.
+        source_record_id=source.id if resolved and source is not None else None,
+        source_record_date=source.record_date if resolved and source is not None else None,
+        source_growth_stage=source.growth_stage if resolved and source is not None else None,
+        harvest_yield=figures["harvest_yield"],
+        final_yield_after_clean=figures["final_yield_after_clean"],
+        harvest_date=figures["harvest_date"],
+        final_yield_unit=figures["final_yield_unit"],
+    )
+
+
 @router.post("/{plot_id}/cycles/{cycle_id}/close", response_model=PlotCycleRead, dependencies=[
     Depends(require_permission(PermissionKey.PLOTS_UPDATE)),
     Depends(get_rls_context),
@@ -2281,6 +2336,68 @@ async def close_plot_cycle(
         raise HTTPException(
             status_code=409, detail="Only active planting cycle can be closed"
         )
+
+    # Round D — record the ACTUAL harvest as part of the close, from the field
+    # team's own report unless the admin overrode a figure.
+    #
+    # Only a 'harvested' close carries figures: a CANCELLED cycle was never
+    # harvested, so writing a harvest onto it would be a claim the data does
+    # not support. A cancel that nonetheless carries figures is refused rather
+    # than silently ignored — the admin picked one of the two on purpose.
+    if payload.status == CYCLE_STATUS_CANCELLED and (
+        payload.harvest_yield is not None
+        or payload.final_yield_after_clean is not None
+        or payload.harvest_date is not None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="รอบปลูกที่ยกเลิกจะบันทึกผลผลิตจริงไม่ได้ กรุณาเลือกสถานะ 'เก็บเกี่ยวแล้ว'",
+        )
+
+    if payload.status == CYCLE_STATUS_HARVESTED:
+        source = await plot_cycle_repo.get_actual_harvest_source_record(db, cycle.id)
+        resolved = plot_cycle_repo.actual_harvest_from_record(source)
+        # The request wins field by field; a field the admin left out falls back
+        # to what the field team reported.
+        harvest_yield = (
+            payload.harvest_yield if payload.harvest_yield is not None
+            else resolved["harvest_yield"]
+        )
+        after_clean = (
+            payload.final_yield_after_clean if payload.final_yield_after_clean is not None
+            else resolved["final_yield_after_clean"]
+        )
+        harvest_date = (
+            payload.harvest_date if payload.harvest_date is not None
+            else resolved["harvest_date"]
+        )
+        given = [harvest_yield, after_clean, harvest_date]
+        if any(v is not None for v in given):
+            # ck_plot_cycles_actual_harvest_all_or_none: the four columns are
+            # written together or not at all. Surfaced as a clean 422 naming
+            # what is missing, never as a raw DB constraint violation.
+            missing = []
+            if harvest_yield is None:
+                missing.append("ผลผลิตที่เก็บได้")
+            if after_clean is None:
+                missing.append("ผลผลิตหลังทำความสะอาด")
+            if harvest_date is None:
+                missing.append("วันที่เก็บเกี่ยว")
+            if missing:
+                raise HTTPException(
+                    status_code=422,
+                    detail="ต้องระบุ " + " และ ".join(missing) + " ให้ครบเมื่อบันทึกผลผลิตจริง",
+                )
+            plot_cycle_repo.set_actual_harvest(
+                cycle,
+                harvest_yield=harvest_yield,
+                final_yield_after_clean=after_clean,
+                # Always kilograms — never chosen by a client (round 8-10B set
+                # this contract for the Excel path; round D matches it here).
+                final_yield_unit=ACTUAL_HARVEST_YIELD_UNIT,
+                harvest_date=harvest_date,
+                final_note=payload.final_note,
+            )
 
     await plot_cycle_repo.close_cycle(
         db, cycle, status=payload.status,

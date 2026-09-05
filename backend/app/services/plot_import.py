@@ -69,7 +69,11 @@ from app.auth.plot_access_password import (
 )
 from app.core.phone import normalize_thai_mobile
 from app.db.models.plot import Plot
-from app.db.models.plot_cycle import CYCLE_STATUS_HARVESTED, PlotCycle
+from app.db.models.plot_cycle import (
+    ACTUAL_HARVEST_YIELD_UNIT,
+    CYCLE_STATUS_HARVESTED,
+    PlotCycle,
+)
 from app.db.models.record import Record
 from app.db.models.supplier import Supplier
 from app.repositories import plot_access_credential_repository as credential_repo
@@ -187,7 +191,10 @@ _MAX_REF_ACCOUNT = 255
 # This does NOT rewrite history: a PlotCycle closed before this round keeps
 # whatever unit it was given, and PlotCycle.final_yield_unit / the report's
 # own column are unchanged.
-FINAL_PLOT_FIXED_YIELD_UNIT = "kg"
+# Round D — aliases the shared constant beside the columns it describes
+# (app/db/models/plot_cycle.py), so the Excel path and the web close path
+# cannot drift on what unit an actual harvest is recorded in.
+FINAL_PLOT_FIXED_YIELD_UNIT = ACTUAL_HARVEST_YIELD_UNIT
 
 # Column headers the template ships with (== the keys rows are read by). Kept
 # in one place so the endpoint's template builder and the reader agree.
@@ -368,9 +375,9 @@ TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     ),
     # Round 8-10B — the unit is stated in the description because the column
     # that used to carry it is gone; these two numbers are ALWAYS kilograms.
-    "harvestYield": "ผลผลิตตอนเก็บเกี่ยว หน่วยกิโลกรัม (kg) สำหรับ final_plot",
-    "finalYieldAfterClean": "ผลผลิตจริงหลังทำความสะอาด หน่วยกิโลกรัม (kg) สำหรับ final_plot",
-    "harvestDate": "วันที่เก็บเกี่ยว รูปแบบ YYYY-MM-DD",
+    "harvestYield": "ผลผลิตตอนเก็บเกี่ยว หน่วยกิโลกรัม (kg) สำหรับ final_plot — เว้นว่างได้ ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้",
+    "finalYieldAfterClean": "ผลผลิตจริงหลังทำความสะอาด หน่วยกิโลกรัม (kg) สำหรับ final_plot — เว้นว่างได้ ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้",
+    "harvestDate": "วันที่เก็บเกี่ยว รูปแบบ YYYY-MM-DD — เว้นว่างได้ ระบบจะใช้วันที่ของบันทึกการตรวจที่รายงานผลผลิตให้",
     "finalNote": "หมายเหตุผลการเก็บเกี่ยว ไม่บังคับ",
     "inspectionPasswordStatus": "สถานะรหัสยืนยันแปลงปัจจุบัน ใช้ดูข้อมูลเท่านั้น",
     "newInspectionPassword": (
@@ -1173,16 +1180,19 @@ async def _validate_row(
     # none — surfaced here as a clean per-row error, never a raw DB
     # constraint violation). 0 passes (checked separately in _range_errors);
     # only "missing" is caught here.
-    if p.action == ACTION_FINAL:
-        if p.harvest_yield is None:
-            errors.append("ต้องระบุ harvestYield สำหรับ final_plot")
-        if p.final_yield_after_clean is None:
-            errors.append("ต้องระบุ finalYieldAfterClean สำหรับ final_plot")
-        # Round 8-10B — no finalYieldUnit check: the file cannot supply one and
-        # _parse_row always stamps FINAL_PLOT_FIXED_YIELD_UNIT, so "missing" and
-        # "not in the allowlist" are both unreachable states now.
-        if p.harvest_date is None:
-            errors.append("ต้องระบุ harvestDate สำหรับ final_plot")
+    # Round D — the three figures are OPTIONAL now. Round C moved their CAPTURE
+    # to the inspection form (records.yield_quantity_kg /
+    # records.final_yield_after_clean), so a blank cell means "use what the
+    # field team already reported" and the commit fills it in from the cycle's
+    # own records — the admin confirms numbers instead of retyping them.
+    #
+    # A row that fills in SOME of them is still checked at COMMIT, not here:
+    # only then is the cycle's record known, and only then can we tell whether
+    # the blanks are fillable. Validation would otherwise have to guess, and a
+    # preview error for a row that would actually commit fine is worse than no
+    # preview error at all. See _execute_row's ACTION_FINAL branch.
+    # Round 8-10B — finalYieldUnit is not checked at all: the file cannot
+    # supply one and the server always stamps kilograms.
 
     # String-length guards — must match DB column definitions (prevents DataError).
     _check_length(p.supplier_code, _MAX_SUPPLIER_CODE, "supplierCode", errors)
@@ -2283,12 +2293,50 @@ async def _execute_row(
         # validated above (round 8-7A.1) so it snapshots exactly that record
         # (or exactly None) rather than re-querying "latest" a second time
         # and risking a different answer.
+        # Round D — a blank cell falls back to the field team's own report.
+        # The row wins field by field, so an admin can still correct one figure
+        # without retyping the other two.
+        carried = plot_cycle_repo.actual_harvest_from_record(
+            await plot_cycle_repo.get_actual_harvest_source_record(db, cycle.id)
+        )
+        harvest_yield = (
+            p.harvest_yield if p.harvest_yield is not None else carried["harvest_yield"]
+        )
+        after_clean = (
+            p.final_yield_after_clean if p.final_yield_after_clean is not None
+            else carried["final_yield_after_clean"]
+        )
+        harvest_date = (
+            p.harvest_date if p.harvest_date is not None else carried["harvest_date"]
+        )
+        # ck_plot_cycles_actual_harvest_all_or_none: written together or not at
+        # all. A row that resolves to a PARTIAL set fails the whole file with a
+        # message naming what is missing — never a raw DB constraint violation,
+        # and never a half-recorded harvest.
+        supplied = [harvest_yield, after_clean, harvest_date]
+        if any(v is not None for v in supplied):
+            missing = []
+            if harvest_yield is None:
+                missing.append("harvestYield")
+            if after_clean is None:
+                missing.append("finalYieldAfterClean")
+            if harvest_date is None:
+                missing.append("harvestDate")
+            if missing:
+                raise ImportFileError(
+                    f"แถวที่ {state.row_number}: ต้องระบุ {', '.join(missing)} "
+                    "เนื่องจากบันทึกการตรวจของรอบนี้ยังไม่มีข้อมูลผลผลิตครบ"
+                )
         plot_cycle_repo.set_actual_harvest(
             cycle,
-            harvest_yield=p.harvest_yield,
-            final_yield_after_clean=p.final_yield_after_clean,
-            final_yield_unit=p.final_yield_unit,
-            harvest_date=p.harvest_date,
+            harvest_yield=harvest_yield,
+            final_yield_after_clean=after_clean,
+            # Always kilograms. p.final_yield_unit is the same constant
+            # (_parse_row stamps it for final_plot rows) — read from the shared
+            # constant here so a resolved-from-records close and a
+            # typed-in-the-file close cannot disagree about the unit.
+            final_yield_unit=FINAL_PLOT_FIXED_YIELD_UNIT,
+            harvest_date=harvest_date,
             final_note=p.final_note,
         )
         await plot_cycle_repo.close_cycle(

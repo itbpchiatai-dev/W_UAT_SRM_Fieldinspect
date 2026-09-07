@@ -588,6 +588,12 @@ export function RecordForm() {
             latestYieldPct={selectedPlot?.currentYieldPct}
             // Round C — measured, not forecast, on the harvest/final stages.
             quantityLabel={yieldQuantityLabel(form.growthStage)}
+            // ...which also makes the percentage a read-only gauge, labelled
+            // with the figure it is computed from — except on ผลผลิตสุดท้าย,
+            // where two kg figures share the card and the percentage is hidden
+            // outright (display only; the Backend still stores it).
+            measuredQuantity={isActualYieldStage(form.growthStage)}
+            hidePercentage={showsFinalYieldAfterClean(form.growthStage)}
             onChange={({ quantityKg, yieldPct }) => {
               // A hand edit ends the carry-forward — see handleGrowthStageChange.
               yieldTouchedRef.current = true;
@@ -627,7 +633,7 @@ export function RecordForm() {
                 <span className="shrink-0 text-sm text-gray-500">kg</span>
               </div>
               <p className="mt-1 text-xs text-gray-500">
-                ผลผลิตที่เหลือหลังคัดและทำความสะอาดแล้ว (ไม่บังคับ) — ไม่นำไปคิดเปอร์เซ็นต์เทียบเป้าผลิต
+                ผลผลิตที่เหลือหลังคัดและทำความสะอาดแล้ว (ไม่บังคับ)
               </p>
             </div>
           )}

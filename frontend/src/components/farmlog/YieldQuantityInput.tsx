@@ -11,6 +11,11 @@
  * (contract #10) — everything here is a live PREVIEW, recomputed on every
  * keystroke/drag, never persisted by this component itself.
  *
+ * The one exception to "editing either updates both" is `measuredQuantity`
+ * (see its prop docstring): on the stages where the kg came off a scale, the
+ * percentage is a read-only gauge, because back-computing a measured weight
+ * from a dragged percentage would overwrite a fact with an estimate.
+ *
  * When the active cycle has no comparable kg target (no plan, a non-weight
  * unit like ผล/ลัง, or a target that rounds to 0.00), the kg input STAYS
  * enabled (contract #7 — a field worker can still record a raw quantity)
@@ -62,6 +67,34 @@ export interface YieldQuantityInputProps {
    * only the name changes, so the two stages never grow a second kg box that
    * means almost the same thing. */
   quantityLabel?: string;
+  /** True when the kg above is a MEASURED figure (the harvest and final-yield
+   * stages) rather than a forecast. Two consequences, both about the same
+   * thing — at those stages the percentage is an OUTPUT, not an input:
+   *
+   *   - the percentage becomes a read-only gauge instead of a draggable
+   *     slider. Dragging it back-computes the kg (pctToQuantityKg), which is
+   *     nonsense against a number that came off a scale.
+   *   - its label names the figure it is computed from. The final-yield stage
+   *     shows TWO kg boxes (ผลผลิตที่เก็บได้ and หลังทำความสะอาด) and only the
+   *     first one feeds this percentage; without saying so, "150%" reads as
+   *     ambiguous the moment the second box appears.
+   *
+   * Defaults false, so every forecasting stage keeps the original two-way
+   * kg <-> % slider untouched. */
+  measuredQuantity?: boolean;
+  /** Hide the percentage row entirely. Used by the ผลผลิตสุดท้าย stage, where
+   * the card carries TWO kg figures (ผลผลิตที่เก็บได้ and หลังทำความสะอาด) and
+   * a single percentage next to them was read as ambiguous no matter how it
+   * was labelled — the user asked for it gone.
+   *
+   * DISPLAY ONLY. The Backend still derives and stores yield_pct for the
+   * record from ผลผลิตที่เก็บได้ exactly as before (services/
+   * yield_calculation.py), and it still appears in the Records list, Plot
+   * Status report and dashboard — hiding it here does not stop it existing.
+   * The over-150% notice is deliberately NOT hidden with it: it guards against
+   * a mistyped weight, which is precisely the risk that survives when the
+   * percentage is out of sight. */
+  hidePercentage?: boolean;
   disabled?: boolean;
   onChange: (value: { quantityKg: number | null; yieldPct: number | null }) => void;
   error?: string | null;
@@ -85,6 +118,8 @@ export function YieldQuantityInput({
   expectedYieldUnit,
   latestYieldPct,
   quantityLabel = 'ผลผลิตที่คาดว่าจะได้',
+  measuredQuantity = false,
+  hidePercentage = false,
   disabled,
   onChange,
   error,
@@ -112,6 +147,14 @@ export function YieldQuantityInput({
     onChange({ quantityKg: pctToQuantityKg(pct, targetKg), yieldPct: pct });
   }
 
+  // Rendered inside the percentage row normally, and on its own when that row
+  // is hidden — a mistyped weight must still be flagged either way.
+  const warningNotice = showWarning ? (
+    <p role="status" className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
+      ผลผลิตสูงกว่า 150% ของเป้าหมาย กรุณาตรวจสอบความถูกต้องก่อนบันทึก
+    </p>
+  ) : null;
+
   return (
     <div className="space-y-4">
       <div>
@@ -137,29 +180,52 @@ export function YieldQuantityInput({
         {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
       </div>
 
+      {hidePercentage ? warningNotice : (
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <span className="text-sm text-gray-600">เปอร์เซ็นต์เทียบเป้าผลิต</span>
+          <span className="text-sm text-gray-600">
+            เปอร์เซ็นต์เทียบเป้าผลิต
+            {measuredQuantity && (
+              <span className="text-gray-500"> (จาก{quantityLabel})</span>
+            )}
+          </span>
           <span className="text-lg font-bold text-green-700">
             {yieldPct != null ? `${yieldPct.toFixed(1)}%` : '—'}
           </span>
         </div>
-        <input
-          type="range"
-          min={0}
-          max={sliderMax}
-          step={0.1}
-          value={yieldPct ?? 0}
-          disabled={disabled || targetKg == null}
-          onChange={(e) => handlePctChange(e.target.value)}
-          className="h-2 w-full cursor-pointer accent-green-600 disabled:cursor-not-allowed disabled:opacity-50"
-        />
-        {showWarning && (
-          <p role="status" className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
-            ผลผลิตสูงกว่า 150% ของเป้าหมาย กรุณาตรวจสอบความถูกต้องก่อนบันทึก
-          </p>
+        {measuredQuantity ? (
+          // A gauge, not a control — see measuredQuantity's docstring. Rendered
+          // as a real progressbar rather than a disabled range so it neither
+          // greys out (this IS the answer, not an unavailable input) nor takes
+          // focus as something the user could operate.
+          <div
+            role="progressbar"
+            aria-valuenow={yieldPct ?? 0}
+            aria-valuemin={0}
+            aria-valuemax={sliderMax}
+            aria-label="เปอร์เซ็นต์เทียบเป้าผลิต"
+            className="h-2 w-full overflow-hidden rounded-full bg-gray-200"
+          >
+            <div
+              className="h-full rounded-full bg-green-600"
+              style={{ width: `${Math.min(100, ((yieldPct ?? 0) / sliderMax) * 100)}%` }}
+            />
+          </div>
+        ) : (
+          <input
+            type="range"
+            min={0}
+            max={sliderMax}
+            step={0.1}
+            value={yieldPct ?? 0}
+            disabled={disabled || targetKg == null}
+            onChange={(e) => handlePctChange(e.target.value)}
+            className="h-2 w-full cursor-pointer accent-green-600 disabled:cursor-not-allowed disabled:opacity-50"
+          />
         )}
+        {warningNotice}
       </div>
+      )}
     </div>
   );
 }

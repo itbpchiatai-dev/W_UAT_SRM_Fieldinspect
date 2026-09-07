@@ -43,6 +43,7 @@ import { PublicMasterDataButtons } from '../../components/farmlog/PublicMasterDa
 import { OfflineInspectionQueuePanel } from '../../components/farmlog/OfflineInspectionQueuePanel';
 import { parsePlotQr, parseDeepLinkParams, type PlotQrLocator } from '../../lib/plot-qr';
 import {
+  isActualYieldStage,
   showsFinalYieldAfterClean,
   yieldQuantityLabel,
 } from '../../lib/inspection-stages';
@@ -1520,6 +1521,12 @@ export function PublicInspect() {
                 // Round C — "ผลผลิตที่เก็บได้" on the harvest and final-yield
                 // stages, where the number is measured rather than forecast.
                 quantityLabel={yieldQuantityLabel(fields.growthStage)}
+                // ...which also makes the percentage a read-only gauge, labelled
+                // with the figure it is computed from — except on ผลผลิตสุดท้าย,
+                // where two kg figures share the card and the percentage is
+                // hidden outright (display only; the Backend still stores it).
+                measuredQuantity={isActualYieldStage(fields.growthStage)}
+                hidePercentage={showsFinalYieldAfterClean(fields.growthStage)}
                 onChange={({ quantityKg, yieldPct }) => {
                   // Any hand edit ends the carry-forward: a later stage change
                   // must never overwrite a figure the user typed themselves.
@@ -1564,7 +1571,7 @@ export function PublicInspect() {
                     <span className="shrink-0 text-sm text-gray-500">kg</span>
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
-                    ผลผลิตที่เหลือหลังคัดและทำความสะอาดแล้ว (ไม่บังคับ) — ไม่นำไปคิดเปอร์เซ็นต์เทียบเป้าผลิต
+                    ผลผลิตที่เหลือหลังคัดและทำความสะอาดแล้ว (ไม่บังคับ)
                   </p>
                 </div>
               )}

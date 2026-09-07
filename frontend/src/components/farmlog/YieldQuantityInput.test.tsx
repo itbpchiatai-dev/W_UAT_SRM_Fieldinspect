@@ -417,3 +417,111 @@ describe('YieldQuantityInput — dynamic slider max (round 8-8B.1)', () => {
     expect((screen.getByRole('slider') as HTMLInputElement).value).toBe('80');
   });
 });
+
+describe('YieldQuantityInput — measuredQuantity: the percentage is an output', () => {
+  const measured = (extra: Partial<Parameters<typeof YieldQuantityInput>[0]> = {}) => (
+    <YieldQuantityInput
+      quantityKg={75} yieldPct={150}
+      expectedYieldFull={50} expectedYieldUnit="kg"
+      quantityLabel="ผลผลิตที่เก็บได้"
+      measuredQuantity
+      onChange={vi.fn()}
+      {...extra}
+    />
+  );
+
+  it('replaces the draggable slider with a read-only gauge', () => {
+    render(measured());
+
+    // No slider at all — not a disabled one. A disabled control reads as
+    // "temporarily unavailable"; this value is simply not user-editable.
+    expect(screen.queryByRole('slider')).toBeNull();
+    const gauge = screen.getByRole('progressbar');
+    expect(gauge.getAttribute('aria-valuenow')).toBe('150');
+    expect(gauge.getAttribute('aria-valuemax')).toBe('150');
+  });
+
+  it('names the figure the percentage is computed from', () => {
+    // The final-yield stage shows a second kg box (หลังทำความสะอาด) that does
+    // NOT feed this number, so the label has to say which one does.
+    render(measured());
+
+    expect(screen.getByText(/\(จากผลผลิตที่เก็บได้\)/)).toBeTruthy();
+  });
+
+  it('still shows the percentage itself, and the over-150% notice', () => {
+    render(measured({ quantityKg: 90, yieldPct: 180 }));
+
+    expect(screen.getByText('180.0%')).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
+    // The gauge's own ceiling still expands with the value (round 8-8B.1).
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuemax')).toBe('200');
+  });
+
+  it('leaves the kg input editable — only the percentage is read-only', () => {
+    const onChange = vi.fn();
+    render(measured({ onChange }));
+
+    const kg = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(kg.disabled).toBe(false);
+    fireEvent.change(kg, { target: { value: '40' } });
+    expect(onChange).toHaveBeenCalledWith({ quantityKg: 40, yieldPct: 80 });
+  });
+
+  it('keeps the two-way slider on every forecasting stage (default off)', () => {
+    const onChange = vi.fn();
+    render(
+      <YieldQuantityInput
+        quantityKg={800} yieldPct={80}
+        expectedYieldFull={1000} expectedYieldUnit="kg"
+        onChange={onChange}
+      />,
+    );
+
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '90' } });
+    expect(onChange).toHaveBeenCalledWith({ quantityKg: 900, yieldPct: 90 });
+  });
+
+  it('hides the whole percentage row when hidePercentage is set', () => {
+    // The ผลผลิตสุดท้าย stage: two kg figures in one card made a single
+    // percentage read as ambiguous, so it is not shown at all.
+    render(measured({ hidePercentage: true }));
+
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.queryByRole('slider')).toBeNull();
+    expect(screen.queryByText(/เปอร์เซ็นต์เทียบเป้าผลิต/)).toBeNull();
+    expect(screen.queryByText('150.0%')).toBeNull();
+  });
+
+  it('still warns about an over-150% figure while the percentage is hidden', () => {
+    // Hiding the number must not hide the guard against a mistyped weight —
+    // that risk is worse, not better, once the percentage is out of sight.
+    render(measured({ hidePercentage: true, quantityKg: 90, yieldPct: 180 }));
+
+    expect(screen.queryByText(/เปอร์เซ็นต์เทียบเป้าผลิต/)).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe(
+      'ผลผลิตสูงกว่า 150% ของเป้าหมาย กรุณาตรวจสอบความถูกต้องก่อนบันทึก',
+    );
+  });
+
+  it('keeps the kg input and its target hint when the percentage is hidden', () => {
+    const onChange = vi.fn();
+    render(measured({ hidePercentage: true, onChange }));
+
+    expect(screen.getByText(/เทียบกับเป้าผลิต/)).toBeTruthy();
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '40' } });
+    // yieldPct is still computed and handed to the caller — hiding is display
+    // only, and the Backend stores the percentage either way.
+    expect(onChange).toHaveBeenCalledWith({ quantityKg: 40, yieldPct: 80 });
+  });
+
+  it('renders a null percentage as an empty gauge rather than crashing', () => {
+    // A cycle with no comparable kg target yields pct=null; the gauge must
+    // still render, at 0, instead of throwing on toFixed.
+    render(measured({ quantityKg: 75, yieldPct: null, expectedYieldFull: null }));
+
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0');
+  });
+});

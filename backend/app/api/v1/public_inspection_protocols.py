@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.inspection_protocol import InspectionProtocolList
 from app.services import inspection_protocols as protocols
 
@@ -29,7 +29,7 @@ router = APIRouter(tags=["public"])
 @limiter.limit("30/minute")
 async def list_public_inspection_protocols(
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> InspectionProtocolList:
     # Same admin-editable config (round 5.5) as the logged-in endpoint, with
     # the built-in registry as fallback.

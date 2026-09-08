@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.scope import RLSContext
 from app.auth.dependencies import CurrentUser
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import dashboard_repository as repo
 from app.schemas.dashboard import DashboardSummary
 
@@ -19,7 +19,7 @@ _SUPPLIER_VISIBLE_ROLES = {"internal:super_admin", "internal:admin", "farmlog:su
 async def get_summary(
     _rls: RLSContext,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> DashboardSummary:
     """Returns KPIs scoped to the current user via Postgres RLS.
 

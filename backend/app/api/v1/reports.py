@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.scope import get_rls_context
 from app.auth.dependencies import require_permission
 from app.auth.permissions import PermissionKey
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import report_repository as repo
 from app.schemas.report import ReportCycleYieldRow, ReportPlotStatusRow
 from app.services.excel_workbook import CellValue, build_xlsx
@@ -43,7 +43,7 @@ def _validate_date_range(
     Depends(get_rls_context),
 ])
 async def plot_status_report(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     province: str | None = None,
     crop: str | None = None,
@@ -144,7 +144,7 @@ def _plot_status_workbook(rows: list[ReportPlotStatusRow]) -> bytes:
     Depends(get_rls_context),
 ])
 async def export_plot_status_report(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     province: str | None = None,
     crop: str | None = None,
@@ -190,7 +190,7 @@ def _validate_cycle_yield_status(status: str) -> None:
     Depends(get_rls_context),
 ])
 async def cycle_yield_report(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     crop: str | None = None,
     status: str = "closed",
@@ -317,7 +317,7 @@ def _cycle_yield_workbook(rows: list[ReportCycleYieldRow]) -> bytes:
     Depends(get_rls_context),
 ])
 async def export_cycle_yield_report(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     crop: str | None = None,
     status: str = "closed",

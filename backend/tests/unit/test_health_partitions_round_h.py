@@ -1,4 +1,4 @@
-"""GET /health/partitions — the early warning added in round H.
+"""GET /api/v1/health/partitions — the early warning added in round H.
 
 When the monthly log partitions run out, every audited write in the system
 starts failing and rolling back the business transaction it belongs to. That
@@ -53,7 +53,7 @@ async def _get(path: str) -> httpx.Response:
 async def test_reports_ok_with_plenty_of_runway():
     with patch("app.db.session.get_db_session", return_value=_NullSession()), \
          patch(_COVERAGE, new=AsyncMock(return_value=24)):
-        response = await _get("/health/partitions")
+        response = await _get("/api/v1/health/partitions")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "monthsRemaining": 24}
@@ -64,7 +64,7 @@ async def test_warns_before_the_cliff_not_after():
     is 0, the next month rollover is already an outage."""
     with patch("app.db.session.get_db_session", return_value=_NullSession()), \
          patch(_COVERAGE, new=AsyncMock(return_value=PARTITION_COVERAGE_WARN_MONTHS - 1)):
-        response = await _get("/health/partitions")
+        response = await _get("/api/v1/health/partitions")
 
     assert response.status_code == 200
     assert response.json()["status"] == "warning"
@@ -74,7 +74,7 @@ async def test_the_exact_state_of_the_incident_reads_as_a_warning():
     """2026-09-01: the newest partition was the month that had just ended."""
     with patch("app.db.session.get_db_session", return_value=_NullSession()), \
          patch(_COVERAGE, new=AsyncMock(return_value=-1)):
-        response = await _get("/health/partitions")
+        response = await _get("/api/v1/health/partitions")
 
     assert response.status_code == 200
     assert response.json() == {"status": "warning", "monthsRemaining": -1}
@@ -84,7 +84,7 @@ async def test_the_exact_state_of_the_incident_reads_as_a_warning():
 async def test_threshold_boundary_is_inclusive(months):
     with patch("app.db.session.get_db_session", return_value=_NullSession()), \
          patch(_COVERAGE, new=AsyncMock(return_value=months)):
-        response = await _get("/health/partitions")
+        response = await _get("/api/v1/health/partitions")
 
     assert response.json()["status"] == "ok"
 
@@ -94,12 +94,28 @@ async def test_a_database_failure_is_reported_not_raised():
     for a problem you already know about — and a restart trigger if anyone
     ever points a healthcheck at it."""
     with patch("app.db.session.get_db_session", side_effect=RuntimeError("no connection")):
-        response = await _get("/health/partitions")
+        response = await _get("/api/v1/health/partitions")
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "unknown"
     assert "no connection" in body["error"]
+
+
+def test_the_route_is_not_under_the_proxys_static_health_prefix():
+    """nginx answers /health itself and prefix-matches:
+
+        location /health { return 200 "ok\\n"; ... }
+
+    So a route at /health/partitions never reaches the backend — it returned
+    a plain "ok" through the proxy on the day round H shipped, while working
+    perfectly when called directly on the container. The /api/ prefix is
+    proxied through, which is why this lives there.
+    """
+    paths = {getattr(route, "path", None) for route in app.routes}
+
+    assert "/api/v1/health/partitions" in paths
+    assert "/health/partitions" not in paths
 
 
 async def test_plain_health_stays_database_free():

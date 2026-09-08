@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.models.app_setting import AppSetting
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import AppSettingRead, AppSettingUpdate
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -48,7 +48,7 @@ _PUBLIC_KEY_MAP = {
 
 
 @router.get("/public", response_model=dict[str, bool])
-async def get_public_settings(db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+async def get_public_settings(db: AsyncSession = DbDep) -> dict[str, bool]:
     """Auth-free subset for the Login page — only auth.*.enabled flags so the
     SPA can decide which sign-in options to render before the user is known.
     Returns camelCase keys to match the SPA's PublicAuthSettings interface.
@@ -65,7 +65,7 @@ async def get_public_settings(db: AsyncSession = Depends(get_db)) -> dict[str, b
 @router.get("", response_model=list[AppSettingRead], dependencies=[
     Depends(require_permission(PermissionKey.ADMIN_SETTINGS_READ))
 ])
-async def list_settings(db: AsyncSession = Depends(get_db)) -> list[AppSettingRead]:
+async def list_settings(db: AsyncSession = DbDep) -> list[AppSettingRead]:
     result = await db.execute(select(AppSetting).order_by(AppSetting.key))
     return [AppSettingRead.model_validate(s) for s in result.scalars().all()]
 
@@ -78,7 +78,7 @@ async def update_setting(
     payload: AppSettingUpdate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> AppSettingRead:
     locked, ceiling = _scope_locked_value(key)
     if locked and payload.value != ceiling:

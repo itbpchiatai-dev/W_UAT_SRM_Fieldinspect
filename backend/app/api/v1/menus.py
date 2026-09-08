@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.models.menu_item import MenuItem
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import MenuCreate, MenuRead, MenuUpdate
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -30,7 +30,7 @@ def _to_node(item: MenuItem) -> MenuRead:
 @router.get("", response_model=list[MenuRead], dependencies=[
     Depends(require_permission(PermissionKey.MENUS_READ))
 ])
-async def list_menus(db: AsyncSession = Depends(get_db)) -> list[MenuRead]:
+async def list_menus(db: AsyncSession = DbDep) -> list[MenuRead]:
     result = await db.execute(select(MenuItem).order_by(MenuItem.order_index))
     items = list(result.scalars().all())
     by_parent: dict = {}
@@ -54,7 +54,7 @@ async def create_menu(
     payload: MenuCreate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> MenuRead:
     existing = await db.execute(select(MenuItem).where(MenuItem.key == payload.key))
     if existing.scalar_one_or_none() is not None:
@@ -78,7 +78,7 @@ async def patch_menu(
     payload: MenuUpdate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> MenuRead:
     item = (await db.execute(select(MenuItem).where(MenuItem.id == menu_id))).scalar_one_or_none()
     if item is None:
@@ -100,7 +100,7 @@ async def delete_menu(
     menu_id: UUID,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> None:
     item = (await db.execute(select(MenuItem).where(MenuItem.id == menu_id))).scalar_one_or_none()
     if item is None:

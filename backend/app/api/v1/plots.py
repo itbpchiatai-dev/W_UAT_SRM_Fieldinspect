@@ -36,7 +36,7 @@ from app.db.models.plot import Plot
 from app.db.models.plot_assignment import PlotAssignment
 from app.db.models.supplier import Supplier
 from app.db.models.user import User
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import plot_access_credential_repository as credential_repo
 from app.repositories import plot_access_phone_repository as phone_repo
 from app.repositories import plot_cycle_repository as plot_cycle_repo
@@ -738,7 +738,7 @@ def _check_plot_status_conflict(plot_status: PlotStatusFilter, active_only: bool
     Depends(get_rls_context),
 ])
 async def list_plots(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     province: str | None = None,
     crop: str | None = None,
@@ -776,7 +776,7 @@ async def list_plots(
     Depends(get_rls_context),
 ])
 async def list_plot_provinces(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     active_only: bool = False,
     plot_status: PlotStatusFilter = "all",
@@ -792,7 +792,7 @@ async def list_plot_provinces(
     Depends(get_rls_context),
 ])
 async def list_plot_cycle_labels(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     plot_status: PlotStatusFilter = "all",
 ) -> list[str]:
@@ -822,7 +822,7 @@ _PHONE_SEARCH_MAX_DIGITS = 10
 async def search_plots_by_phone(
     payload: PlotPhoneSearchRequest,
     response: Response,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> list[PlotSummary]:
     """Round 8-17A.2 — secure search by a plot's access phone (primary OR
     additional; both carry equal search rights, same as their equal
@@ -1026,7 +1026,7 @@ def _template_response(content: bytes, *, excluded_count: int = 0) -> Response:
 ])
 async def download_plot_import_template(
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     supplier_id: UUID | None = None,
     province: str | None = None,
     crop: str | None = None,
@@ -1319,7 +1319,7 @@ def _preview_state_conflict_http(
 async def preview_plot_import(
     current_user: CurrentUser,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotImportPreview:
     """Parse + validate every row, WITHOUT writing anything. Safe/read-only."""
     content = await _read_import_upload(file)
@@ -1346,7 +1346,7 @@ async def commit_plot_import(
     # round 8-6E race fix. The Python parameter name stays preview_state
     # (snake_case, unaffected) — only the wire-facing alias changes.
     preview_state: str | None = Form(None, alias="previewState"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotImportCommitResult:
     """Re-validate server-side (never trusting a client preview) and execute
     every row in ONE transaction. Any invalid row → 422 with the full preview,
@@ -1407,7 +1407,7 @@ def _xlsx_response(content: bytes, filename: str, *, status_code: int = 200) -> 
 async def preview_plot_import_report(
     current_user: CurrentUser,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Read-only: validate the file (same core as /import/preview) and return an
     .xlsx validation report — never writes. Returns 200 even when rows have
@@ -1446,7 +1446,7 @@ async def commit_plot_import_report(
     # round 8-6E race fix. The Python parameter name stays preview_state
     # (snake_case, unaffected) — only the wire-facing alias changes.
     preview_state: str | None = Form(None, alias="previewState"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Re-validate + commit ONCE (same core as /import/commit), then return a
     COMPLETED .xlsx result file. If any row is invalid, nothing is written and a
@@ -1509,7 +1509,7 @@ async def commit_plot_import_report(
 async def create_plot(
     payload: PlotCreate,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotRead:
     # Physical-plot-only (round 8.0.4 — PlotCreate no longer carries
     # planting-cycle/yield-plan fields at all). For creating a plot that's
@@ -1567,7 +1567,7 @@ async def create_plot(
 async def create_plot_with_cycle(
     payload: PlotWithCycleCreate,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotWithCycleCreateResult:
     """Atomically create a physical Plot AND its first active PlotCycle
     (round 8.0.4) — the counterpart of plain POST /plots (still
@@ -1690,7 +1690,7 @@ async def create_plot_with_cycle(
 async def lookup_plot(
     supplier_code: str = Query(..., alias="supplierCode", min_length=1, max_length=50),
     plot_code: str = Query(..., alias="plotCode", min_length=1, max_length=50),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotLookupRead:
     """QR-scan lookup for the "บันทึกการตรวจแปลงใหม่" auto-fill flow.
 
@@ -1728,7 +1728,7 @@ async def lookup_plot(
 ])
 async def lookup_plot_by_qr(
     qr_key: str = Query(..., alias="qrKey", min_length=1, max_length=64),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotLookupRead:
     """QR-scan lookup for the round-20 opaque-qr-key deep link format —
     sibling of /lookup (supplierCode+plotCode), same generic-404/RLS-scoped
@@ -1763,7 +1763,7 @@ async def lookup_plot_by_qr(
 )
 async def get_plot_credential_readiness(
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotCredentialReadiness:
     """Which plots still need an inspection password before
     PUBLIC_PLOT_PASSWORD_ENFORCEMENT can safely be turned on (round 8-9C).
@@ -1815,7 +1815,7 @@ async def get_plot_credential_readiness(
 ])
 async def get_plot(
     plot_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotRead:
     plot = await repo.get_plot(db, plot_id)
     if plot is None:
@@ -1833,7 +1833,7 @@ async def get_plot(
 )
 async def get_plot_access_phones(
     plot_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotAccessPhoneConfigResponse:
     """Read a plot's ACTIVE access-phone config (round 8-3A). Same plots.read +
     RLS as GET /{plot_id}; an out-of-scope or unknown plot is the same generic
@@ -1856,7 +1856,7 @@ async def get_plot_access_phones(
 async def replace_plot_access_phones(
     plot_id: UUID,
     payload: PlotAccessPhoneConfig,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotAccessPhoneConfigResponse:
     """Replace a plot's ENTIRE access-phone config in one transaction (round
     8-3A). plots.update + RLS. Locks the Plot row FIRST (get_plot_for_update;
@@ -1907,7 +1907,7 @@ def _credential_status(row) -> PlotInspectionCredentialStatus:
 )
 async def get_plot_inspection_access_credential(
     plot_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotInspectionCredentialStatus:
     """Whether this plot has an inspection password, and which version (round
     8-9A). Same plots.read + RLS as GET /{plot_id}; an out-of-scope or unknown
@@ -1932,7 +1932,7 @@ async def set_plot_inspection_access_credential(
     plot_id: UUID,
     payload: PlotInspectionCredentialSet,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotInspectionCredentialStatus:
     """Set or replace this plot's inspection password (round 8-9A; hardened in
     8-9A.1). plots.update + RLS.
@@ -2042,7 +2042,7 @@ async def set_plot_inspection_access_credential(
 ])
 async def list_plot_cycles(
     plot_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     limit: int = 50,
     offset: int = 0,
 ) -> list[PlotCycleRead]:
@@ -2069,7 +2069,7 @@ async def list_plot_cycles(
 async def start_plot_cycle(
     plot_id: UUID,
     payload: PlotCycleCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotCycleRead:
     """Start a new planting cycle (รอบปลูก) on a plot (round 7.2B).
 
@@ -2159,7 +2159,7 @@ async def update_plot_cycle(
     plot_id: UUID,
     cycle_id: UUID,
     payload: PlotCycleUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotCycleRead:
     """Edit the ACTIVE cycle's plan (round 7.2B). Only planting/plan fields
     change; status/cycle_no/closed_* are not editable here (absent from
@@ -2246,7 +2246,7 @@ async def update_plot_cycle(
 async def preview_plot_cycle_close(
     plot_id: UUID,
     cycle_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotCycleCloseHarvestPreview:
     """What closing this cycle WOULD record as its actual harvest (round D).
 
@@ -2292,7 +2292,7 @@ async def close_plot_cycle(
     cycle_id: UUID,
     payload: PlotCycleClose,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotCycleRead:
     """Close the active cycle as harvested/cancelled (round 7.2B). Preserves
     history (never deletes the cycle or its records), clears the plot's mirror
@@ -2407,7 +2407,7 @@ async def rollover_plot_cycle(
     cycle_id: UUID,
     payload: PlotCycleRollover,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotCycleRolloverResult:
     """Atomically close the active cycle and open a fresh one on the same plot
     (round 7.9B) — the single-plot equivalent of the Excel rollover import
@@ -2509,7 +2509,7 @@ async def rollover_plot_cycle(
 async def update_plot(
     plot_id: UUID,
     payload: PlotUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotRead:
     # is_active is NOT toggleable through this generic PATCH (gated by the
     # weaker plots.update). Permanently closing a plot is a distinct, more
@@ -2542,7 +2542,7 @@ async def update_plot(
 ])
 async def deactivate_plot(
     plot_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotRead:
     """Round 8.0.7 — locks the plot row before flipping is_active, so this
     can't interleave with a concurrent record create on the same plot: the
@@ -2593,7 +2593,7 @@ async def deactivate_plot(
 async def reactivate_plot(
     plot_id: UUID,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotRead:
     """Reopen a permanently-deactivated plot (round 8-6H) WITHOUT starting a
     new planting cycle. Same permission as deactivate — plots.delete, never
@@ -2652,7 +2652,7 @@ async def reactivate_plot_with_cycle(
     plot_id: UUID,
     payload: PlotCycleCreate,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotWithCycleCreateResult:
     """Atomically reopen a permanently-deactivated plot AND start its first
     new planting cycle (round 8-6H Part D) — one transaction, so a cycle-
@@ -2746,7 +2746,7 @@ async def reactivate_plot_with_cycle(
 async def assign_users(
     plot_id: UUID,
     payload: PlotAssignRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PlotRead:
     """Replace the full set of users assigned to a plot (idempotent PUT)."""
     plot = await repo.get_plot(db, plot_id)

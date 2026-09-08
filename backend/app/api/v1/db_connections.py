@@ -22,7 +22,7 @@ from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
 from app.core.crypto import SecretEncryptionError, encrypt_secret
 from app.db.models.db_connection import DbConnection
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.db_connection import (
     DbConnectionCreate,
     DbConnectionRead,
@@ -51,7 +51,7 @@ async def _get_or_404(db: AsyncSession, conn_id: UUID) -> DbConnection:
 @router.get("", response_model=list[DbConnectionRead], dependencies=[
     Depends(require_permission(PermissionKey.DB_CONNECTIONS_READ))
 ])
-async def list_connections(db: AsyncSession = Depends(get_db)) -> list[DbConnectionRead]:
+async def list_connections(db: AsyncSession = DbDep) -> list[DbConnectionRead]:
     result = await db.execute(select(DbConnection).order_by(DbConnection.name))
     return [DbConnectionRead.model_validate(c) for c in result.scalars().all()]
 
@@ -59,7 +59,7 @@ async def list_connections(db: AsyncSession = Depends(get_db)) -> list[DbConnect
 @router.get("/{conn_id}", response_model=DbConnectionRead, dependencies=[
     Depends(require_permission(PermissionKey.DB_CONNECTIONS_READ))
 ])
-async def get_connection(conn_id: UUID, db: AsyncSession = Depends(get_db)) -> DbConnectionRead:
+async def get_connection(conn_id: UUID, db: AsyncSession = DbDep) -> DbConnectionRead:
     return DbConnectionRead.model_validate(await _get_or_404(db, conn_id))
 
 
@@ -69,7 +69,7 @@ async def create_connection(
     payload: DbConnectionCreate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> DbConnectionRead:
     existing = (
         await db.execute(select(DbConnection).where(DbConnection.name == payload.name))
@@ -109,7 +109,7 @@ async def update_connection(
     payload: DbConnectionUpdate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> DbConnectionRead:
     conn = await _get_or_404(db, conn_id)
 
@@ -151,7 +151,7 @@ async def delete_connection(
     conn_id: UUID,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> None:
     conn = await _get_or_404(db, conn_id)
     name = conn.name
@@ -172,7 +172,7 @@ async def test_connection(
     conn_id: UUID,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> DbConnectionTestResult:
     conn = await _get_or_404(db, conn_id)
     success, message, version, latency = await svc.test_connection(conn)
@@ -194,7 +194,7 @@ async def test_connection(
 @router.get("/{conn_id}/tables", response_model=list[DbTable], dependencies=[
     Depends(require_permission(PermissionKey.DB_CONNECTIONS_QUERY))
 ])
-async def list_tables(conn_id: UUID, db: AsyncSession = Depends(get_db)) -> list[DbTable]:
+async def list_tables(conn_id: UUID, db: AsyncSession = DbDep) -> list[DbTable]:
     """List the target DB's tables/views for the sandbox browser.
 
     Schema metadata only (no row data) — not audit-logged: it is fetched
@@ -221,7 +221,7 @@ async def run_query(
     payload: QueryRequest,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> QueryResult:
     conn = await _get_or_404(db, conn_id)
     if not conn.is_active:

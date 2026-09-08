@@ -84,7 +84,17 @@ def create_app() -> FastAPI:
             "version": "0.1.0",
         }
 
-    @app.get("/health/partitions", tags=["health"])
+    # NOT under /health — the reverse proxy answers that prefix itself:
+    #
+    #     location /health { return 200 "ok\n"; ... }
+    #
+    # nginx prefix-matches, so /health/partitions never reached the backend
+    # at all and returned a plain "ok" (found the day round H shipped). The
+    # /api/ prefix is proxied through, so this lives there instead. Changing
+    # the nginx rule to an exact match was the alternative and was rejected:
+    # /health is the container's healthcheck, and this is not worth the risk
+    # of breaking it.
+    @app.get("/api/v1/health/partitions", tags=["health"])
     async def health_partitions() -> dict[str, object]:
         """How many months of log partitions remain.
 

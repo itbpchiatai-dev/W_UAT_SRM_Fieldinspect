@@ -49,7 +49,7 @@ from app.auth.inspection_session import decode_inspection_session_token
 from app.core.config import get_settings
 from app.core.rate_limit import get_client_ip, limiter
 from app.db.models.record import INSPECTOR_TYPES
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import plot_access_credential_repository as credential_repo
 from app.repositories import plot_access_phone_repository as phone_repo
 from app.repositories import plot_cycle_repository as plot_cycle_repo
@@ -613,7 +613,7 @@ async def _finish_creating_record(
 async def create_record_public(
     payload: PublicRecordCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     response: Response = None,
 ) -> PublicRecordCreateResult:
     outcome = await _resolve_or_replay(db, payload)
@@ -647,7 +647,7 @@ async def create_record_with_photos_public(
     request: Request,
     payload: str = Form(..., description="PublicRecordCreate fields, JSON-encoded"),
     photos: list[UploadFile] = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     response: Response = None,
 ) -> PublicRecordCreateResult:
     """Multipart variant of POST /api/v1/public/records for the real

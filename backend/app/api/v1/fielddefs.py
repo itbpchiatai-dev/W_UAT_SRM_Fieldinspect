@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_any_permission, require_permission
 from app.auth.permissions import PermissionKey
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import field_definition_repository as repo
 from app.schemas.field_definition import (
     FieldDefinitionCreate,
@@ -32,7 +32,7 @@ router = APIRouter(tags=["fielddefs"])
     Depends(require_any_permission(PermissionKey.RECORDS_READ, PermissionKey.RECORDS_CREATE))
 ])
 async def list_field_definitions(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     active_only: bool = False,
 ) -> list[FieldDefinitionRead]:
     fields = await repo.list_fields(db, active_only=active_only)
@@ -43,7 +43,7 @@ async def list_field_definitions(
              dependencies=[Depends(require_permission(PermissionKey.FIELDDEFS_CREATE))])
 async def create_field_definition(
     payload: FieldDefinitionCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> FieldDefinitionRead:
     existing = await repo.get_by_key(db, payload.key)
     if existing is not None:
@@ -58,7 +58,7 @@ async def create_field_definition(
 async def update_field_definition(
     field_id: UUID,
     payload: FieldDefinitionUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> FieldDefinitionRead:
     field = await repo.get(db, field_id)
     if field is None:
@@ -72,7 +72,7 @@ async def update_field_definition(
 ])
 async def delete_field_definition(
     field_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> None:
     field = await repo.get(db, field_id)
     if field is None:

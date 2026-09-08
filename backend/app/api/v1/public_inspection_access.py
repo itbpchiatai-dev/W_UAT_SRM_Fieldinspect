@@ -55,7 +55,7 @@ from app.core import public_access_lockout
 from app.core.config import get_settings
 from app.core.phone import normalize_thai_mobile
 from app.core.rate_limit import get_client_ip, limiter
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import plot_access_credential_repository as credential_repo
 from app.repositories import plot_access_phone_repository as phone_repo
 from app.repositories import plot_cycle_repository as plot_cycle_repo
@@ -418,7 +418,7 @@ async def public_inspection_access_config(
 async def phone_access_lookup(
     payload: PublicPhoneAccessLookupRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PublicPhoneAccessLookupResponse:
     """Enter a phone → mint a phone-access session token + list the plots it may
     inspect. Generic 404 when the phone matches no usable plot (never says
@@ -485,7 +485,7 @@ async def phone_access_lookup(
 async def phone_access_plots(
     payload: PublicPhoneAccessListRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PublicPhoneAccessListResponse:
     """Re-list a phone-access session's plots from the token — no new token
     minted. A row (or its plot/supplier) deactivated since mint disappears; a
@@ -526,7 +526,7 @@ async def phone_access_plots(
 async def phone_access_select_plot(
     payload: PublicPhoneAccessSelectPlotRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> PublicPhoneAccessSelectPlotResponse:
     """Pick one plot + inspector type → mint an inspection_session_token bound
     to plot/supplier/active-cycle/access-phone/inspectorType. inspectorType is

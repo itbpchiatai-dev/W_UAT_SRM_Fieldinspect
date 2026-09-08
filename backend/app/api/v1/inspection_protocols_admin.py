@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_permission
 from app.auth.permissions import PermissionKey
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import inspection_protocol_repository as repo
 from app.schemas.inspection_protocol import (
     InspectionProtocolAdminCriterion,
@@ -37,7 +37,7 @@ router = APIRouter(tags=["inspection-protocols-admin"])
     Depends(require_permission(PermissionKey.MASTERDATA_READ))
 ])
 async def list_admin_inspection_protocols(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> InspectionProtocolAdminList:
     """Every criterion (with its id/order/active) grouped by stage — the
     admin editor's data. Reads the real rows, not the fallback registry."""
@@ -63,7 +63,7 @@ async def list_admin_inspection_protocols(
 )
 async def bulk_update_inspection_protocol_criteria(
     payload: InspectionProtocolBulkUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> list[InspectionProtocolAdminCriterion]:
     """Atomic multi-label edit — all items succeed or none do. If any id is
     missing the whole batch fails (404) before anything is written, so a
@@ -91,7 +91,7 @@ async def bulk_update_inspection_protocol_criteria(
 async def update_inspection_protocol_criterion(
     criterion_id: UUID,
     payload: InspectionProtocolCriterionUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> InspectionProtocolAdminCriterion:
     criterion = await repo.get_criterion(db, criterion_id)
     if criterion is None:

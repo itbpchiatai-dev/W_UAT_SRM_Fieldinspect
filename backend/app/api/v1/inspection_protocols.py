@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_any_permission
 from app.auth.permissions import PermissionKey
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.inspection_protocol import InspectionProtocolList
 from app.services import inspection_protocols as protocols
 
@@ -28,7 +28,7 @@ router = APIRouter(tags=["inspection-protocols"])
     Depends(require_any_permission(PermissionKey.RECORDS_READ, PermissionKey.RECORDS_CREATE))
 ])
 async def list_inspection_protocols(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> InspectionProtocolList:
     # Reads the admin-editable config (round 5.5); falls back to the built-in
     # registry when the table is unseeded — see get_protocol_map.

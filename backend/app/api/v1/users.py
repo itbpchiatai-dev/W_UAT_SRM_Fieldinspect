@@ -16,7 +16,7 @@ from app.db.models.permission import Permission
 from app.db.models.role import Role
 from app.db.models.user import User
 from app.db.models.user_permission_override import UserPermissionOverride
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import (
     AdminPasswordResetRequest,
     AdminPasswordResetResult,
@@ -65,7 +65,7 @@ def _require_role_assign(caller: User, target_role_names: list[str]) -> None:
     Depends(require_permission(PermissionKey.USERS_READ))
 ])
 async def list_users(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     limit: int = 50,
     offset: int = 0,
     q: str | None = None,
@@ -92,7 +92,7 @@ async def create_user(
     payload: UserCreate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> UserRead:
     if payload.auth_provider not in ("local", "azure_ad"):
         raise HTTPException(status_code=400, detail="Invalid auth_provider")
@@ -204,7 +204,7 @@ async def _load_user(db: AsyncSession, user_id: UUID) -> UserRead:
 @router.get("/{user_id}", response_model=UserRead, dependencies=[
     Depends(require_permission(PermissionKey.USERS_READ))
 ])
-async def get_user(user_id: UUID, db: AsyncSession = Depends(get_db)) -> UserRead:
+async def get_user(user_id: UUID, db: AsyncSession = DbDep) -> UserRead:
     return await _load_user(db, user_id)
 
 
@@ -216,7 +216,7 @@ async def patch_user(
     payload: UserUpdate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> UserRead:
     result = await db.execute(
         select(User).where(User.id == user_id).options(selectinload(User.roles))
@@ -304,7 +304,7 @@ async def bulk_approve(
     payload: BulkApproveRequest,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> dict[str, int]:
     """Flip is_approved=true on every user_id in payload — idempotent.
     Already-approved rows are no-ops. Single audit row per call for the
@@ -353,7 +353,7 @@ async def deactivate_user(
     user_id: UUID,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> dict[str, str]:
     # Self-deactivation guard (Deep-Audit HIGH-2): an admin must not lock
     # themselves out through this endpoint — covers the same surface as
@@ -417,7 +417,7 @@ async def reset_user_password(
     payload: AdminPasswordResetRequest,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> AdminPasswordResetResult:
     """Admin sets a new password on a LOCAL account (round 8-23A).
 
@@ -512,7 +512,7 @@ async def add_override(
     payload: OverrideRequest,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> UserRead:
     target_user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if target_user is None:

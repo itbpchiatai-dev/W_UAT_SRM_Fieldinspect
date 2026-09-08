@@ -41,7 +41,7 @@ from app.db.models.app_setting import AppSetting
 from app.db.models.revoked_token import RevokedToken
 from app.db.models.role import Role
 from app.db.models.user import User
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import CamelBaseModel, LoginRequest, TokenResponse
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -120,7 +120,7 @@ async def login(
     payload: LoginRequest,
     request: Request,
     response: Response,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> TokenResponse:
     if not await _get_setting_bool(db, "auth.local.enabled", True):
         raise HTTPException(
@@ -206,7 +206,7 @@ async def login(
 async def logout(
     request: Request,
     response: Response,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> dict[str, str]:
     # Revoke the current refresh jti server-side before clearing the
     # cookie (Deep-Audit HIGH-3). A copy of the cookie that an attacker
@@ -241,7 +241,7 @@ async def logout(
 async def refresh(
     request: Request,
     response: Response,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> TokenResponse:
     cookie = request.cookies.get(REFRESH_COOKIE_NAME)
     if not cookie:
@@ -334,7 +334,7 @@ _SSO_STATE_TTL_SECONDS = 600  # 10 minutes — Azure round-trip + slow user.
 @router.get("/sso/redirect")
 async def sso_redirect(
     response: Response,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> dict[str, str]:
     """Hand the SPA an Azure authorize URL + bind the CSRF state to an
     httponly cookie that the matching /sso/callback POST must echo back.
@@ -373,7 +373,7 @@ async def sso_callback(
     payload: SsoCallbackPayload,
     request: Request,
     response: Response,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> TokenResponse:
     """Validate the OAuth state then exchange the code.
 

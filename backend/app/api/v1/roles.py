@@ -13,7 +13,7 @@ from app.auth.permissions import PermissionKey
 from app.db.models.permission import Permission
 from app.db.models.role import Role
 from app.db.models.user_role import UserRole
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import RoleCreate, RoleRead, RoleSummary, RoleUpdate
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -30,7 +30,7 @@ router = APIRouter(tags=["roles"])
         PermissionKey.ROLES_ASSIGN,
     ))
 ])
-async def list_roles(db: AsyncSession = Depends(get_db)) -> list[RoleSummary]:
+async def list_roles(db: AsyncSession = DbDep) -> list[RoleSummary]:
     result = await db.execute(select(Role).order_by(Role.name))
     return [RoleSummary.model_validate(r) for r in result.scalars().all()]
 
@@ -38,7 +38,7 @@ async def list_roles(db: AsyncSession = Depends(get_db)) -> list[RoleSummary]:
 @router.get("/{role_id}", response_model=RoleRead, dependencies=[
     Depends(require_permission(PermissionKey.ROLES_READ))
 ])
-async def get_role(role_id: UUID, db: AsyncSession = Depends(get_db)) -> RoleRead:
+async def get_role(role_id: UUID, db: AsyncSession = DbDep) -> RoleRead:
     stmt = select(Role).where(Role.id == role_id).options(selectinload(Role.permissions))
     result = await db.execute(stmt)
     role = result.scalar_one_or_none()
@@ -85,7 +85,7 @@ async def create_role(
     payload: RoleCreate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> RoleRead:
     _validate_role_name_scope(payload.name, payload.provider_scope)
     existing = await db.execute(select(Role).where(Role.name == payload.name))
@@ -131,7 +131,7 @@ async def patch_role(
     payload: RoleUpdate,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> RoleRead:
     stmt = select(Role).where(Role.id == role_id).options(selectinload(Role.permissions))
     role = (await db.execute(stmt)).scalar_one_or_none()
@@ -166,7 +166,7 @@ async def delete_role(
     role_id: UUID,
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> None:
     role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
     if role is None:

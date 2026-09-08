@@ -14,7 +14,7 @@ from app.api.deps.scope import ScopeFilter, get_rls_context
 from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
 from app.core.rate_limit import get_client_ip
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import plot_cycle_repository as plot_cycle_repo
 from app.repositories import plot_repository as plot_repo
 from app.repositories import record_repository as repo
@@ -79,7 +79,7 @@ def _to_read(record) -> RecordRead:
 ])
 async def list_records(
     scope: ScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     plot_id: UUID | None = None,
     supplier_id: UUID | None = None,
     date_from: datetime.date | None = None,
@@ -210,7 +210,7 @@ async def create_record(
     payload: RecordCreate,
     current_user: CurrentUser,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> RecordRead:
     # Audit: store the submitting client's IP (records.submitted_ip),
     # resolved with the rate limiter's trusted-proxy rules — never from
@@ -234,7 +234,7 @@ async def create_record_with_photos(
     request: Request,
     payload: str = Form(..., description="RecordCreate fields, JSON-encoded"),
     photos: list[UploadFile] = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> RecordRead:
     """Multipart variant of POST /api/v1/records for the inspection flow
     that carries 1-5 photos (round 13; photos became optional
@@ -298,7 +298,7 @@ async def get_record_photo(
     record_id: UUID,
     scope: ScopeFilter,
     photo_id: str = PathParam(..., pattern=PHOTO_FILENAME_PATTERN),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> FileResponse:
     """Scoped photo download (round 13.1) — deliberately NOT a static-file
     mount (see inspection_photos.py's module docstring for why).
@@ -350,7 +350,7 @@ async def get_record_photo(
 async def get_record(
     record_id: UUID,
     scope: ScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> RecordRead:
     record = await repo.get_record_scoped(db, record_id, scope)
     if record is None:
@@ -367,7 +367,7 @@ async def get_record(
 async def deactivate_record(
     record_id: UUID,
     scope: ScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> RecordRead:
     """The only mutation an existing record can undergo (round 8.0.5
     append-only lock) — an administrative correction, not a general edit.

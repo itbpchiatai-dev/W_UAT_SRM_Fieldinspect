@@ -25,7 +25,7 @@ from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.models.activity_log import ActivityLog
 from app.db.models.user import User
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import ActivityLogRead
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -73,7 +73,7 @@ def _apply_filters(stmt, *, action_type, user_id, risk_level,
     Depends(require_permission(PermissionKey.ACTIVITY_LOGS_READ))
 ])
 async def list_activity_logs(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     limit: int = 50,
     offset: int = 0,
     action_type: str | None = None,
@@ -101,7 +101,7 @@ async def list_activity_logs(
 async def export_activity_logs_csv(
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     action_type: str | None = None,
     user_id: UUID | None = None,
     risk_level: str | None = None,

@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
 from app.db.models.user import User
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import CamelBaseModel
 from app.services.loggers.activity_logger import ActivityLogger
 from app.services.notifications import (
@@ -105,7 +105,7 @@ def _consume(user: User) -> None:
 async def resolve_token(
     token: str,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> TokenStatus:
     user, st = await _load_by_token(db, token)
     if st != "valid" or user is None:
@@ -127,7 +127,7 @@ async def approve_via_token(
     token: str,
     payload: ApprovalDecision,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> TokenStatus:
     user, st = await _load_by_token(db, token)
     if st != "valid" or user is None:
@@ -157,7 +157,7 @@ async def reject_via_token(
     token: str,
     payload: RejectionDecision,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> TokenStatus:
     user, st = await _load_by_token(db, token)
     if st != "valid" or user is None:

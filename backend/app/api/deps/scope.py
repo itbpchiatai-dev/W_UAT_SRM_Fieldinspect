@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
 from app.db.models.plot_assignment import PlotAssignment
-from app.db.session import get_db
+from app.db.session import DbDep
 
 _FULL_ACCESS_ROLES = {"internal:super_admin", "internal:admin", "farmlog:supervisor"}
 
@@ -80,7 +80,7 @@ async def _set_rls_config(
 
 async def get_rls_context(
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> None:
     """Dependency: sets app.* GUCs for Postgres RLS, returns nothing.
 
@@ -94,7 +94,7 @@ async def get_rls_context(
 
 async def get_scope_filter(
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> list[Any]:
     """Dependency: sets app.* GUCs AND returns app-layer WHERE conditions.
 
@@ -189,7 +189,7 @@ async def set_public_record_rls_context(db: AsyncSession, supplier_id: Any) -> N
     await _set_rls_config(db, "supplier", _NO_USER_ID, str(supplier_id))
 
 
-async def get_public_plot_rls_context(db: AsyncSession = Depends(get_db)) -> None:
+async def get_public_plot_rls_context(db: AsyncSession = DbDep) -> None:
     """RLS context for PUBLIC (unauthenticated) endpoints that must be able
     to see any active plot — currently only the public inspection-code
     verification flow (round 7).

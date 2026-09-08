@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser
 from app.db.models.menu_item import MenuItem
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import MenuRead, MePermissionsResponse, UserRead
 
 router = APIRouter(tags=["me"])
@@ -66,7 +66,7 @@ def _build_tree(items: list[MenuItem], allowed: set[str]) -> list[MenuRead]:
 
 @router.get("/menus", response_model=list[MenuRead])
 async def get_my_menus(
-    user: CurrentUser, db: AsyncSession = Depends(get_db)
+    user: CurrentUser, db: AsyncSession = DbDep
 ) -> list[MenuRead]:
     perms: set[str] = getattr(user, "_effective_permissions", set())
     result = await db.execute(select(MenuItem))

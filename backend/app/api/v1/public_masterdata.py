@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import master_data_repository as repo
 from app.schemas.master_data import PublicMasterDataItem
 
@@ -50,7 +50,7 @@ async def list_public_master_data(
     request: Request,
     type: PublicMasterDataType,
     parent: str | None = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> list[PublicMasterDataItem]:
     items = await repo.list_items(db, type=type, parent=parent, active_only=True)
     return [PublicMasterDataItem(value=i.value, parent=i.parent) for i in items]

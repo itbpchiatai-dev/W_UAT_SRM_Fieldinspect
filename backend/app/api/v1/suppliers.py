@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.scope import SupplierScopeFilter
 from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import supplier_repository as repo
 from app.schemas.supplier import (
     SupplierCreate,
@@ -186,7 +186,7 @@ async def search_suppliers(
     payload: SupplierSearchRequest,
     response: Response,
     scope: SupplierScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> list[SupplierSummary]:
     """Round 8-20D — the Suppliers page's filter row: name/code, contact name,
     contact-number fragment, and status, all ANDed.
@@ -228,7 +228,7 @@ async def search_suppliers(
 ])
 async def download_supplier_import_template(
     scope: SupplierScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Read-only — never writes to the DB. Pre-filled with the caller's own
     in-scope Suppliers (active and inactive alike, so either can be edited or
@@ -244,7 +244,7 @@ async def preview_supplier_import(
     user: CurrentUser,
     scope: SupplierScopeFilter,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> SupplierImportPreview:
     """Parse + validate every row WITHOUT writing anything. Safe/read-only.
 
@@ -275,7 +275,7 @@ async def commit_supplier_import(
     # client sends the multipart field as "previewState" (same convention as
     # plots.py/masterdata.py's own commit endpoints).
     preview_state: str | None = Form(None, alias="previewState"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> SupplierImportCommitResult:
     """Re-validate server-side (never trusting a client preview) and execute
     every row in ONE transaction — this endpoint's single get_db session; the
@@ -341,7 +341,7 @@ async def preview_supplier_import_report(
     user: CurrentUser,
     scope: SupplierScopeFilter,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Read-only: the same core as .../import/preview, returned as a
     validation workbook (READY/ERROR per row) instead of JSON. Never writes."""
@@ -376,7 +376,7 @@ async def commit_supplier_import_report(
     scope: SupplierScopeFilter,
     file: UploadFile = File(...),
     preview_state: str | None = Form(None, alias="previewState"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Same core as .../import/commit (re-validates, checks drift, executes
     ONCE in this endpoint's single transaction), returned as a completed-
@@ -440,7 +440,7 @@ async def commit_supplier_import_report(
 ])
 async def list_suppliers(
     scope: SupplierScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     limit: int = 50,
     offset: int = 0,
     q: str | None = None,
@@ -456,7 +456,7 @@ async def list_suppliers(
              dependencies=[Depends(require_permission(PermissionKey.SUPPLIERS_CREATE))])
 async def create_supplier(
     payload: SupplierCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> SupplierRead:
     existing = await repo.get_supplier_by_code(db, payload.code)
     if existing is not None:
@@ -471,7 +471,7 @@ async def create_supplier(
 async def get_supplier(
     supplier_id: UUID,
     scope: SupplierScopeFilter,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> SupplierRead:
     supplier = await repo.get_supplier_scoped(db, supplier_id, scope)
     if supplier is None:
@@ -485,7 +485,7 @@ async def get_supplier(
 async def update_supplier(
     supplier_id: UUID,
     payload: SupplierUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> SupplierRead:
     supplier = await repo.get_supplier(db, supplier_id)
     if supplier is None:
@@ -499,7 +499,7 @@ async def update_supplier(
 ])
 async def deactivate_supplier(
     supplier_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> SupplierRead:
     supplier = await repo.get_supplier(db, supplier_id)
     if supplier is None:

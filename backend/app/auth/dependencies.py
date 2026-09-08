@@ -19,7 +19,7 @@ from app.auth.jwt_service import decode_token, token_auth_version
 from app.db.models.role import Role
 from app.db.models.user import User
 from app.db.models.user_permission_override import UserPermissionOverride
-from app.db.session import get_db
+from app.db.session import DbDep
 
 
 def _compute_effective_permissions(user: User) -> set[str]:
@@ -37,7 +37,7 @@ def _compute_effective_permissions(user: User) -> set[str]:
 
 async def get_current_user(
     authorization: Annotated[str | None, Header()] = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> User:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
@@ -134,7 +134,7 @@ def require_permission(key: str) -> Any:
     async def _checker(
         user: CurrentUser,
         request: Request,
-        db: AsyncSession = Depends(get_db),
+        db: AsyncSession = DbDep,
     ) -> User:
         perms: set[str] = getattr(user, "_effective_permissions", set())
         if key not in perms:
@@ -158,7 +158,7 @@ def require_any_permission(*keys: str) -> Any:
     async def _checker(
         user: CurrentUser,
         request: Request,
-        db: AsyncSession = Depends(get_db),
+        db: AsyncSession = DbDep,
     ) -> User:
         perms: set[str] = getattr(user, "_effective_permissions", set())
         if not any(k in perms for k in keys):

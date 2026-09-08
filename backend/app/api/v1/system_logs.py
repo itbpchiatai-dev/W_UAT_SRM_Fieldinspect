@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import CurrentUser, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.models.system_log import SystemLog
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.schemas.auth import SystemLogRead
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -55,7 +55,7 @@ def _apply_filters(stmt, *, status, category, q, date_from, date_to):
     Depends(require_permission(PermissionKey.SYSTEM_LOGS_READ))
 ])
 async def list_system_logs(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     limit: int = 50,
     offset: int = 0,
     status: str | None = None,
@@ -79,7 +79,7 @@ async def list_system_logs(
 async def export_system_logs_csv(
     request: Request,
     user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     status: str | None = None,
     category: str | None = None,
     q: str | None = None,

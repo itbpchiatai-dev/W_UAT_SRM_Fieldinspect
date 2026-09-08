@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import CurrentUser, require_any_permission, require_permission
 from app.auth.permissions import PermissionKey
 from app.db.models.master_data import MasterData
-from app.db.session import get_db
+from app.db.session import DbDep
 from app.repositories import master_data_repository as repo
 from app.schemas.master_data import MasterDataCreate, MasterDataRead, MasterDataUpdate
 from app.schemas.master_data_import import (
@@ -124,7 +124,7 @@ def _parse_cv_preview_state(raw: str | None) -> CropVarietyImportPreviewState | 
     Depends(require_permission(PermissionKey.MASTERDATA_READ)),
 ])
 async def download_crop_variety_import_template(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Read-only — never writes to the DB. See
     services/master_data_crop_variety_import.build_template for the full
@@ -150,7 +150,7 @@ async def download_crop_variety_import_template(
 )
 async def preview_crop_variety_import(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> CropVarietyImportPreview:
     """Parse + validate every row, WITHOUT writing anything. Safe/read-only."""
     content = await _read_cv_import_upload(file)
@@ -175,7 +175,7 @@ async def commit_crop_variety_import(
     # client sends the multipart field as "previewState" (same convention as
     # plots.py's commit_plot_import).
     preview_state: str | None = Form(None, alias="previewState"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> CropVarietyImportCommitResult:
     """Re-validate server-side (never trusting a client preview) and execute
     every row in ONE transaction (this endpoint's single get_db session —
@@ -245,7 +245,7 @@ def _cv_xlsx_response(content: bytes, filename: str) -> Response:
 )
 async def preview_crop_variety_import_report(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Read-only: same core as .../preview, returned as a validation
     workbook (READY/SKIPPED/ERROR per row) instead of JSON. Never writes."""
@@ -281,7 +281,7 @@ async def commit_crop_variety_import_report(
     user: CurrentUser,
     file: UploadFile = File(...),
     preview_state: str | None = Form(None, alias="previewState"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> Response:
     """Same core as .../commit (re-validates, checks drift, executes ONCE in
     this endpoint's single transaction), returned as a completed-result
@@ -374,7 +374,7 @@ def _duplicate_master_data_detail(existing: MasterData | None, value: str) -> st
     Depends(require_any_permission(PermissionKey.RECORDS_READ, PermissionKey.RECORDS_CREATE))
 ])
 async def list_master_data(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
     type: str | None = None,
     parent: str | None = None,
     active_only: bool = False,
@@ -387,7 +387,7 @@ async def list_master_data(
              dependencies=[Depends(require_permission(PermissionKey.MASTERDATA_CREATE))])
 async def create_master_data(
     payload: MasterDataCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> MasterDataRead:
     # repo.create() itself strips type/value before writing, so the
     # pre-check below compares against the SAME stripped value that would
@@ -423,7 +423,7 @@ async def create_master_data(
 async def update_master_data(
     item_id: UUID,
     payload: MasterDataUpdate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> MasterDataRead:
     item = await repo.get(db, item_id)
     if item is None:
@@ -471,7 +471,7 @@ async def update_master_data(
 ])
 async def delete_master_data(
     item_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DbDep,
 ) -> None:
     item = await repo.get(db, item_id)
     if item is None:

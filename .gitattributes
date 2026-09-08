@@ -1,3 +1,11 @@
+# Shell scripts must stay LF even when checked out on Windows. This repo is
+# developed on Windows with core.autocrlf=true, which rewrites them to CRLF —
+# and a shell script with CRLF does not run at all, on the deploy host or in
+# Git Bash: every line ends up with a stray \r ("$'\r': command not found").
+# deploy.sh had already been silently converted in the working tree when this
+# was found (round G).
+*.sh text eol=lf
+
 # Standard-internal files — kept in the repo for maintainers, but excluded from
 # the distribution archive (`git archive` / release zip) so projects generated
 # from the template don't carry the standard's own history, notes, or doc tooling.

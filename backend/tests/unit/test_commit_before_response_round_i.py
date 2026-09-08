@@ -95,21 +95,49 @@ async def _post() -> httpx.Response:
 
 
 async def test_a_failing_commit_is_never_reported_as_success():
-    """THE regression guard. Before round I this answered 200."""
+    """THE regression guard. Before round I this answered 200 — the response
+    was already sent by the time the commit ran, so the status code was no
+    longer the server's to decide."""
     session = AsyncMock(spec=AsyncSession)
     session.commit.side_effect = RuntimeError(
         'no partition of relation "activity_logs" found for row'
     )
 
-    with _use(session), pytest.raises(RuntimeError, match="no partition"):
-        # The failure escaping AT ALL is the point: the response had not been
-        # sent, so the status code was still the server's to decide. Through a
-        # real deployment this surfaces as a 500; ASGITransport re-raises
-        # instead of synthesising one.
-        await _post()
+    with _use(session):
+        response = await _post()
 
+    assert response.status_code == 500
     session.commit.assert_awaited_once()
     session.rollback.assert_awaited_once()
+
+
+async def test_the_caller_is_told_their_work_was_discarded():
+    """Round J — a bare "Internal Server Error" says nothing about whether to
+    retry, or whether anything was saved."""
+    session = AsyncMock(spec=AsyncSession)
+    session.commit.side_effect = RuntimeError("deadlock detected")
+
+    with _use(session):
+        response = await _post()
+
+    detail = response.json()["detail"]
+    assert "ยกเลิกรายการนี้ทั้งหมด" in detail
+    assert "กรุณาลองใหม่อีกครั้ง" in detail
+
+
+async def test_the_database_error_never_reaches_the_client():
+    """The cause belongs in the server's traceback, not in an API response."""
+    session = AsyncMock(spec=AsyncSession)
+    session.commit.side_effect = RuntimeError(
+        'relation "activity_logs" does not exist at 10.0.0.5:5432'
+    )
+
+    with _use(session):
+        response = await _post()
+
+    body = response.text
+    for leak in ("activity_logs", "10.0.0.5", "relation", "RuntimeError"):
+        assert leak not in body
 
 
 async def test_a_successful_commit_still_returns_the_result():
@@ -160,3 +188,24 @@ def test_no_endpoint_reaches_for_the_unscoped_dependency():
 
 def test_the_shared_dependency_is_function_scoped():
     assert DbDep.scope == "function"
+
+
+async def test_an_endpoint_failure_is_not_dressed_up_as_a_commit_failure():
+    """The two mean different things: the endpoint raising is its own error
+    with its own status code, while a failed commit means work was accepted
+    and then discarded. Only the second gets round J's message."""
+    session = AsyncMock(spec=AsyncSession)
+
+    @_probe.post("/__round_i_boom__")
+    async def _boom(db: AsyncSession = DbDep) -> dict[str, str]:
+        raise ValueError("endpoint's own problem")
+
+    app.include_router(_probe)
+
+    with _use(session), pytest.raises(ValueError, match="endpoint's own problem"):
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            await c.post("/__round_i_boom__")
+
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_awaited()

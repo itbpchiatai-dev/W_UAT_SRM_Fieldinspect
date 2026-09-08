@@ -57,6 +57,21 @@ async def close_db() -> None:
         await _engine.dispose()
 
 
+class TransactionCommitError(Exception):
+    """The request's work could not be committed, so none of it happened.
+
+    Round J — a distinct type so main.py can answer with an explanation
+    instead of a bare "Internal Server Error". The endpoint itself succeeded;
+    what failed is the commit, which means the caller's change is gone and
+    retrying is the right thing to do. That is worth saying out loud, and it
+    is not what a generic 500 conveys.
+
+    The original error is always attached with `raise ... from exc` so the
+    server-side traceback keeps it, while the client is told nothing about
+    the database (see main.py's handler).
+    """
+
+
 async def get_db() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency: auto-commits on success, rolls back on any exception.
 
@@ -65,15 +80,30 @@ async def get_db() -> AsyncIterator[AsyncSession]:
     triggers the rollback path. Since Python 3.8, CancelledError inherits
     from BaseException, not Exception, so a narrower clause would silently
     skip rollback for cancellation.
+
+    Round J — the commit is a separate try from the endpoint's own body, so
+    the two failures can be told apart: an exception from the endpoint
+    propagates unchanged (its own handlers, its own status codes), while a
+    failed COMMIT becomes TransactionCommitError. Only the second means "your
+    work was accepted and then thrown away".
     """
     if _sessionmaker is None:
         raise RuntimeError("Database not initialized")
     async with _sessionmaker() as session:
         try:
             yield session
-            await session.commit()
         except BaseException:
             await session.rollback()
+            raise
+
+        try:
+            await session.commit()
+        except BaseException as exc:
+            await session.rollback()
+            # CancelledError must stay CancelledError — wrapping it would
+            # turn a client disconnect into a reportable server fault.
+            if isinstance(exc, Exception):
+                raise TransactionCommitError() from exc
             raise
 
 

@@ -1,14 +1,16 @@
 from contextlib import asynccontextmanager
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.api.v1.installed_routers import ROUTERS
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.core.rate_limit import bootstrap_rate_limiting
 from app.core.scheduler import start_scheduler, stop_scheduler
-from app.db.session import close_db, init_db
+from app.db.session import TransactionCommitError, close_db, init_db
 
 # Round 8-17B Part A — a body that fails FastAPI's own request-validation
 # (e.g. an unknown field, an out-of-range limit/offset) never reaches the
@@ -25,6 +27,38 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
     if request.url.path in _NO_STORE_VALIDATION_PATHS:
         response.headers["Cache-Control"] = "no-store"
     return response
+
+
+# Round J — what the user is told when a commit fails.
+#
+# Round I made that failure reachable: the commit now runs before the response
+# is sent, so instead of a 200 that saved nothing, the request fails. What it
+# failed with was a bare "Internal Server Error", which tells the user neither
+# that their work is gone nor that retrying is worth it.
+#
+# The organisation's answer to "may a transaction proceed when its audit trail
+# cannot be written?" is no. So rolling the whole thing back IS the correct
+# behaviour here — this message explains it rather than apologising for it.
+#
+# Nothing about the database reaches the client. The cause travels with the
+# exception (`raise ... from exc`) into the server-side traceback, where it
+# belongs; a DB error message in an API response is an information leak.
+_COMMIT_FAILED_DETAIL = (
+    "ไม่สามารถบันทึกข้อมูลได้ ระบบจึงยกเลิกรายการนี้ทั้งหมด "
+    "เพื่อไม่ให้ข้อมูลถูกบันทึกไม่ครบถ้วน — กรุณาลองใหม่อีกครั้ง "
+    "หากยังไม่สำเร็จ กรุณาแจ้งผู้ดูแลระบบ"
+)
+
+
+async def _commit_failed_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger = structlog.get_logger(__name__)
+    logger.error(
+        "db.commit_failed",
+        path=request.url.path,
+        method=request.method,
+        cause=str(exc.__cause__) if exc.__cause__ else None,
+    )
+    return JSONResponse(status_code=500, content={"detail": _COMMIT_FAILED_DETAIL})
 
 
 @asynccontextmanager
@@ -56,6 +90,7 @@ def create_app() -> FastAPI:
     for router, prefix in ROUTERS:
         app.include_router(router, prefix=prefix)
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
+    app.add_exception_handler(TransactionCommitError, _commit_failed_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

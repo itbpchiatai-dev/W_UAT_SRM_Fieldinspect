@@ -122,6 +122,17 @@ async def login(
     response: Response,
     db: AsyncSession = DbDep,
 ) -> TokenResponse:
+    # Round L — LoginRequest's fields are SkipValidation (see that schema for
+    # why: a Pydantic-level rejection echoes the submitted password in the 422
+    # body). Their shape is therefore unchecked on entry and must be verified
+    # here, before .strip() turns a non-string into an AttributeError 500. The
+    # message is fixed and names neither value.
+    if not isinstance(payload.email, str) or not isinstance(payload.password, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="email and password must be strings",
+        )
+
     if not await _get_setting_bool(db, "auth.local.enabled", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -412,20 +412,35 @@ async def test_the_password_token_carries_no_secret_and_no_phone() -> None:
     assert set(claims["grants"][0]) == {"a", "c", "v"}
 
 
-def test_the_request_masks_an_oversized_password() -> None:
+def test_the_request_never_rejects_an_oversized_password_itself() -> None:
+    """Round L — this used to assert Pydantic raised on max_length=64 and that
+    the message hid the value. It did not hide it: `errors()[0]["input"]` held
+    the raw password, and FastAPI serialises that into the 422 body.
+
+    The field carries no constraint now, so Pydantic cannot reject it and
+    cannot echo it. The length gate moved to the endpoint
+    (_check_lookup_shape), which answers with one fixed message."""
     from pydantic import ValidationError
 
     huge = "1" * 5000
-    with pytest.raises(ValidationError) as exc:
-        PublicPhoneAccessLookupRequest(phone=PHONE, password=huge)
-    assert huge not in str(exc.value)
+    try:
+        payload = PublicPhoneAccessLookupRequest(phone=PHONE, password=huge)
+    except ValidationError as exc:  # pragma: no cover - the bug this prevents
+        raise AssertionError(
+            f"Pydantic rejected the password and echoed: "
+            f"{[e.get('input') for e in exc.errors()]!r}"
+        ) from exc
+    assert payload.password == huge
 
 
-def test_the_password_field_is_a_secret_that_never_reprs_its_value() -> None:
+def test_the_password_field_never_reprs_its_value() -> None:
+    """SecretStr used to provide this; `Field(repr=False)` provides it now,
+    without being a type Pydantic has to coerce to (and therefore reject)."""
     payload = PublicPhoneAccessLookupRequest(phone=PHONE, password=PIN)
     assert PIN not in repr(payload)
     assert PIN not in str(payload)
-    assert payload.password.get_secret_value() == PIN
+    assert PHONE not in repr(payload)
+    assert payload.password == PIN
 
 
 # --- /plots and /select-plot rechecks ----------------------------------------

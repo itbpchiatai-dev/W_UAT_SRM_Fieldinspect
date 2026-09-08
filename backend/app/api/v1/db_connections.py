@@ -36,6 +36,10 @@ from app.services import db_connection_service as svc
 from app.services.app_setting_service import AppSettingService
 from app.services.loggers.activity_logger import ActivityLogger
 
+# Round L — one fixed message for any password shape violation: which rule it
+# broke could only be phrased using the value the caller sent.
+_MSG_BAD_PASSWORD = "password must be a non-empty string"
+
 router = APIRouter(tags=["db_connections"])
 
 
@@ -77,6 +81,12 @@ async def create_connection(
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="A connection with this name already exists")
+    # Round L — password is SkipValidation on the schema (a Pydantic
+    # rejection would echo the submitted database password in the 422 body),
+    # so its shape is checked here. The message names no value.
+    if not isinstance(payload.password, str) or not payload.password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=_MSG_BAD_PASSWORD)
     try:
         encrypted = encrypt_secret(payload.password)
     except SecretEncryptionError as exc:
@@ -125,6 +135,9 @@ async def update_connection(
     password = data.pop("password", None)
     for field, value in data.items():
         setattr(conn, field, value)
+    if password is not None and not isinstance(password, str):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail=_MSG_BAD_PASSWORD)
     if password:  # only re-encrypt when a non-empty password is supplied
         try:
             conn.password_encrypted = encrypt_secret(password)

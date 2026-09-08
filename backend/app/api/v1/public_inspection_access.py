@@ -409,6 +409,35 @@ async def public_inspection_access_config(
     )
 
 
+# Coarse payload bounds for the lookup body. These used to be `Field`
+# constraints on the schema; round L moved them here because a Pydantic
+# rejection echoes the offending value (a phone, a password) in the 422 body.
+# The real rules — normalize_thai_mobile, validate_plot_access_password — still
+# run further in, and their failures fold into the same generic answers.
+_LOOKUP_MAX_PHONE = 32
+_LOOKUP_MAX_PASSWORD = 64
+_LOOKUP_MAX_QR_KEY = 64
+_MSG_LOOKUP_BAD_SHAPE = "รูปแบบข้อมูลไม่ถูกต้อง"
+
+
+def _check_lookup_shape(payload: PublicPhoneAccessLookupRequest) -> None:
+    """Type/length gate for the lookup body. One fixed message for every
+    violation: which field was wrong, and how, is not worth telling an
+    unauthenticated caller — and saying it can only ever be built from the
+    value they sent."""
+    def bad() -> HTTPException:
+        return HTTPException(status_code=422, detail=_MSG_LOOKUP_BAD_SHAPE)
+
+    if not isinstance(payload.phone, str) or not (1 <= len(payload.phone) <= _LOOKUP_MAX_PHONE):
+        raise bad()
+    if payload.password is not None:
+        if not isinstance(payload.password, str) or len(payload.password) > _LOOKUP_MAX_PASSWORD:
+            raise bad()
+    if payload.qr_key is not None:
+        if not isinstance(payload.qr_key, str) or not (1 <= len(payload.qr_key) <= _LOOKUP_MAX_QR_KEY):
+            raise bad()
+
+
 @router.post(
     "/inspection-access/lookup",
     response_model=PublicPhoneAccessLookupResponse,
@@ -424,13 +453,19 @@ async def phone_access_lookup(
     inspect. Generic 404 when the phone matches no usable plot (never says
     whether the phone "exists"). The raw phone is normalized here (not in the
     schema) so a bad value is never echoed in a 422, and is never logged."""
+    # Round L — every field on this body is SkipValidation (see the schema:
+    # a Pydantic-level rejection echoes the phone/password in the 422). Their
+    # shape is therefore unchecked on entry and is verified here, with one
+    # fixed message that names no value. The bounds are the coarse payload
+    # limits the schema used to carry; the real rules still run below.
+    _check_lookup_shape(payload)
+
     if _enforcement_on():
         # Round 8-9C — phone AND password. Every failure here is the identical
         # generic 404 (or a generic 429 when locked out); there is deliberately
         # NO fallback to the phone-only path below.
         verified, token = await _authorize_phone_password(
-            db, request, payload.phone,
-            payload.password.get_secret_value() if payload.password is not None else None,
+            db, request, payload.phone, payload.password,
         )
         expires_in = _password_token_expires_in()
         rows = [(access, plot, supplier) for (access, plot, supplier, _c) in verified]

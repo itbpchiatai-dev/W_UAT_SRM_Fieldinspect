@@ -5,14 +5,39 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import SkipValidation
+from pydantic import Field, SkipValidation
 
 from app.schemas.base import CamelBaseModel
 
 
 class LoginRequest(CamelBaseModel):
-    email: str
-    password: str
+    """Body of POST /auth/login.
+
+    Round L — `SkipValidation` on both fields, for the same reason spelled
+    out on AdminPasswordResetRequest below: Pydantic v2 puts the offending
+    value in `ValidationError.errors()[i]["input"]`, and FastAPI's default
+    RequestValidationError handler serialises exactly that into the 422 body.
+    With a plain `password: str`, a request sending a non-string password
+    (a client bug, or anything scripted) had the submitted password echoed
+    straight back to the caller — and into any proxy or access log that
+    records response bodies.
+
+    Verified before the change:
+
+        LoginRequest.model_validate({"email": ..., "password": 1234567890})
+        -> errors()[0]["input"] == 1234567890
+
+    email is skipped too: it is the other half of a credential pair, and the
+    endpoint calls .strip() on it, which would be an AttributeError (a 500)
+    on a non-string. Both are type-checked by hand in the endpoint, which
+    answers with a fixed message that never contains either value.
+    """
+
+    # repr=False keeps both out of `repr(payload)` — an accidental log of the
+    # model, or a traceback that renders locals, must not print a credential.
+    # It is not a constraint, so it cannot cause a rejection.
+    email: SkipValidation[str] = Field(..., repr=False)
+    password: SkipValidation[str] = Field(..., repr=False)
 
 
 class AdminPasswordResetRequest(CamelBaseModel):
@@ -36,7 +61,7 @@ class AdminPasswordResetRequest(CamelBaseModel):
     and same reason as SupplierSearchRequest.contact_phone_digits.
     """
 
-    new_password: SkipValidation[str]
+    new_password: SkipValidation[str] = Field(..., repr=False)
 
 
 class AdminPasswordResetResult(CamelBaseModel):

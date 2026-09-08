@@ -4,10 +4,11 @@ The unauthenticated "enter a phone → pick a plot → inspect" flow. NONE of
 these response models ever carry a phone number, a qrKey, GPS, address, or
 yield/plan data — a public caller only sees enough to choose a plot.
 
-The lookup request's `phone` is a plain string here on purpose: it is
-normalized in the ENDPOINT (app/api/v1/public_inspection_access.py), not in a
-Pydantic validator, so a malformed number can never be echoed back inside a
-422 error `input` (docs/security.md §9 — never return/log raw phone).
+The lookup request's credential fields carry NO Pydantic constraints at all
+(round L): every check runs in the ENDPOINT
+(app/api/v1/public_inspection_access.py), because any Pydantic-level rejection
+— a type error, a min_length, a max_length — echoes the offending value in the
+422 body's `input` key (docs/security.md §9 — never return/log raw phone).
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SkipValidation
 
 from app.schemas.base import CamelBaseModel
 
@@ -49,22 +50,50 @@ class PublicInspectionAccessConfigResponse(CamelBaseModel):
 
 
 class PublicPhoneAccessLookupRequest(CamelBaseModel):
-    """POST /public/inspection-access/lookup body. phone is normalized in the
-    endpoint (NOT here) so a bad value is never echoed in a validation error."""
+    """POST /public/inspection-access/lookup body — UNAUTHENTICATED, and every
+    field on it is a farmer's credential.
 
-    phone: str = Field(..., min_length=1, max_length=32)
+    Round L — all three fields are `SkipValidation`, and the shape checks that
+    used to be `Field` constraints run by hand in the endpoint.
+
+    The previous shape carried two assumptions, both of which were WRONG when
+    tested:
+
+      * "phone is normalized in the endpoint (NOT here) so a bad value is
+        never echoed in a validation error" — true of normalize_thai_mobile,
+        but `Field(min_length=1, max_length=32)` is itself a Pydantic-level
+        rejection, and FastAPI's RequestValidationError handler serialises the
+        offending value into the 422 body. A 40-character phone came straight
+        back to the caller.
+      * "SecretStr so a length violation reports `**********` as the offending
+        input" — it does not. `errors()[i]["input"]` holds the RAW string on a
+        max_length violation, so an over-length password was echoed verbatim.
+
+    Verified before the change:
+
+        M.model_validate({"phone": "081" + "0"*37})
+        -> errors()[0]["input"] == "0810000000000000000000000000000000000000"
+        M.model_validate({"phone": "0812345678", "password": "p"*80})
+        -> errors()[0]["input"] == "pppp…"   (not "**********")
+
+    Same class of bug, and same fix, as PlotAccessPhoneConfig (round 8-17C.1)
+    and AdminPasswordResetRequest.
+    """
+
+    # `repr=False` on all three replaces what SecretStr was doing well: keeping
+    # the value out of `repr(payload)`, so an accidental log of the model — or
+    # a traceback frame that renders locals — cannot print a credential. Unlike
+    # SecretStr it is not a type to coerce to, so it cannot cause a rejection;
+    # the two protections are independent and this schema now has both.
+    phone: SkipValidation[str] = Field(..., repr=False)
     # Round 8-9C — additive. Optional on the wire so a pre-8-9C client keeps
     # working while PUBLIC_PLOT_PASSWORD_ENFORCEMENT is false; the ENDPOINT
-    # decides whether it is required, never this schema.
-    #
-    # SecretStr so a length violation reports `**********` as the offending
-    # input instead of the code, and so the field can never be echoed by a repr
-    # or a log formatter. max_length is only a coarse payload boundary — the
-    # real 4-20-ASCII-digit policy runs in the endpoint via the SHARED
+    # decides whether it is required, never this schema. The real
+    # 4-20-ASCII-digit policy runs there too via the SHARED
     # validate_plot_access_password, and its failure is folded into the one
     # generic public error (never "your password is the wrong length").
-    password: SecretStr | None = Field(None, max_length=64)
-    qr_key: str | None = Field(None, min_length=1, max_length=64)
+    password: SkipValidation[str | None] = Field(None, repr=False)
+    qr_key: SkipValidation[str | None] = Field(None, repr=False)
 
 
 class PublicPhoneAccessPlotItem(CamelBaseModel):

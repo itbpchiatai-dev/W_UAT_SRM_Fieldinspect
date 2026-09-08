@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, SkipValidation, field_validator
 
 from app.schemas.base import CamelBaseModel
 
@@ -40,7 +40,13 @@ class DbConnectionCreate(CamelBaseModel):
     port: int = Field(default=5432, ge=1, le=65535)
     database: str = Field(min_length=1, max_length=128)
     username: str = Field(min_length=1, max_length=128)
-    password: str = Field(min_length=1)
+    # Round L — SkipValidation, and checked by hand in the endpoint. Every
+    # other field here can safely carry a Field constraint; this one cannot,
+    # because a Pydantic rejection puts the offending value in the 422 body's
+    # `input` key. `password: str = Field(min_length=1)` echoed the submitted
+    # database password back to the caller on any type mismatch. Same reason
+    # as AdminPasswordResetRequest and PublicPhoneAccessLookupRequest.
+    password: SkipValidation[str] = Field(..., repr=False)
     ssl_mode: SslMode = "prefer"
     is_active: bool = True
     allow_write: bool = False
@@ -54,8 +60,9 @@ class DbConnectionUpdate(CamelBaseModel):
     database: str | None = Field(default=None, min_length=1, max_length=128)
     username: str | None = Field(default=None, min_length=1, max_length=128)
     # Only re-encrypted + stored when a non-empty value is supplied; omit to
-    # keep the existing password.
-    password: str | None = None
+    # keep the existing password. SkipValidation for the same reason as
+    # DbConnectionCreate.password above.
+    password: SkipValidation[str | None] = Field(None, repr=False)
     ssl_mode: SslMode | None = None
     is_active: bool | None = None
     allow_write: bool | None = None

@@ -3,7 +3,12 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    # `main` does not exist on this remote — the repository's only branch is
+    # initial-import, so for its whole life this workflow matched nothing and
+    # never ran once. Both are listed: initial-import is what is actually
+    # pushed today, main stays for the day the repo is renamed/rebased onto
+    # one, so this never silently goes quiet again.
+    branches: [main, initial-import]
 
 env:
   PYTHON_VERSION: '3.12'

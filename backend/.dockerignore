@@ -3,6 +3,16 @@
 __pycache__
 *.pyc
 *.pyo
+# A developer's local virtualenv. The image installs its own dependencies
+# from pyproject.toml, so this is never build input — and it is big enough to
+# matter: with it in the context, buildkit died with a bare "rpc error: EOF"
+# partway through `load build context` on a dev workstation (round G).
+.venv/
+venv/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
 .env
 .env.*
 !.env.example

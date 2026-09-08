@@ -1,0 +1,23 @@
+# Build context excludes.
+#
+# node_modules is not merely large here — it is a CORRECTNESS problem. The
+# Dockerfile runs `COPY package*.json` -> `npm ci` -> `COPY . .`, so a
+# node_modules present in the context is copied OVER the one npm ci just
+# installed, replacing Linux packages with whatever the developer's machine
+# (Windows, a different Node version, different optional deps) happens to
+# hold. It has never bitten because the two machines that build this image
+# have no node_modules on disk — that is luck, not design.
+
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Runtime/secret files. Vite reads .env at build time, but the deploy passes
+# every VITE_* as a build ARG (see docker-compose.yml), and an ARG wins over a
+# .env file. Excluding it removes the ambiguity entirely.
+.env
+.env.*
+!.env.example
+
+*.log

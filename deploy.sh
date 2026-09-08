@@ -2,6 +2,18 @@
 # deploy.sh — Production deploy (hardened: backup + health gate + auto-rollback)
 # รันบน production server: ./deploy.sh
 #
+# ⚠️ ห้ามใช้กับ UAT — ใช้ ./deploy-uat.sh แทน
+#   UAT (/opt/uat_SRM) ไม่ใช่ git repo และ remote ไม่มี branch `main`
+#   สคริปต์นี้จะพังตั้งแต่บรรทัด `git pull origin main`
+#   นอกจากนั้นเครื่อง UAT ยัง build image ไม่ไหว (RAM ว่าง ~480Mi)
+#   ดูรายละเอียดใน deploy-uat.sh
+#
+# ⚠️ pg_dump ด้านล่างจะได้ไฟล์ที่ "ไม่มีข้อมูล" ในตารางที่เปิด RLS
+#   (plots, plot_cycles, records, plot_access_*) โดยไม่ฟ้อง error เลย
+#   เพราะ FORCE row security ทำให้แม้แต่เจ้าของตารางก็ถูกกรอง
+#   ก่อนใช้กับ production ต้องแก้ให้ dump ด้วย DB_APP_USER + app.scope=all
+#   แล้วตรวจด้วย scripts/verify_pg_dump_rows.py — ดูวิธีใน deploy-uat.sh
+#
 # ลำดับ: backup DB -> build image ใหม่ -> migrate -> รอ health -> ถ้าพัง rollback อัตโนมัติ
 # user จะไม่ค้างอยู่บนแอปที่ boot ไม่ขึ้น เพราะถ้า health ไม่ผ่านจะถอยกลับ commit เดิมให้
 #

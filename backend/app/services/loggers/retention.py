@@ -86,7 +86,15 @@ async def drop_old_partitions(db: AsyncSession) -> dict[str, list[str]]:
             if not _IDENT_RE.match(partition_name):
                 # Catalog returned something we won\'t splice into DDL.
                 continue
-            await db.execute(text(f"DROP TABLE IF EXISTS {partition_name}"))
+            # Round H — DROP requires ownership, and the app role does not own
+            # these tables, so the direct `DROP TABLE` this used to issue could
+            # never have worked either. srm_drop_log_partition (migration 0055)
+            # is SECURITY DEFINER and re-validates the name against the log
+            # partition pattern, so it can only ever drop one of these.
+            await db.execute(
+                text("SELECT srm_drop_log_partition(CAST(:p AS text))"),
+                {"p": partition_name},
+            )
             dropped[parent_table].append(partition_name)
 
     await db.commit()

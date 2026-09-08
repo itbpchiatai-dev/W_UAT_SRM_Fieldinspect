@@ -2,7 +2,7 @@
 
 Wires three recurring jobs:
 - registry_telemetry  — daily push to CT App Registry (ดู docs/ops/registry.md §5.2)
-- log_partitions      — monthly: create next 2 months of log partitions
+- log_partitions      — daily: keep 24 months of log partitions ahead (round H)
 - log_retention       — daily: drop partitions older than retention_days
 
 start/stop จาก main.py lifespan.
@@ -19,7 +19,11 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.db.session import get_db_session
 from app.integrations.registry import collect_yesterday_metrics, push_daily_telemetry
-from app.services.loggers.partition_manager import ensure_partitions_exist
+from app.services.loggers.partition_manager import (
+    PARTITION_COVERAGE_WARN_MONTHS,
+    ensure_partitions_exist,
+    months_of_coverage,
+)
 from app.services.loggers.retention import drop_old_partitions
 from app.services.loggers.system_logger import SystemLogger
 
@@ -37,6 +41,15 @@ async def _audit_job(job_name: str) -> AsyncIterator[None]:
     scheduler is firing 3 jobs a day — structlog goes to stdout, not DB,
     so an operator can't see "was last night's retention run OK?"
     from the admin UI.
+
+    Round H — the DB write below is wrapped. system_logs is one of the
+    partitioned tables, so the month the partitions ran out this logger could
+    not write either: the job failed, the attempt to record that failure ALSO
+    failed, and its exception replaced the original one on the way out. Three
+    jobs a day died for a week and produced not one line anywhere. A reporting
+    path must never depend on the thing it reports about, so a logging failure
+    is now written to stdout and swallowed — never allowed to mask the real
+    error or to turn a successful job into a failed one.
     """
     start = time.monotonic()
     caught: Exception | None = None
@@ -46,14 +59,23 @@ async def _audit_job(job_name: str) -> AsyncIterator[None]:
         caught = e
         raise
     finally:
-        async with get_db_session() as db:
-            await SystemLogger(db).log_job(
-                job_name=job_name,
-                status="failure" if caught else "success",
-                duration_ms=int((time.monotonic() - start) * 1000),
-                error=caught,
+        try:
+            async with get_db_session() as db:
+                await SystemLogger(db).log_job(
+                    job_name=job_name,
+                    status="failure" if caught else "success",
+                    duration_ms=int((time.monotonic() - start) * 1000),
+                    error=caught,
+                )
+                await db.commit()
+        except Exception as log_error:  # noqa: BLE001 - see docstring
+            logger.error(
+                "scheduler.job_log_failed",
+                job=job_name,
+                job_failed=caught is not None,
+                job_error=str(caught) if caught else None,
+                log_error=str(log_error),
             )
-            await db.commit()
 
 
 async def _push_yesterday_telemetry() -> None:
@@ -64,11 +86,32 @@ async def _push_yesterday_telemetry() -> None:
 
 
 async def _ensure_log_partitions() -> None:
-    """job: create monthly partitions for log tables (idempotent)."""
+    """job: create monthly partitions for log tables (idempotent).
+
+    Round H — runs DAILY now, not on the 25th. Creating partitions is a
+    no-op catalog check when they already exist, and the previous cadence
+    meant a failure had a whole month to become an outage before the next
+    attempt. It also reports remaining coverage, so the logs say how close
+    the system is to the cliff rather than only that the job ran.
+    """
     async with _audit_job("log_partitions"):
         async with get_db_session() as db:
-            await ensure_partitions_exist(db, months_ahead=2)
-        logger.info("scheduler.partitions.ensured")
+            created = await ensure_partitions_exist(db, months_ahead=24)
+            coverage = await months_of_coverage(db)
+        if coverage < PARTITION_COVERAGE_WARN_MONTHS:
+            # Not an exception: the job did its work. But this is the exact
+            # state that preceded the round-H incident, and it must be loud.
+            logger.error(
+                "scheduler.partitions.coverage_low",
+                months_remaining=coverage,
+                created=created,
+            )
+        else:
+            logger.info(
+                "scheduler.partitions.ensured",
+                months_remaining=coverage,
+                created=created,
+            )
 
 
 async def _run_log_retention() -> None:
@@ -93,7 +136,9 @@ def start_scheduler() -> None:
     )
     _scheduler.add_job(
         _ensure_log_partitions,
-        CronTrigger(day=25, hour=2, minute=0),  # วันที่ 25 ของทุกเดือน
+        # Round H — daily, not monthly. Idempotent and cheap; a monthly
+        # cadence gave a broken run a month to turn into an outage.
+        CronTrigger(hour=2, minute=0),  # ตี 2 ของทุกวัน
         id="log_partitions",
         replace_existing=True,
     )

@@ -74,11 +74,45 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, str]:
+        # Deliberately touches nothing: this is the container's healthcheck,
+        # so anything it depends on can restart-loop the app. Round H's
+        # partition check is a SEPARATE route for exactly that reason.
         return {
             "status": "ok",
             "project": settings.APP_NAME,
             "env": settings.APP_ENV,
             "version": "0.1.0",
+        }
+
+    @app.get("/health/partitions", tags=["health"])
+    async def health_partitions() -> dict[str, object]:
+        """How many months of log partitions remain.
+
+        Round H — when they run out, every audited write in the system starts
+        failing and rolling back its caller's transaction. That happened on
+        2026-09-01 and went unnoticed for a week, so the state now has a
+        place to be read from.
+
+        NOT wired into /health above, and never used as the container's
+        healthcheck: this one queries the database, and letting a DB hiccup
+        (or a genuinely low count) restart the app would turn a warning into
+        the outage it is meant to prevent. Returns 200 either way — `status`
+        carries the answer, callers decide what to do about it.
+        """
+        from app.db.session import get_db_session
+        from app.services.loggers.partition_manager import (
+            PARTITION_COVERAGE_WARN_MONTHS,
+            months_of_coverage,
+        )
+
+        try:
+            async with get_db_session() as db:
+                months = await months_of_coverage(db)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never raises
+            return {"status": "unknown", "error": str(exc)}
+        return {
+            "status": "ok" if months >= PARTITION_COVERAGE_WARN_MONTHS else "warning",
+            "monthsRemaining": months,
         }
 
     return app

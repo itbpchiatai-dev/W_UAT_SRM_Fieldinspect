@@ -496,32 +496,18 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
   // Action-count summary for the completed banner — derived from the JSON
   // preview rows (never re-parsed from the xlsx): commit-report revalidated
   // server-side and the whole file succeeded, so every row's action counts.
-  // A start_next_cycle row (round 8-2.7.1) is bucketed by the server's
-  // resolvedAction — read directly from the report contract, never guessed
-  // client-side — so it lands in whichever of the two existing buckets
-  // (startedCycles/rolledOverCycles) actually happened.
+  //
+  // Round K — one bucket per offered action. The startedCycles /
+  // rolledOverCycles / reactivatedPlots buckets, and the resolvedAction
+  // indirection that fed two of them, are gone with the actions themselves:
+  // once those rows stopped importing, every one of them could only ever
+  // read 0, and the banner was showing that 0 to the user on every import.
   const completedSummary = preview ? {
     createdPlots: preview.rows.filter((r) => r.action === 'create_plot_with_cycle').length,
-    startedCycles: preview.rows.filter((r) =>
-      r.action === 'start_new_cycle'
-      || (r.action === 'start_next_cycle' && r.resolvedAction === 'start_new_cycle')).length,
     updatedCycles: preview.rows.filter((r) => r.action === 'update_current_cycle').length,
-    rolledOverCycles: preview.rows.filter((r) =>
-      r.action === 'close_and_start_new_cycle'
-      || (r.action === 'start_next_cycle' && r.resolvedAction === 'close_and_start_new_cycle')).length,
-    // Round 8-6J — reactivate_plot_with_cycle is unambiguous (never a
-    // resolvedAction bucket like start_next_cycle), so a direct action count.
-    reactivatedPlots: preview.rows.filter((r) => r.action === 'reactivate_plot_with_cycle').length,
-    // Round 8-7A/8-7B — final_plot is likewise unambiguous (its own literal
-    // action, never a resolvedAction bucket).
     finalizedPlots: preview.rows.filter((r) => r.action === 'final_plot').length,
     total: preview.rows.length,
   } : null;
-
-  // Round 8-6J Part I — true when the file has at least one reactivate row,
-  // so the Preview shows one aggregate warning rather than repeating the
-  // same sentence on every matching row.
-  const hasReactivateRow = preview?.rows.some(isReactivateRow) ?? false;
 
   // Round 8-21B — true when the file has at least one update_current_cycle
   // row, so the blank-clears warning for the three Oracle reference columns
@@ -730,10 +716,9 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                   <p className="mt-0.5 text-xs">ข้อมูลทุกแถวถูกนำเข้าเรียบร้อยแล้ว</p>
                   {completedSummary && (
                     <p className="mt-1 text-xs">
-                      สร้างแปลง {completedSummary.createdPlots} · เริ่มรอบปลูก {completedSummary.startedCycles} ·
-                      แก้รอบปลูก {completedSummary.updatedCycles} · จบรอบเดิม+เริ่มใหม่ {completedSummary.rolledOverCycles} ·
-                      เปิดใช้งานแปลง {completedSummary.reactivatedPlots} ·
-                      ลงผลผลิตสุดท้ายและปิดรอบ {completedSummary.finalizedPlots} แปลง ·
+                      สร้างแปลง {completedSummary.createdPlots} ·
+                      แก้รอบปลูก {completedSummary.updatedCycles} ·
+                      ลงผลผลิตสุดท้ายและปิดรอบ {completedSummary.finalizedPlots} ·
                       รวมทั้งหมด {completedSummary.total}
                     </p>
                   )}
@@ -786,16 +771,6 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
                   {reportButtonLabel}
                 </button>
               </div>
-
-              {hasReactivateRow && (
-                <p className="flex items-start gap-2 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                  <Unlock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>
-                    เมื่อยืนยันนำเข้า ระบบจะเปิดแปลงนี้กลับมาใช้งานและเริ่มรอบปลูกใหม่
-                    ({completedSummary?.reactivatedPlots ?? 0} แปลง) — Download/ตรวจสอบไฟล์ยังไม่เปลี่ยนสถานะแปลงใดๆ
-                  </span>
-                </p>
-              )}
 
               {/* Round 8-21B — shown ONLY when the file has an
                   update_current_cycle row: the three Oracle reference columns

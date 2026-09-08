@@ -1273,22 +1273,15 @@ def _parse_preview_state(raw: str | None) -> PlotImportPreviewState | None:
         state = PlotImportPreviewState.model_validate_json(raw)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="previewState ไม่ถูกต้อง") from exc
-    # Round 8-7A.2 — start_next_rows and final_plot_rows are two mutually
-    # exclusive subsets of the SAME uploaded file (one row resolves to at most
-    # one of the two actions), and that file itself is capped at
-    # MAX_IMPORT_ROWS data rows — so checking their COMBINED length against
-    # that same cap is both necessary and sufficient. It strictly implies
-    # each list is individually within the cap too (a non-negative second
-    # list can only push the sum up, never down), so no separate per-list
-    # check is needed on top of this one.
-    if len(state.start_next_rows) + len(state.final_plot_rows) > plot_import.MAX_IMPORT_ROWS:
+    # Round 8-7A.2 — final_plot_rows is a subset of the SAME uploaded file,
+    # and that file is capped at MAX_IMPORT_ROWS data rows, so the same cap
+    # applies here. (Round K — start_next_rows was the other subset; it went
+    # with the action that produced it.)
+    if len(state.final_plot_rows) > plot_import.MAX_IMPORT_ROWS:
         raise HTTPException(status_code=422, detail="previewState มีจำนวนแถวเกินกำหนด")
-    # Round 8-7A.2 — rowNumber must be unique across BOTH lists combined (a
-    # duplicate within one list, or the same number appearing in both, is
-    # equally a malformed snapshot the service should never have to reason
-    # about under lock).
-    row_numbers = [r.row_number for r in state.start_next_rows]
-    row_numbers += [r.row_number for r in state.final_plot_rows]
+    # Round 8-7A.2 — rowNumber must be unique: a duplicate is a malformed
+    # snapshot the service should never have to reason about under lock.
+    row_numbers = [r.row_number for r in state.final_plot_rows]
     if len(row_numbers) != len(set(row_numbers)):
         raise HTTPException(status_code=422, detail="previewState มีเลขแถวซ้ำกัน")
     return state

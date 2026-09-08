@@ -977,13 +977,13 @@ export interface PlotImportPreview {
 }
 
 export interface PlotImportCommitResult {
+  // Round K — one counter per offered action. startedCycles,
+  // rolledOverCycles and reactivatedPlots went with the actions that
+  // produced them.
   createdPlots: number;
-  startedCycles: number;
   updatedCycles: number;
-  rolledOverCycles: number;
   // Round 8-7A — count of final_plot rows executed (cycle closed + actual
-  // harvest recorded). Additive/required since the backend always returns it
-  // (default 0), matching rolledOverCycles' existing style.
+  // harvest recorded). Always returned by the backend (default 0).
   finalizedPlots: number;
   skippedRows: number;
   rowResults: PlotImportRowResult[];

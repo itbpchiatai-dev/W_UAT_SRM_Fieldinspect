@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.schemas.plot_import import PlotImportPreviewState, PlotImportPreviewStateRow
+from app.schemas.plot_import import PlotImportPreviewState
 from app.services import plot_import
 from app.services.excel_workbook import build_xlsx
 from app.services.plot_import import (
@@ -182,71 +182,6 @@ async def test_create_requires_plot_name() -> None:
     assert "plotName" in pv.rows[0].message
 
 
-async def test_start_new_cycle_needs_existing_active_plot_without_active_cycle() -> None:
-    ok = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001", plotName=None)],
-        plot=_plot(), active=None,
-    )
-    assert ok.rows[0].status == "valid"
-
-    bad = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001")],
-        plot=_plot(), active=_cycle(),
-    )
-    assert bad.rows[0].status == "error"
-    assert "เปิดอยู่แล้ว" in bad.rows[0].message
-
-
-async def test_start_new_cycle_error_explains_both_workflows() -> None:
-    # round 8-2.2: when a plot already has an active cycle, start_new_cycle's
-    # error must guide the user to the RIGHT action for each intent — the next
-    # cycle (close_and_start_new_cycle) AND editing the current one
-    # (update_current_cycle) — not only the latter.
-    pv = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001")],
-        plot=_plot(), active=_cycle(),
-    )
-    msg = pv.rows[0].message
-    assert pv.rows[0].status == "error"
-    assert "close_and_start_new_cycle" in msg
-    assert "update_current_cycle" in msg
-
-
-async def test_start_new_cycle_error_names_the_active_cycle_no_extra_query() -> None:
-    # Round 8-2.7: name the already-open cycle in the message using data the
-    # validator already loaded (get_active_cycle_for_plot) — no extra query.
-    # Prefers cycle_label; falls back to "รอบที่ {cycle_no}" when unlabelled.
-    pv = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001")],
-        plot=_plot(), active=_cycle(cycle_label="jun2026"),
-    )
-    assert "jun2026" in pv.rows[0].message
-
-    pv2 = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001")],
-        plot=_plot(), active=_cycle(cycle_label=None, cycle_no=3),
-    )
-    assert "รอบที่ 3" in pv2.rows[0].message
-
-
-async def test_start_new_cycle_errors_when_plot_missing() -> None:
-    pv = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P404")],
-        plot=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "ไม่พบแปลง" in pv.rows[0].message
-
-
-async def test_start_new_cycle_errors_when_plot_inactive() -> None:
-    pv = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001")],
-        plot=_plot(is_active=False), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "ปิดถาวร" in pv.rows[0].message
-
-
 async def test_update_current_cycle_needs_active_cycle() -> None:
     ok = await _preview(
         [_create_row(action="update_current_cycle", plotCode="P002")],
@@ -264,50 +199,6 @@ async def test_update_current_cycle_needs_active_cycle() -> None:
 
 
 # --- close_and_start_new_cycle (rollover) validation ----------------------
-
-async def test_rollover_valid_when_plot_has_active_cycle() -> None:
-    pv = await _preview(
-        [_create_row(action="close_and_start_new_cycle", plotCode="P003")],
-        plot=_plot(), active=_cycle(),
-    )
-    assert pv.rows[0].status == "valid"
-    assert pv.rows[0].active_cycle_id is not None
-
-
-async def test_rollover_errors_when_no_active_cycle() -> None:
-    pv = await _preview(
-        [_create_row(action="close_and_start_new_cycle", plotCode="P003")],
-        plot=_plot(), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "ไม่พบรอบปลูกที่เปิดอยู่สำหรับปิดรอบ" in pv.rows[0].message
-
-
-async def test_rollover_errors_when_plot_missing() -> None:
-    pv = await _preview(
-        [_create_row(action="close_and_start_new_cycle", plotCode="P404")],
-        plot=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "ไม่พบแปลง" in pv.rows[0].message
-
-
-async def test_rollover_errors_when_plot_inactive() -> None:
-    pv = await _preview(
-        [_create_row(action="close_and_start_new_cycle", plotCode="P003")],
-        plot=_plot(is_active=False), active=_cycle(),
-    )
-    assert pv.rows[0].status == "error"
-    assert "ปิดถาวร" in pv.rows[0].message
-
-
-async def test_rollover_requires_plots_update_permission() -> None:
-    pv = await _preview(
-        [_create_row(action="close_and_start_new_cycle", plotCode="P003")],
-        ctx=_ctx(can_update=False), plot=_plot(), active=_cycle(),
-    )
-    assert pv.rows[0].status == "error"
-    assert "plots.update" in pv.rows[0].message
 
 
 # --- scope + permission ---------------------------------------------------
@@ -343,15 +234,6 @@ async def test_create_action_requires_plots_create_permission() -> None:
     assert "plots.create" in pv.rows[0].message
 
 
-async def test_start_and_update_require_plots_update_permission() -> None:
-    pv = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001")],
-        ctx=_ctx(can_update=False), plot=_plot(), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "plots.update" in pv.rows[0].message
-
-
 # --- duplicate rows -------------------------------------------------------
 
 async def test_duplicate_plot_rows_both_error() -> None:
@@ -364,38 +246,6 @@ async def test_duplicate_plot_rows_both_error() -> None:
 
 
 # --- commit (execution, all-or-nothing) -----------------------------------
-
-async def test_commit_create_plot_with_cycle_calls_create_plot_and_cycle() -> None:
-    created_plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=None)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock(return_value=created_plot)) as m_create_plot, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create_cycle:
-        result = await commit_import(object(), _xlsx([_create_row()]), ctx=_ctx())
-
-    m_create_plot.assert_awaited_once()
-    m_create_cycle.assert_awaited_once()
-    assert result.created_plots == 1
-    assert result.started_cycles == 0 and result.updated_cycles == 0
-
-
-async def test_commit_start_new_cycle_clears_snapshot_and_no_plot_create() -> None:
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create_cycle, \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as m_clear:
-        result = await commit_import(
-            object(), _xlsx([_create_row(action="start_new_cycle", plotCode="P001")]), ctx=_ctx(),
-        )
-
-    m_create_plot.assert_not_awaited()
-    m_create_cycle.assert_awaited_once()
-    m_clear.assert_awaited_once()
-    assert result.started_cycles == 1
 
 
 async def test_commit_update_current_cycle_updates_and_syncs_not_clears() -> None:
@@ -416,62 +266,6 @@ async def test_commit_update_current_cycle_updates_and_syncs_not_clears() -> Non
     m_sync.assert_awaited_once()
     m_clear.assert_not_awaited()  # a plan edit must NOT wipe the inspection snapshot
     assert result.updated_cycles == 1
-
-
-async def test_commit_rollover_closes_harvested_then_creates_and_clears() -> None:
-    plot = _plot()
-    active = _cycle()
-    uid = uuid4()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create_cycle, \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot, \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as m_clear:
-        result = await commit_import(
-            object(),
-            _xlsx([_create_row(action="close_and_start_new_cycle", plotCode="P003")]),
-            ctx=ImportContext(
-                allowed_supplier_id=None, can_create=True, can_update=True, user_id=uid,
-            ),
-        )
-
-    # Closes the OLD active cycle as harvested, stamping the caller as closer.
-    m_close.assert_awaited_once()
-    _, close_kwargs = m_close.call_args
-    assert close_kwargs["status"] == "harvested"
-    assert close_kwargs["closed_by_id"] == uid
-    assert close_kwargs["reason"] == plot_import.ROLLOVER_CLOSE_REASON
-    # Opens a fresh cycle; never creates a plot; clears the inspection snapshot.
-    m_create_cycle.assert_awaited_once()
-    m_create_plot.assert_not_awaited()
-    m_clear.assert_awaited_once()
-    assert result.rolled_over_cycles == 1
-    assert result.created_plots == 0 and result.started_cycles == 0 and result.updated_cycles == 0
-
-
-async def test_commit_rollover_raises_if_active_cycle_vanished_before_commit() -> None:
-    # Validated with an active cycle, but it's gone by the time the locked
-    # re-fetch runs (raced closed) → the whole file must fail (rollback), not
-    # silently skip.
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=_cycle())
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create_cycle:
-        with pytest.raises(ImportFileError, match="หายไประหว่างนำเข้า"):
-            await commit_import(
-                object(),
-                _xlsx([_create_row(action="close_and_start_new_cycle", plotCode="P003")]),
-                ctx=_ctx(),
-            )
-
-    m_close.assert_not_awaited()
-    m_create_cycle.assert_not_awaited()
 
 
 async def test_commit_all_or_nothing_when_any_row_invalid() -> None:
@@ -563,25 +357,6 @@ async def test_commit_raises_when_existing_plot_deactivated_before_lock() -> Non
                 ctx=_ctx(),
             )
     m_update.assert_not_awaited()
-
-
-async def test_commit_start_rechecks_no_active_cycle_after_lock() -> None:
-    """START was validated with NO active cycle, but a concurrent
-    transaction opened one before this file's plot lock was acquired — the
-    whole import fails rather than silently attempting a second active
-    cycle (the partial unique index remains the final backstop for any
-    path that somehow misses this check)."""
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=_cycle())), \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create_cycle:
-        with pytest.raises(ImportFileError, match="เกิดขึ้นระหว่างนำเข้า"):
-            await commit_import(
-                object(), _xlsx([_create_row(action="start_new_cycle", plotCode="P001")]), ctx=_ctx(),
-            )
-    m_create_cycle.assert_not_awaited()
 
 
 def test_import_locks_plot_before_any_cycle_call_in_source() -> None:
@@ -826,42 +601,6 @@ def _matching_active_cycle(**over) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-async def test_rollover_exact_plan_match_is_duplicate_error() -> None:
-    pv = await _preview([_rollover_plan_row()], plot=_plot(), active=_matching_active_cycle())
-    assert pv.rows[0].status == "error"
-    msg = pv.rows[0].message
-    # (2) explains the anti-duplicate protection; (3) suggests update_current_cycle
-    assert "จบรอบซ้ำ" in msg
-    assert "ตรงกับรอบปลูกที่เปิดอยู่" in msg
-    assert "update_current_cycle" in msg
-
-
-async def test_rollover_valid_when_only_cycle_label_differs() -> None:
-    pv = await _preview([_rollover_plan_row(cycleLabel="qa-cycle-5")],
-                        plot=_plot(), active=_matching_active_cycle())
-    assert pv.rows[0].status == "valid"
-
-
-async def test_rollover_valid_when_only_planting_date_differs() -> None:
-    pv = await _preview([_rollover_plan_row(plantingDate="2026-09-01")],
-                        plot=_plot(), active=_matching_active_cycle())
-    assert pv.rows[0].status == "valid"
-
-
-async def test_rollover_valid_when_only_crop_differs() -> None:
-    pv = await _preview([_rollover_plan_row(crop="เมล่อน")],
-                        plot=_plot(), active=_matching_active_cycle())
-    assert pv.rows[0].status == "valid"
-
-
-async def test_rollover_decimal_scale_difference_still_counts_as_match() -> None:
-    # Decimal("1600.00") (row) vs Decimal("1600") (cycle) — same value → duplicate.
-    pv = await _preview([_rollover_plan_row(expectedYieldFull="1600.00")],
-                        plot=_plot(), active=_matching_active_cycle(expected_yield_full=Decimal("1600")))
-    assert pv.rows[0].status == "error"
-    assert "จบรอบซ้ำ" in pv.rows[0].message
-
-
 async def test_rollover_whitespace_in_cycle_value_still_matches() -> None:
     # Cycle side carries stray whitespace; normalization trims it → still a match.
     pv = await _preview([_rollover_plan_row(crop="พริก")],
@@ -881,47 +620,6 @@ async def test_update_current_cycle_with_matching_plan_stays_valid() -> None:
     pv = await _preview([_rollover_plan_row(action="update_current_cycle")],
                         plot=_plot(), active=_matching_active_cycle())
     assert pv.rows[0].status == "valid"
-
-
-async def test_start_new_cycle_not_affected_by_duplicate_guard() -> None:
-    # start_new_cycle on a plot with NO active cycle is still valid.
-    pv = await _preview([_rollover_plan_row(action="start_new_cycle")],
-                        plot=_plot(), active=None)
-    assert pv.rows[0].status == "valid"
-
-
-async def test_rollover_duplicate_with_description_row_reports_row3_error() -> None:
-    # Description row (Excel row 2) still skipped; the data row is Excel row 3.
-    p_sup, p_plot, p_active = _patch_lookups(plot=_plot(), active=_matching_active_cycle())
-    with p_sup, p_plot, p_active:
-        pv = await build_preview(object(), _xlsx_with_desc([_rollover_plan_row()]), ctx=_ctx())
-    assert pv.total_rows == 1
-    assert pv.rows[0].row_number == 3
-    assert pv.rows[0].status == "error"
-    assert "จบรอบซ้ำ" in pv.rows[0].message
-
-
-async def test_commit_time_recheck_rejects_duplicate_that_appeared_after_preview() -> None:
-    """Race: validation saw a DIFFERENT active cycle (row is valid), but the
-    plot-locked re-fetch at execute time now matches the row exactly → the
-    commit-time guard rejects, never closing/creating/clearing anything."""
-    plot = _plot()
-    differing = _matching_active_cycle(cycle_label="different-at-preview-time")
-    matching_now = _matching_active_cycle()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=differing)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=matching_now)), \
-         patch(f"{_M}.plot_cycle_repo.rollover_cycle", AsyncMock(return_value=(_cycle(), _cycle(cycle_no=2)))) as m_rollover, \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create, \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as m_clear:
-        with pytest.raises(ImportFileError, match="จบรอบซ้ำ"):
-            await commit_import(object(), _xlsx([_rollover_plan_row()]), ctx=_ctx())
-    m_rollover.assert_not_awaited()
-    m_close.assert_not_awaited()
-    m_create.assert_not_awaited()
-    m_clear.assert_not_awaited()
 
 
 async def test_mixed_batch_with_duplicate_rollover_fails_all_or_nothing() -> None:
@@ -952,11 +650,6 @@ async def test_mixed_batch_with_duplicate_rollover_fails_all_or_nothing() -> Non
 
 # --- round 8-2.4: structured error code + result cycle no + raw ------------
 
-async def test_preview_row_carries_duplicate_error_code() -> None:
-    pv = await _preview([_rollover_plan_row()], plot=_plot(), active=_matching_active_cycle())
-    assert pv.rows[0].status == "error"
-    assert pv.rows[0].error_code == "duplicate_rollover"
-
 
 async def test_preview_valid_row_has_no_error_code() -> None:
     pv = await _preview([_create_row()], plot=None)
@@ -973,19 +666,6 @@ async def test_commit_create_sets_result_cycle_no() -> None:
     assert result.row_results[0].result_cycle_no == 1
 
 
-async def test_commit_start_sets_result_cycle_no() -> None:
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=2))), \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()):
-        result = await commit_import(
-            object(), _xlsx([_create_row(action="start_new_cycle", plotCode="P001")]), ctx=_ctx())
-    assert result.row_results[0].result_cycle_no == 2
-
-
 async def test_commit_update_sets_result_cycle_no() -> None:
     plot = _plot()
     active = _cycle(cycle_no=3)
@@ -998,20 +678,6 @@ async def test_commit_update_sets_result_cycle_no() -> None:
         result = await commit_import(
             object(), _xlsx([_create_row(action="update_current_cycle", plotCode="P002")]), ctx=_ctx())
     assert result.row_results[0].result_cycle_no == 3
-
-
-async def test_commit_rollover_sets_new_cycle_no() -> None:
-    plot = _plot()
-    active = _cycle(cycle_no=4)  # differs from the create-row plan → not a duplicate
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
-         patch(f"{_M}.plot_cycle_repo.rollover_cycle",
-               AsyncMock(return_value=(active, _cycle(cycle_no=5)))):
-        result = await commit_import(
-            object(), _xlsx([_create_row(action="close_and_start_new_cycle", plotCode="P003")]), ctx=_ctx())
-    assert result.row_results[0].result_cycle_no == 5
 
 
 async def test_row_state_keeps_raw_input_for_reporting() -> None:
@@ -1101,350 +767,11 @@ def _preview_state(content: bytes, snapshot_rows: list[dict]) -> PlotImportPrevi
 
 # --- validation --------------------------------------------------------
 
-async def test_start_next_cycle_requires_cycle_label() -> None:
-    pv = await _preview(
-        [_start_next_row(cycleLabel=None)], plot=_plot(), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    # Round 8-17A.1 — the start_next_cycle-specific message ("ต้องระบุ
-    # cycleLabel สำหรับ start_next_cycle") was consolidated into the same
-    # unconditional message every _NEW_CYCLE_ACTIONS member now uses.
-    assert "กรุณาระบุชื่อรอบปลูก" in pv.rows[0].message
-
-
-async def test_start_next_cycle_blank_cycle_label_after_trim_is_also_missing() -> None:
-    pv = await _preview(
-        [_start_next_row(cycleLabel="   ")], plot=_plot(), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "กรุณาระบุชื่อรอบปลูก" in pv.rows[0].message
-
-
-async def test_start_next_cycle_errors_when_plot_missing() -> None:
-    pv = await _preview([_start_next_row()], plot=None)
-    assert pv.rows[0].status == "error"
-    assert "ไม่พบแปลง" in pv.rows[0].message
-    assert "create_plot_with_cycle" in pv.rows[0].message
-
-
-async def test_start_next_cycle_errors_when_plot_inactive() -> None:
-    pv = await _preview(
-        [_start_next_row()], plot=_plot(is_active=False), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "ปิดใช้งานอยู่" in pv.rows[0].message
-
-
-async def test_start_next_cycle_no_active_cycle_resolves_to_start() -> None:
-    pv = await _preview([_start_next_row()], plot=_plot(), active=None)
-    row = pv.rows[0]
-    assert row.status == "valid"
-    assert row.resolved_action == "start_new_cycle"
-    assert row.current_cycle_no is None
-    assert row.current_cycle_label is None
-
-
-async def test_start_next_cycle_active_cycle_different_label_resolves_to_rollover() -> None:
-    active = _cycle(cycle_no=7, cycle_label="aug2026")
-    pv = await _preview(
-        [_start_next_row(cycleLabel="sep2026")], plot=_plot(), active=active,
-    )
-    row = pv.rows[0]
-    assert row.status == "valid"
-    assert row.resolved_action == "close_and_start_new_cycle"
-    assert row.current_cycle_no == 7
-    assert row.current_cycle_label == "aug2026"
-
-
-async def test_start_next_cycle_same_active_cycle_label_errors() -> None:
-    active = _cycle(cycle_no=7, cycle_label="sep2026")
-    pv = await _preview(
-        [_start_next_row(cycleLabel="sep2026")], plot=_plot(), active=active,
-    )
-    row = pv.rows[0]
-    assert row.status == "error"
-    assert row.error_code == "same_active_cycle_label"
-    assert "update_current_cycle" in row.message
-    assert row.resolved_action is None  # never resolves when blocked
-
-
-async def test_start_next_cycle_label_match_is_trimmed_and_case_insensitive() -> None:
-    active = _cycle(cycle_no=7, cycle_label="Sep2026")
-    pv = await _preview(
-        [_start_next_row(cycleLabel="  sep2026  ")], plot=_plot(), active=active,
-    )
-    row = pv.rows[0]
-    assert row.status == "error"
-    assert row.error_code == "same_active_cycle_label"
-
-
-async def test_start_next_cycle_same_label_message_explains_cause_and_fix() -> None:
-    """Round 8-6A Part G — the visible message must name cycleLabel
-    explicitly, say it's a DUPLICATE with the currently-open cycle (not just
-    "matches"), and still point at update_current_cycle as the fix. errorCode
-    and the trim/case-insensitive comparison itself are unchanged (see the
-    tests directly above/below)."""
-    active = _cycle(cycle_no=7, cycle_label="sep2026")
-    pv = await _preview(
-        [_start_next_row(cycleLabel="sep2026")], plot=_plot(), active=active,
-    )
-    row = pv.rows[0]
-    assert row.error_code == "same_active_cycle_label"
-    assert "cycleLabel" in row.message
-    assert "ซ้ำ" in row.message
-    assert "ชื่อรอบใหม่" in row.message
-    assert "update_current_cycle" in row.message
-
-
-async def test_start_next_cycle_preview_duplicate_label_never_calls_write_helpers() -> None:
-    """Part I item 31 — Preview is read-only by construction (build_preview
-    never references the commit write helpers at all), pinned explicitly here
-    so a future refactor can't accidentally wire a write call into the
-    preview path without a test catching it."""
-    active = _cycle(cycle_no=7, cycle_label="sep2026")
-    with patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock()) as m_create, \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot:
-        pv = await _preview(
-            [_start_next_row(cycleLabel="sep2026")], plot=_plot(), active=active,
-        )
-    assert pv.rows[0].error_code == "same_active_cycle_label"
-    m_close.assert_not_awaited()
-    m_create.assert_not_awaited()
-    m_create_plot.assert_not_awaited()
-
-
-async def test_start_next_cycle_commit_with_same_label_error_mutates_nothing() -> None:
-    """Part I item 32 — commit_import re-validates first (commit_import_
-    execute step 1) and raises ImportHasErrors on ANY row error, including a
-    same_active_cycle_label row, before locking or executing anything."""
-    active = _cycle(cycle_no=7, cycle_label="sep2026")
-    p_sup, p_plot, p_active = _patch_lookups(plot=_plot(), active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock()) as m_create, \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot:
-        with pytest.raises(ImportHasErrors) as exc:
-            await commit_import(
-                object(), _xlsx([_start_next_row(cycleLabel="sep2026")]), ctx=_ctx(),
-            )
-    assert exc.value.preview.rows[0].error_code == "same_active_cycle_label"
-    m_close.assert_not_awaited()
-    m_create.assert_not_awaited()
-    m_create_plot.assert_not_awaited()
-
-
-async def test_start_next_cycle_out_of_scope_supplier_still_rejected() -> None:
-    sup = _supplier()
-    pv = await _preview(
-        [_start_next_row()], ctx=_ctx(allowed=uuid4()), supplier=sup, plot=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "นอกขอบเขต" in pv.rows[0].message
-
-
-async def test_start_next_cycle_needs_plots_update_permission() -> None:
-    pv = await _preview(
-        [_start_next_row()], ctx=_ctx(can_update=False), plot=_plot(), active=None,
-    )
-    assert pv.rows[0].status == "error"
-    assert "plots.update" in pv.rows[0].message
-    assert "start_next_cycle" in pv.rows[0].message
-
 
 # --- duplicate protection reuse (round 8-2.3) ---------------------------
 
-async def test_start_next_cycle_reuses_duplicate_rollover_full_plan_helper() -> None:
-    """Structural guard: the ACTION_START_NEXT resolution branch reuses
-    _cycle_plan_matches_import / ERROR_CODE_DUPLICATE_ROLLOVER as a second,
-    defense-in-depth layer behind the cycleLabel check (Part C) — it must not
-    reimplement its own duplicate-plan comparison. Note: because cycleLabel is
-    required and must differ from the active cycle's to even reach this
-    branch (any label match is already caught by same_active_cycle_label,
-    which is case-insensitive and therefore strictly broader than the
-    case-sensitive comparison _cycle_plan_matches_import's label component
-    uses), this second layer is not independently reachable through normal
-    input today — it exists purely so the two rollover paths can never drift
-    if that precondition ever changes."""
-    src = Path(plot_import.__file__).read_text(encoding="utf-8")
-    start_next_block = src[src.index("if p.action == ACTION_START_NEXT:"):]
-    start_next_block = start_next_block[:start_next_block.index("\n    return state")]
-    assert "_cycle_plan_matches_import(active, p)" in start_next_block
-    assert "ERROR_CODE_DUPLICATE_ROLLOVER" in start_next_block
-
-
-async def test_start_next_cycle_reupload_after_commit_is_blocked_via_same_label() -> None:
-    # Round 8-2.7.1 Part C/Part I item 18: re-uploading the SAME file after a
-    # successful start_next_cycle rollover commit must be blocked. Since the
-    # just-created cycle's label is now exactly this row's cycleLabel, the
-    # everyday mechanism that catches it is same_active_cycle_label (cycle-
-    # Label is start_next_cycle's one required, distinguishing field) — not
-    # the full 8-field duplicate_rollover match reused above.
-    active_after_commit = _cycle(cycle_no=8, cycle_label="sep2026")
-    pv = await _preview(
-        [_start_next_row(cycleLabel="sep2026")], plot=_plot(), active=active_after_commit,
-    )
-    assert pv.rows[0].status == "error"
-    assert pv.rows[0].error_code == "same_active_cycle_label"
-
 
 # --- commit (execution) --------------------------------------------------
-
-async def test_commit_start_next_cycle_no_active_creates_and_clears_snapshot() -> None:
-    plot = _plot()
-    content = _xlsx([_start_next_row()])
-    # Approved preview: this row resolved to start (no active cycle) — matches
-    # the commit-time locked state, so the snapshot binding passes.
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="start_new_cycle", activeCycleId=None,
-    )])
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))) as m_create_cycle, \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as m_clear:
-        result = await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-
-    m_create_plot.assert_not_awaited()
-    m_create_cycle.assert_awaited_once()
-    m_clear.assert_awaited_once()
-    # Bucketed as started_cycles — resolved_action, not the literal action string.
-    assert result.started_cycles == 1
-    assert result.rolled_over_cycles == 0
-    assert result.row_results[0].result_cycle_no == 1
-
-
-async def test_commit_start_next_cycle_active_uses_shared_rollover_helper() -> None:
-    plot = _plot()
-    active = _cycle(cycle_no=7, cycle_label="aug2026")
-    uid = uuid4()
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    # Approved preview: this row resolved to rollover closing cycle `active` —
-    # commit-time locked state is the SAME cycle id, so the binding passes.
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="close_and_start_new_cycle", activeCycleId=active.id,
-    )])
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=8))) as m_create_cycle, \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot, \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as m_clear:
-        result = await commit_import(
-            object(), content, preview_state=preview_state,
-            ctx=ImportContext(allowed_supplier_id=None, can_create=True, can_update=True, user_id=uid),
-        )
-
-    # Same close→create→clear-snapshot core as close_and_start_new_cycle,
-    # via the shared rollover_cycle helper (Part D) — old cycle closed
-    # harvested, never cancelled; a distinct close reason names this action.
-    m_close.assert_awaited_once()
-    _, close_kwargs = m_close.call_args
-    assert close_kwargs["status"] == "harvested"
-    assert close_kwargs["closed_by_id"] == uid
-    assert close_kwargs["reason"] == plot_import.ROLLOVER_CLOSE_REASON_START_NEXT
-    m_create_cycle.assert_awaited_once()
-    m_create_plot.assert_not_awaited()
-    m_clear.assert_awaited_once()
-    assert result.rolled_over_cycles == 1
-    assert result.started_cycles == 0
-    assert result.row_results[0].result_cycle_no == 8
-    # Records/QR/plot.is_active are never touched by this action (structural
-    # guarantee already pinned file-wide by test_service_never_imports_
-    # record_or_deactivate_or_qr_paths and test_service_only_closes_as_
-    # harvested — both re-verified as still passing for this new branch).
-    assert plot.is_active is True
-
-
-async def test_commit_start_next_cycle_locks_plot_before_active_cycle_in_source() -> None:
-    """Same structural guard as test_import_locks_plot_before_any_cycle_call_
-    in_source, scoped to the ACTION_START_NEXT branch specifically: it must
-    call get_plot_for_update (via the shared _lock_existing_plots pass) before
-    get_active_cycle_for_plot_for_update inside its own branch body."""
-    src = Path(plot_import.__file__).read_text(encoding="utf-8")
-    start_next_def = src.index("if p.action == ACTION_START_NEXT:")
-    branch_body = src[start_next_def:]
-    assert "get_active_cycle_for_plot_for_update" in branch_body
-    # The branch itself never calls get_plot_for_update (that's done once,
-    # up front, by _lock_existing_plots for every action) — confirm the
-    # shared lock helper is defined, and textually precedes _execute_row.
-    assert src.index("async def _lock_existing_plots") < src.index("async def _execute_row")
-
-
-async def test_commit_start_next_cycle_snapshot_match_start_branch_succeeds() -> None:
-    # Snapshot binding round-trip (Part G item 13): preview resolved to start
-    # (no active cycle) and the commit-time locked state agrees → the start
-    # branch executes normally. (The divergent case is the regression tests
-    # in the "preview-state binding" section below.)
-    plot = _plot()
-    content = _xlsx([_start_next_row()])
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="start_new_cycle", activeCycleId=None,
-    )])
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))), \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()):
-        result = await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-
-    assert result.started_cycles == 1
-    assert result.rolled_over_cycles == 0
-
-
-async def test_commit_start_next_cycle_integrity_error_propagates_for_409() -> None:
-    # A genuine DB-level race (the partial unique index backstop) must
-    # propagate uncaught so the endpoint's IntegrityError → 409 handler (same
-    # pattern as every other action) catches it — the service never swallows it.
-    from sqlalchemy.exc import IntegrityError as SAIntegrityError
-
-    plot = _plot()
-    active = _cycle(cycle_no=7, cycle_label="aug2026")
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="close_and_start_new_cycle", activeCycleId=active.id,
-    )])
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()), \
-         patch(f"{_M}.plot_cycle_repo.create_cycle",
-               AsyncMock(side_effect=SAIntegrityError("stmt", {}, Exception("dup")))):
-        with pytest.raises(SAIntegrityError):
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-
-
-async def test_commit_start_next_cycle_failure_after_close_propagates_for_rollback() -> None:
-    # If create_cycle fails AFTER close_cycle succeeded, the exception must
-    # still propagate (never swallowed) so get_db's single transaction rolls
-    # BOTH the close and the (never-happened) create back — the plot must
-    # never end up with zero active cycles.
-    plot = _plot()
-    active = _cycle(cycle_no=7, cycle_label="aug2026")
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="close_and_start_new_cycle", activeCycleId=active.id,
-    )])
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
-         patch(f"{_M}.plot_cycle_repo.close_cycle", AsyncMock()) as m_close, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(side_effect=RuntimeError("db boom"))):
-        with pytest.raises(RuntimeError, match="db boom"):
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    m_close.assert_awaited_once()  # close DID run — rollback is the caller's job, not a skip
 
 
 # --- round 8-2.7.2: preview-state binding (digest + resolution snapshot) ---
@@ -1481,305 +808,16 @@ async def test_preview_returns_file_sha256_matching_content() -> None:
     int(pv.preview_state.file_sha256, 16)  # hex-decodable
 
 
-async def test_preview_snapshot_has_one_row_per_start_next_row() -> None:
-    rows = [
-        _start_next_row(plotCode="P003", cycleLabel="a"),
-        _create_row(plotCode="P900"),  # non-start_next → not in snapshot
-        _start_next_row(plotCode="P004", cycleLabel="b"),
-    ]
-    # P003 no active → start; P004 has active → rollover; different plots so
-    # get_plot_by_code/get_active must vary by code.
-    active = _cycle(cycle_no=2, cycle_label="old")
-    plots = {"P003": _plot(), "P004": _plot(), "P900": None}
-    actives = {"P003": None, "P004": active}
-
-    async def _by_code(db, supplier_id, code):
-        return plots[code]
-
-    async def _active(db, plot_id):
-        # map plot id back to code via the plots dict
-        for code, pl in plots.items():
-            if pl is not None and pl.id == plot_id:
-                return actives[code]
-        return None
-
-    with patch(f"{_M}.supplier_repo.get_supplier_by_code", AsyncMock(return_value=_supplier())), \
-         patch(f"{_M}.plot_repo.get_plot_by_code", _by_code), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", _active):
-        pv = await build_preview(object(), _xlsx(rows), ctx=_ctx())
-
-    snap = pv.preview_state.start_next_rows
-    assert len(snap) == 2  # only the two start_next rows
-    by_plot = {r.plot_code: r for r in snap}
-    assert by_plot["P003"].resolved_action == "start_new_cycle"
-    assert by_plot["P003"].active_cycle_id is None
-    assert by_plot["P004"].resolved_action == "close_and_start_new_cycle"
-    assert by_plot["P004"].active_cycle_id == active.id
-
-
 # 5–7: file-level gates (missing state / malformed handled at endpoint / digest).
-
-async def test_commit_start_next_without_preview_state_is_rejected_zero_mutation() -> None:
-    content = _xlsx([_start_next_row()])
-    p_sup, p_plot, p_active = _patch_lookups(plot=_plot(), active=None)
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=_plot())), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         writes["create_plot"] as m_create_plot, writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"], writes["rollover"], writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=None)
-    assert exc.value.reason == "missing_preview_state"
-    m_create_plot.assert_not_awaited()
-    m_create_cycle.assert_not_awaited()
-
-
-async def test_commit_start_next_digest_mismatch_rejected_before_lock_or_execute() -> None:
-    content = _xlsx([_start_next_row()])
-    # Snapshot for a DIFFERENT file (wrong digest) — must reject before locking.
-    stale = _preview_state(_xlsx([_start_next_row(plotCode="P999")]), [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="start_new_cycle", activeCycleId=None,
-    )])
-    p_sup, p_plot, p_active = _patch_lookups(plot=_plot(), active=None)
-    lock_calls: list = []
-
-    async def _lock(db, plot_id):
-        lock_calls.append(plot_id)
-        return _plot()
-
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", _lock), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"], writes["rollover"], writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=stale)
-    assert exc.value.reason == "file_digest_mismatch"
-    assert lock_calls == []  # rejected BEFORE any plot lock
-    m_create_cycle.assert_not_awaited()
 
 
 # 8–12: resolution/identity divergence under lock.
 
-async def test_commit_preview_start_but_commit_finds_active_rejected() -> None:
-    # Part H Case 1: preview saw NO active cycle (resolved start); by commit an
-    # active cycle A exists. Must reject; A stays untouched; no cycle B created.
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="start_new_cycle", activeCycleId=None,
-    )])
-    plot = _plot()
-    active_A = _cycle(cycle_no=3, cycle_label="aug2026")
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)  # preview: none
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active_A)), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"] as m_close, writes["rollover"] as m_rollover, \
-         writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.reason == "resolution_changed"
-    assert exc.value.changed_rows == [2]
-    m_create_cycle.assert_not_awaited()
-    m_close.assert_not_awaited()
-    m_rollover.assert_not_awaited()
-
-
-async def test_commit_preview_rollover_but_commit_finds_no_active_rejected() -> None:
-    # Part H Case 2 (inverse): preview saw active A (resolved rollover); by
-    # commit the plot has NO active cycle. Must reject, zero mutation.
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    active_A = _cycle(cycle_no=3, cycle_label="aug2026")
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="close_and_start_new_cycle", activeCycleId=active_A.id,
-    )])
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active_A)  # preview: A
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"] as m_close, writes["rollover"] as m_rollover, \
-         writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.reason == "resolution_changed"
-    m_create_cycle.assert_not_awaited()
-    m_close.assert_not_awaited()
-    m_rollover.assert_not_awaited()
-
-
-async def test_commit_preview_cycle_A_but_commit_finds_cycle_B_rejected() -> None:
-    # Part H Case 2: preview saw active A; by commit A was closed and B is now
-    # active. activeCycleId differs (A → B) → reject; B stays active.
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    active_A = _cycle(cycle_no=3, cycle_label="aug2026")
-    active_B = _cycle(cycle_no=4, cycle_label="nov2026")
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="close_and_start_new_cycle", activeCycleId=active_A.id,
-    )])
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active_A)  # preview: A
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active_B)), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"] as m_close, writes["rollover"] as m_rollover, \
-         writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.reason == "resolution_changed"
-    assert exc.value.changed_rows == [2]
-    m_close.assert_not_awaited()
-    m_rollover.assert_not_awaited()
-    m_create_cycle.assert_not_awaited()
-
-
-async def test_commit_snapshot_row_identity_mismatch_rejected() -> None:
-    # Snapshot names a DIFFERENT plot for row 2 than the file does → reject
-    # (defense-in-depth on top of the digest, which already guards file edits).
-    content = _xlsx([_start_next_row()])
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P999",  # file says P003
-        resolvedAction="start_new_cycle", activeCycleId=None,
-    )])
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"], writes["rollover"], writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.reason == "resolution_changed"
-    m_create_cycle.assert_not_awaited()
-
-
-async def test_commit_snapshot_missing_start_next_row_rejected() -> None:
-    # File has a start_next row but the snapshot omits it → row-set mismatch.
-    content = _xlsx([_start_next_row()])
-    preview_state = _preview_state(content, [])  # empty snapshot
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"], writes["rollover"], writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.reason == "row_set_mismatch"
-    m_create_cycle.assert_not_awaited()
-
-
-async def test_commit_snapshot_extra_row_rejected() -> None:
-    # Snapshot claims a start_next row the file doesn't have → row-set mismatch.
-    content = _xlsx([_start_next_row()])
-    preview_state = _preview_state(content, [
-        dict(rowNumber=2, supplierCode="SUP001", plotCode="P003",
-             resolvedAction="start_new_cycle", activeCycleId=None),
-        dict(rowNumber=99, supplierCode="SUP001", plotCode="P888",
-             resolvedAction="start_new_cycle", activeCycleId=None),
-    ])
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
-    writes = _no_write_patches()
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"], writes["rollover"], writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.reason == "row_set_mismatch"
-    m_create_cycle.assert_not_awaited()
-
 
 # 14: matching rollover snapshot succeeds (start success covered above).
 
-async def test_commit_snapshot_match_rollover_branch_succeeds() -> None:
-    content = _xlsx([_start_next_row(cycleLabel="sep2026")])
-    active = _cycle(cycle_no=4, cycle_label="aug2026")
-    preview_state = _preview_state(content, [dict(
-        rowNumber=2, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="close_and_start_new_cycle", activeCycleId=active.id,
-    )])
-    plot = _plot()
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    with p_sup, p_plot, p_active, \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
-         patch(f"{_M}.plot_cycle_repo.rollover_cycle",
-               AsyncMock(return_value=(active, _cycle(cycle_no=5)))):
-        result = await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert result.rolled_over_cycles == 1
-
 
 # 15: snapshot verified for ALL rows before the FIRST execute.
-
-async def test_commit_verifies_all_snapshots_before_any_execute() -> None:
-    # Two start_next rows: row 2 matches, row 3 diverges. The mismatch must
-    # abort the whole file with NOTHING executed — not "row 2 committed, row 3
-    # rejected". Proven by asserting create_cycle never ran at all.
-    rows = [_start_next_row(plotCode="P003", cycleLabel="a"),
-            _start_next_row(plotCode="P004", cycleLabel="b")]
-    content = _xlsx(rows)
-    plot3, plot4 = _plot(), _plot()
-    active4 = _cycle(cycle_no=2, cycle_label="old")
-    # Preview: P003 no active (start); P004 active4 (rollover).
-    preview_state = _preview_state(content, [
-        dict(rowNumber=2, supplierCode="SUP001", plotCode="P003",
-             resolvedAction="start_new_cycle", activeCycleId=None),
-        dict(rowNumber=3, supplierCode="SUP001", plotCode="P004",
-             resolvedAction="close_and_start_new_cycle", activeCycleId=active4.id),
-    ])
-    plots = {"P003": plot3, "P004": plot4}
-    preview_actives = {"P003": None, "P004": active4}
-    # Commit-time (locked): P003 still start, but P004's active is now a
-    # DIFFERENT cycle → divergence on row 3.
-    locked_actives = {plot3.id: None, plot4.id: _cycle(cycle_no=9, cycle_label="new")}
-
-    async def _by_code(db, supplier_id, code):
-        return plots[code]
-
-    async def _active(db, plot_id):
-        for code, pl in plots.items():
-            if pl.id == plot_id:
-                return preview_actives[code]
-        return None
-
-    async def _lock(db, plot_id):
-        return plot3 if plot_id == plot3.id else plot4
-
-    async def _active_locked(db, plot_id):
-        return locked_actives[plot_id]
-
-    writes = _no_write_patches()
-    with patch(f"{_M}.supplier_repo.get_supplier_by_code", AsyncMock(return_value=_supplier())), \
-         patch(f"{_M}.plot_repo.get_plot_by_code", _by_code), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", _active), \
-         patch(f"{_M}.plot_repo.get_plot_for_update", _lock), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", _active_locked), \
-         writes["create_plot"], writes["create_cycle"] as m_create_cycle, \
-         writes["close_cycle"], writes["rollover"] as m_rollover, \
-         writes["update_cycle"], writes["clear"]:
-        with pytest.raises(ImportPreviewStateConflict) as exc:
-            await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    assert exc.value.changed_rows == [3]
-    m_create_cycle.assert_not_awaited()  # row 2's start never executed either
-    m_rollover.assert_not_awaited()
 
 
 # 17: legacy four actions commit WITHOUT previewState (backward compatible).
@@ -1795,51 +833,6 @@ async def test_commit_legacy_actions_need_no_preview_state() -> None:
     assert result.created_plots == 1
 
 
-async def test_commit_mixed_file_still_binds_only_start_next_rows() -> None:
-    # A file mixing a legacy create row and a start_next row still requires a
-    # preview_state (because of the start_next row) — but the snapshot only
-    # covers the start_next row; the legacy row needs no snapshot entry.
-    rows = [_create_row(plotCode="P900"), _start_next_row(plotCode="P003", cycleLabel="a")]
-    content = _xlsx(rows)
-    plot3 = _plot()
-
-    async def _by_code(db, supplier_id, code):
-        return {"P900": None, "P003": plot3}[code]
-
-    preview_state = _preview_state(content, [dict(
-        rowNumber=3, supplierCode="SUP001", plotCode="P003",
-        resolvedAction="start_new_cycle", activeCycleId=None,
-    )])
-    with patch(f"{_M}.supplier_repo.get_supplier_by_code", AsyncMock(return_value=_supplier())), \
-         patch(f"{_M}.plot_repo.get_plot_by_code", _by_code), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=plot3)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=None)), \
-         patch(f"{_M}.plot_repo.create_plot", AsyncMock(return_value=_plot())) as m_create_plot, \
-         patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=_cycle(cycle_no=1))), \
-         patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()):
-        result = await commit_import(object(), content, ctx=_ctx(), preview_state=preview_state)
-    m_create_plot.assert_awaited_once()
-    assert result.created_plots == 1
-    assert result.started_cycles == 1
-
-
-def test_commit_verifies_snapshot_before_execute_in_source() -> None:
-    """Structural guard (Part D ordering): _verify_start_next_snapshot must be
-    called BEFORE the execute loop inside commit_import_execute — verifying
-    only after some rows executed would defeat the all-or-nothing guarantee."""
-    src = Path(plot_import.__file__).read_text(encoding="utf-8")
-    body = src[src.index("async def commit_import_execute"):]
-    body = body[:body.index("\n\nasync def commit_import(")]
-    assert "_check_preview_state_file" in body
-    assert "_lock_existing_plots" in body
-    assert "_verify_start_next_snapshot" in body
-    # verify happens before the `for state in states:` execute loop.
-    assert body.index("_verify_start_next_snapshot") < body.index("for state in states:")
-    # digest check happens before locking.
-    assert body.index("_check_preview_state_file") < body.index("_lock_existing_plots")
-
-
 def test_file_digest_is_sha256_and_never_logs_content() -> None:
     import hashlib
     content = b"some file bytes"
@@ -1847,19 +840,6 @@ def test_file_digest_is_sha256_and_never_logs_content() -> None:
 
 
 # --- backward compatibility + contract-wide checks -----------------------
-
-def test_supported_actions_has_seven_actions_including_final_plot() -> None:
-    # Round 8-6H added reactivate_plot_with_cycle (6th); round 8-7A added
-    # final_plot (7th).
-    assert len(plot_import.SUPPORTED_ACTIONS) == 7
-    assert plot_import.ACTION_START_NEXT == "start_next_cycle"
-    assert plot_import.ACTION_REACTIVATE_WITH_CYCLE == "reactivate_plot_with_cycle"
-    assert plot_import.ACTION_FINAL == "final_plot"
-    assert set(plot_import.SUPPORTED_ACTIONS) == {
-        "create_plot_with_cycle", "start_new_cycle", "update_current_cycle",
-        "close_and_start_new_cycle", "start_next_cycle", "reactivate_plot_with_cycle",
-        "final_plot",
-    }
 
 
 async def test_legacy_template_row_two_marker_from_827_still_skipped() -> None:
@@ -2048,34 +1028,6 @@ async def test_legacy_file_without_po_number_column_but_with_pcode_still_valid()
 async def test_create_plot_with_cycle_without_po_is_valid() -> None:
     pv = await _preview(
         [_create_row(poNumber=None)], plot=None,
-    )
-    assert pv.rows[0].status == "valid"
-    assert pv.rows[0].payload.po_number is None
-
-
-async def test_start_new_cycle_without_po_is_valid() -> None:
-    pv = await _preview(
-        [_create_row(action="start_new_cycle", plotCode="P001", plotName=None, poNumber=None)],
-        plot=_plot(), active=None,
-    )
-    assert pv.rows[0].status == "valid"
-    assert pv.rows[0].payload.po_number is None
-
-
-async def test_rollover_without_po_is_valid() -> None:
-    pv = await _preview(
-        [_create_row(action="close_and_start_new_cycle", plotCode="P003", poNumber=None)],
-        plot=_plot(), active=_cycle(),
-    )
-    assert pv.rows[0].status == "valid"
-    assert pv.rows[0].payload.po_number is None
-
-
-async def test_start_next_cycle_without_po_is_valid() -> None:
-    pv = await _preview(
-        [_create_row(action="start_next_cycle", plotCode="P003", cycleLabel="sep2026",
-                     poNumber=None)],
-        plot=_plot(), active=None,
     )
     assert pv.rows[0].status == "valid"
     assert pv.rows[0].payload.po_number is None

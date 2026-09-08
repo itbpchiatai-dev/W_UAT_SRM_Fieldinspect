@@ -195,25 +195,6 @@ class PlotImportCredentialPreviewStateRow(CamelBaseModel):
     intended_change: str  # "set" | "replace"
 
 
-class PlotImportPreviewStateRow(CamelBaseModel):
-    """One start_next_cycle row's resolution as the user saw it in Preview
-    (round 8-2.7.2). The commit re-computes the actual resolution fresh under
-    the plot's row lock and compares against this — if a row would now resolve
-    differently (an active cycle appeared/disappeared/changed since Preview),
-    the whole file is rejected before any mutation, so the user never rolls
-    over a cycle they weren't shown.
-
-    active_cycle_id is the AUTHORITATIVE identity of the cycle a resolved
-    rollover would close — never cycle_label (editable). null ⟺ resolved to
-    start_new_cycle (no active cycle at Preview time)."""
-
-    row_number: int
-    supplier_code: str
-    plot_code: str
-    resolved_action: str  # "start_new_cycle" | "close_and_start_new_cycle"
-    active_cycle_id: UUID | None = None
-
-
 class PlotImportFinalPlotPreviewStateRow(CamelBaseModel):
     """One final_plot row's binding as the user saw it in Preview (round
     8-7A) — mirrors PlotImportPreviewStateRow's role for start_next_cycle,
@@ -253,13 +234,10 @@ class PlotImportPreviewState(CamelBaseModel):
     RLS as before.
 
     file_sha256 binds the expectation to the exact file bytes Previewed;
-    start_next_rows binds each start_next_cycle row to the resolution shown;
-    final_plot_rows (round 8-7A) binds each final_plot row to the plot/cycle/
-    record state shown. Defaulted to an empty list so a pre-8-7A caller/test
-    that only sets start_next_rows is unaffected."""
+    Round K — start_next_rows went with the action it bound. final_plot_rows
+    binds each final_plot row to the plot/cycle/record state shown."""
 
     file_sha256: str
-    start_next_rows: list[PlotImportPreviewStateRow]
     final_plot_rows: list[PlotImportFinalPlotPreviewStateRow] = Field(default_factory=list)
     # Round 8-9B.1 — one entry per row that will set/replace a plot inspection
     # password. Defaulted to an empty list so a pre-8-9B.1 caller/test is
@@ -279,14 +257,12 @@ class PlotImportPreview(CamelBaseModel):
 
 
 class PlotImportCommitResult(CamelBaseModel):
+    # Round K — one counter per offered action. started_cycles,
+    # rolled_over_cycles and reactivated_plots went with the actions that
+    # produced them; they could only ever have read 0 once those rows stopped
+    # importing, and the frontend was showing exactly that to every user.
     created_plots: int
-    started_cycles: int
     updated_cycles: int
-    rolled_over_cycles: int = 0
-    # Round 8-6H — count of reactivate_plot_with_cycle rows executed.
-    # Additive/defaulted so an older client that doesn't know this field
-    # yet is unaffected.
-    reactivated_plots: int = 0
     # Round 8-7A — count of final_plot rows executed (the cycle they closed
     # stays harvested; the plot stays is_active=true). Additive/defaulted so
     # an older client that doesn't know this field yet is unaffected.

@@ -383,37 +383,6 @@ describe('PlotImportModal — preview', () => {
     expect(commitReportMock).toHaveBeenCalledTimes(1);
   });
 
-  it('completed summary splits a resolved start_next_cycle row into started vs rolled-over counts', async () => {
-    previewMock.mockResolvedValue(preview({
-      totalRows: 2, validRows: 2, errorRows: 0,
-      rows: [
-        row({ rowNumber: 3, action: 'start_next_cycle', plotCode: 'P010', resolvedAction: 'start_new_cycle' }),
-        row({
-          rowNumber: 4, action: 'start_next_cycle', plotCode: 'P011',
-          resolvedAction: 'close_and_start_new_cycle', currentCycleNo: 2, currentCycleLabel: 'jul2026',
-        }),
-      ],
-      previewState: {
-        fileSha256: 'd'.repeat(64),
-        startNextRows: [
-          { rowNumber: 3, supplierCode: 'SUP001', plotCode: 'P010', resolvedAction: 'start_new_cycle', activeCycleId: null },
-          { rowNumber: 4, supplierCode: 'SUP001', plotCode: 'P011', resolvedAction: 'close_and_start_new_cycle', activeCycleId: 'cycle-2' },
-        ],
-      } as PlotImportPreview['previewState'],
-    }));
-    commitReportMock.mockResolvedValue({ outcome: 'completed', report: reportFile({ kind: 'completed' }) });
-    renderModal();
-    await doPreview();
-
-    const commitBtn = await screen.findByRole('button', { name: 'ยืนยันนำเข้า' });
-    await waitFor(() => expect((commitBtn as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(commitBtn);
-
-    await screen.findByText('นำเข้าสำเร็จ');
-    expect(screen.getByText(/เริ่มรอบปลูก 1/)).toBeTruthy();
-    expect(screen.getByText(/จบรอบเดิม\+เริ่มใหม่ 1/)).toBeTruthy();
-  });
-
   it('gives a close_and_start_new_cycle row a distinct warning tone in the table (no confirmation modal)', async () => {
     previewMock.mockResolvedValue(preview({
       rows: [row({ action: 'close_and_start_new_cycle', plotCode: 'P003' })],
@@ -669,7 +638,7 @@ describe('PlotImportModal — commit success', () => {
       totalRows: 2, validRows: 2, errorRows: 0,
       rows: [
         row({ rowNumber: 3, action: 'create_plot_with_cycle' }),
-        row({ rowNumber: 4, action: 'close_and_start_new_cycle', plotCode: 'P003' }),
+        row({ rowNumber: 4, action: 'update_current_cycle', plotCode: 'P003' }),
       ],
     }));
     commitReportMock.mockResolvedValue({ outcome: 'completed', report: reportFile({ kind: 'completed' }) });
@@ -682,7 +651,7 @@ describe('PlotImportModal — commit success', () => {
 
     await screen.findByText('นำเข้าสำเร็จ');
     expect(screen.getByText(/สร้างแปลง 1/)).toBeTruthy();
-    expect(screen.getByText(/จบรอบเดิม\+เริ่มใหม่ 1/)).toBeTruthy();
+    expect(screen.getByText(/แก้รอบปลูก 1/)).toBeTruthy();
     expect(screen.getByText(/รวมทั้งหมด 2/)).toBeTruthy();
   });
 
@@ -1399,16 +1368,6 @@ describe('PlotImportModal — reactivate_plot_with_cycle (round 8-6J)', () => {
     expect(screen.queryByText(/สถานะแปลงปัจจุบัน:/)).toBeNull();
   });
 
-  it('shows the reactivation warning banner when the file has a reactivate row', async () => {
-    previewMock.mockResolvedValue(preview({
-      rows: [row({ action: 'reactivate_plot_with_cycle', plotCode: 'P002' })],
-    }));
-    renderModal();
-    await doPreview();
-
-    expect(await screen.findByText(/เมื่อยืนยันนำเข้า ระบบจะเปิดแปลงนี้กลับมาใช้งานและเริ่มรอบปลูกใหม่/)).toBeTruthy();
-  });
-
   it('does NOT show the reactivation warning banner when no row is a reactivate row', async () => {
     previewMock.mockResolvedValue(preview({
       rows: [row({ action: 'create_plot_with_cycle', plotCode: 'P101' })],
@@ -1417,25 +1376,6 @@ describe('PlotImportModal — reactivate_plot_with_cycle (round 8-6J)', () => {
     await doPreview();
 
     expect(screen.queryByText(/เมื่อยืนยันนำเข้า ระบบจะเปิดแปลงนี้กลับมาใช้งานและเริ่มรอบปลูกใหม่/)).toBeNull();
-  });
-
-  it('completed banner shows a เปิดใช้งานแปลง count derived from the preview rows', async () => {
-    previewMock.mockResolvedValue(preview({
-      totalRows: 2, validRows: 2,
-      rows: [
-        row({ rowNumber: 3, action: 'reactivate_plot_with_cycle', plotCode: 'P002' }),
-        row({ rowNumber: 4, action: 'create_plot_with_cycle', plotCode: 'P101' }),
-      ],
-    }));
-    commitReportMock.mockResolvedValue({
-      outcome: 'completed',
-      report: { blob: new Blob(['x']), filename: 'r.xlsx', kind: 'completed', httpStatus: 200 },
-    });
-    renderModal();
-    await doPreview();
-    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันนำเข้า' }));
-
-    expect(await screen.findByText(/เปิดใช้งานแปลง 1/)).toBeTruthy();
   });
 
   it('help copy lists reactivate_plot_with_cycle and the currentPlotStatus column note', () => {
@@ -1742,7 +1682,7 @@ describe('PlotImportModal — final_plot (round 8-7A/8-7B)', () => {
     fireEvent.click(commitBtn);
 
     await screen.findByText('นำเข้าสำเร็จ');
-    expect(screen.getByText(/ลงผลผลิตสุดท้ายและปิดรอบ 1 แปลง/)).toBeTruthy();
+    expect(screen.getByText(/ลงผลผลิตสุดท้ายและปิดรอบ 1/)).toBeTruthy();
   });
 
   // --- Part E regression coverage: round 8-10B's record-drift conflict

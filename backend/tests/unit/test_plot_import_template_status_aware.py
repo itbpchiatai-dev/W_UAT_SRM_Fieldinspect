@@ -210,27 +210,51 @@ async def test_editing_current_plot_status_cell_never_changes_the_row_action():
     from app.services.plot_import import ImportContext, build_preview
     from app.services.excel_workbook import build_xlsx
 
+    # Round K — the vehicle changed from reactivate_plot_with_cycle to
+    # update_current_cycle; the rule under test is the same one and is not
+    # specific to either. The cell now lies in the other direction, which
+    # tests it just as well: it claims the plot is closed while the database
+    # says it is open with a live cycle.
     row = {col: None for col in plot_import.IMPORT_COLUMNS}
     row.update({
-        "action": plot_import.ACTION_REACTIVATE_WITH_CYCLE,
+        "action": plot_import.ACTION_UPDATE,
         "supplierCode": "SUP001", "plotCode": "P002",
-        "cycleLabel": "aug2026", "poNumber": "PO1", "pCode": "PC1",
-        # Lies about the plot being active — must be completely ignored.
-        "currentPlotStatus": _CURRENT_PLOT_STATUS_ACTIVE_LABEL,
+        # update_current_cycle replaces cycle_label in full, so a blank cell
+        # would CLEAR the live cycle's label and is rejected for that reason —
+        # unrelated to the rule under test, so the row carries it.
+        "cycleLabel": "aug2026",
+        "currentPlotStatus": _CURRENT_PLOT_STATUS_INACTIVE_LABEL,
     })
     content = build_xlsx([("plots", [list(plot_import.IMPORT_COLUMNS), list(row.get(c) for c in plot_import.IMPORT_COLUMNS)])])
     ctx = ImportContext(allowed_supplier_id=None, can_create=True, can_update=True, can_reactivate=True)
 
     fake_supplier = SimpleNamespace(id=uuid4(), code="SUP001", is_active=True)
-    fake_plot = SimpleNamespace(id=uuid4(), is_active=False)  # real DB truth: inactive
+    fake_plot = SimpleNamespace(id=uuid4(), is_active=True)  # real DB truth: active
+    # Same shape as the shared _cycle() helper in the other import tests: the
+    # update path reads a lot of the live cycle to build its "unchanged"
+    # comparison, and a missing attribute here fails as an AttributeError that
+    # says nothing about the rule under test.
+    import datetime
+
+    fake_cycle = SimpleNamespace(
+        id=uuid4(), cycle_no=1, cycle_label="aug2026", crop=None, variety=None,
+        # Already carries its Auto Lot, as a live cycle does. Without one the
+        # update path tries to mint a Lot No and fails on missing components,
+        # which has nothing to do with the rule under test.
+        lot_no="aug2026-SUP001-PC1-001", lot_no_source="auto", lot_running_no=1,
+        p_code="PC1", planting_date=None, plant_count=None,
+        expected_yield_full=None, expected_yield_unit=None,
+        po_number=None, supplier_lot_no=None,
+        updated_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+    )
     _M = "app.services.plot_import"
     with patch(f"{_M}.supplier_repo.get_supplier_by_code", AsyncMock(return_value=fake_supplier)), \
          patch(f"{_M}.plot_repo.get_plot_by_code", AsyncMock(return_value=fake_plot)), \
-         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", AsyncMock(return_value=None)), \
+         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", AsyncMock(return_value=fake_cycle)), \
          patch(f"{_M}.plot_cycle_repo.get_cycle_labels_for_plots", AsyncMock(return_value={})):
         preview = await build_preview(AsyncMock(), content, ctx=ctx)
     assert preview.error_rows == 0
-    assert preview.rows[0].action == plot_import.ACTION_REACTIVATE_WITH_CYCLE
+    assert preview.rows[0].action == plot_import.ACTION_UPDATE
 
 
 # --- item 17: blank cells in a reactivate row still carry their style ------

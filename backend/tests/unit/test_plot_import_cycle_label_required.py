@@ -96,10 +96,10 @@ def _base_row(**over) -> dict[str, str]:
 
 # --- every _NEW_CYCLE_ACTIONS member requires cycleLabel --------------------
 
-@pytest.mark.parametrize("action", [
-    "create_plot_with_cycle", "start_new_cycle", "close_and_start_new_cycle",
-    "start_next_cycle", "reactivate_plot_with_cycle",
-])
+# Round K — create_plot_with_cycle is the only action that opens a cycle now,
+# so it is the only one this rule can apply to. The other four are refused
+# before any field check runs (see test_plot_import_retired_actions_round_k).
+@pytest.mark.parametrize("action", ["create_plot_with_cycle"])
 async def test_new_cycle_action_rejects_blank_cycle_label(action: str) -> None:
     plot = None
     active = None

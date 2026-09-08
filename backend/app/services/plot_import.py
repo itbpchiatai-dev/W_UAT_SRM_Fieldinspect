@@ -89,7 +89,6 @@ from app.schemas.plot_import import (
     PlotImportFinalPlotPreviewStateRow,
     PlotImportPreview,
     PlotImportPreviewState,
-    PlotImportPreviewStateRow,
     PlotImportRowPayload,
     PlotImportRowResult,
 )
@@ -149,42 +148,36 @@ ACTION_FINAL = "final_plot"
 RETIRED_ACTIONS: tuple[str, ...] = (
     ACTION_START, ACTION_ROLLOVER, ACTION_START_NEXT, ACTION_REACTIVATE_WITH_CYCLE,
 )
-# What a file may still CONTAIN. Deliberately wider than OFFERED_ACTIONS: a
-# template someone downloaded last week, or an in-flight file already being
-# filled in, keeps importing. Nothing in the app produces these any more.
-SUPPORTED_ACTIONS: tuple[str, ...] = (
-    ACTION_CREATE, ACTION_START, ACTION_UPDATE, ACTION_ROLLOVER, ACTION_START_NEXT,
-    ACTION_REACTIVATE_WITH_CYCLE, ACTION_FINAL,
-)
 
-# What the app OFFERS: the template's rows and examples, the column
-# descriptions, and the import dialog's help text all name exactly these three.
-# This is the user-facing contract round E narrows to — see RETIRED_ACTIONS.
+# The whole import contract: what a file may contain, and what the template,
+# its examples, the column descriptions and the import dialog all name.
 OFFERED_ACTIONS: tuple[str, ...] = (
     ACTION_CREATE, ACTION_UPDATE, ACTION_FINAL,
 )
 
-# New-cycle actions that require pCode nonblank (round 8-13A: poNumber is no
-# longer required here — see the check below) and are subject to the Auto Lot
-# length pre-check (round 8-6H folds reactivate_plot_with_cycle into this
-# existing set rather than repeating it at each call site).
-# ACTION_FINAL is deliberately EXCLUDED — it never opens a cycle, so it has no
-# lot/PO of its own to require.
-_NEW_CYCLE_ACTIONS: tuple[str, ...] = (
-    ACTION_CREATE, ACTION_START, ACTION_ROLLOVER, ACTION_START_NEXT,
-    ACTION_REACTIVATE_WITH_CYCLE,
+# Round K — a retired action gets its OWN message, not "action must be one
+# of...". Until round E these were valid, and files downloaded then are still
+# on people's machines; being told the value is unrecognised would send them
+# looking for a typo that isn't there. It names what to use instead, and says
+# the file needs re-downloading, because the sheet's shape changed too.
+_MSG_RETIRED_ACTION = (
+    "action '{action}' ถูกยกเลิกแล้ว (นโยบาย 1 แปลง = 1 รอบปลูก) — "
+    "ปัจจุบันมี 3 แบบ: create_plot_with_cycle, update_current_cycle, final_plot "
+    "ฤดูถัดไปให้สร้างแปลงใหม่แทนการเปิดรอบใหม่ในแปลงเดิม "
+    "กรุณาดาวน์โหลดเทมเพลตใหม่แล้วกรอกข้อมูลลงในไฟล์นั้น"
 )
 
-# Default close reason stamped on the cycle a rollover closes (round 7.8). The
-# import contract is 18 columns (cycleLabel added round 8.0).
-ROLLOVER_CLOSE_REASON = "Closed by Excel import rollover"
+# New-cycle actions that require pCode nonblank (round 8-13A: poNumber is no
+# longer required here — see the check below) and are subject to the Auto Lot
+# length pre-check.
+#
+# Round K — one member. update_current_cycle edits the cycle a plot already
+# has, and ACTION_FINAL closes one; neither opens a cycle, so neither has a
+# lot/PO of its own to require. Kept as a set rather than folded into an
+# `== ACTION_CREATE` check: it names WHY those rules apply, and the rules are
+# about opening a cycle, not about that one action.
+_NEW_CYCLE_ACTIONS: tuple[str, ...] = (ACTION_CREATE,)
 
-# Close reason for a start_next_cycle row that RESOLVES to a rollover (round
-# 8-2.7.1) — kept distinct from ROLLOVER_CLOSE_REASON (used by the explicit
-# close_and_start_new_cycle action) so the closed cycle's audit trail shows
-# which import action actually triggered the close; nothing depends on the
-# two being equal.
-ROLLOVER_CLOSE_REASON_START_NEXT = "Closed by Excel import start_next_cycle"
 
 # Close reason stamped on the cycle a final_plot row closes (round 8-7A) —
 # its own distinct string, same rationale as ROLLOVER_CLOSE_REASON_START_NEXT.
@@ -610,11 +603,9 @@ class _RowState:
     # cycle_no of the cycle this row created/edited on a successful commit
     # (round 8-2.4) — set by _execute_row. None for preview / errored rows.
     result_cycle_no: int | None = None
-    # start_next_cycle only (round 8-2.7.1): which of the two legacy actions
-    # this row resolves to — ACTION_START (no active cycle) or ACTION_ROLLOVER
-    # (an active cycle exists). Set during validation (a preview/estimate) and
-    # OVERWRITTEN with the real outcome by _execute_row at commit time, since
-    # state may have changed between preview and commit. None for every other
+    # Round K — kept as a read-only echo on the row result (always None now
+    # that no action resolves to another one). The field stays so an older
+    # client reading it is unaffected; nothing sets it.
     # action, and None for a start_next_cycle row that errors before resolving
     # (e.g. same_active_cycle_label).
     resolved_action: str | None = None
@@ -893,7 +884,7 @@ def _parse_row(raw: dict[str, str], columns_present: frozenset[str] = frozenset(
         # constant and the record is resolved from the database. Round
         # 8-10B.1 — scoped to final_plot ONLY. 8-10B stamped this for every
         # action's row (the file's own action column, not yet validated
-        # against SUPPORTED_ACTIONS at this point, so compare the raw string):
+        # against OFFERED_ACTIONS at this point, so compare the raw string):
         # a create_plot_with_cycle/start_new_cycle/... row has no yield to
         # speak of and must echo null, not a fabricated "kg".
         final_yield_unit=FINAL_PLOT_FIXED_YIELD_UNIT if action == ACTION_FINAL else None,
@@ -998,14 +989,6 @@ def _dup_key(p: _Parsed) -> tuple[str, str] | None:
 # parsing the Thai message. Additive; never removes the valid/error status.
 ERROR_CODE_DUPLICATE_ROLLOVER = "duplicate_rollover"
 
-# Shown when a close_and_start_new_cycle row's plan is IDENTICAL to the plot's
-# current active cycle — a probable re-upload of an already-imported file.
-_DUPLICATE_ROLLOVER_MSG = (
-    "ข้อมูลรอบใหม่ตรงกับรอบปลูกที่เปิดอยู่ทั้งหมด ระบบจึงไม่จบรอบซ้ำ "
-    "กรุณาตรวจสอบชื่อรอบปลูก, Lot No และวันที่ปลูก หรือใช้ update_current_cycle "
-    "หากต้องการแก้รอบปัจจุบัน"
-)
-
 
 def _norm_plan_str(v: str | None) -> str | None:
     """Trim + treat blank as None — matches how _str normalizes import cells,
@@ -1016,54 +999,7 @@ def _norm_plan_str(v: str | None) -> str | None:
     return v or None
 
 
-def _cycle_plan_matches_import(cycle: PlotCycle, p: _Parsed) -> bool:
-    """True when ALL 8 planting-plan fields of the plot's active cycle equal
-    the import row's parsed plan — i.e. a close_and_start_new_cycle row that
-    would just recreate the current cycle verbatim (probable duplicate upload).
-    Any single differing field means a genuinely new cycle.
-
-    Deliberately conservative: NO case-folding of crop/variety/unit and NO
-    unit conversion (kg ≠ g); Decimals compare by numeric value so 1600 ==
-    1600.00; blank/whitespace strings normalize to None (both sides).
-
-    Round A — the system lot is no longer part of this comparison: a row cannot
-    carry one any more, so it can never be the single field that makes an
-    otherwise-identical row "genuinely new". Dropping the term makes the guard
-    slightly STRICTER (one less way to look different), which is the safe
-    direction for a duplicate-upload check."""
-    return (
-        _norm_plan_str(cycle.crop) == _norm_plan_str(p.crop)
-        and _norm_plan_str(cycle.variety) == _norm_plan_str(p.variety)
-        and _norm_plan_str(cycle.cycle_label) == _norm_plan_str(p.cycle_label)
-        and cycle.planting_date == p.planting_date
-        and cycle.plant_count == p.plant_count
-        and cycle.expected_yield_full == p.expected_yield_full
-        and _norm_plan_str(cycle.expected_yield_unit) == _norm_plan_str(p.expected_yield_unit)
-    )
-
-
 # --- start_next_cycle resolution (round 8-2.7.1) ---------------------------
-
-# Machine-readable code for a start_next_cycle row whose cycleLabel matches the
-# plot's current active cycle — lets the report/frontend classify this without
-# parsing the Thai message. Distinct from ERROR_CODE_DUPLICATE_ROLLOVER (which
-# compares the FULL 8-field plan): this fires on the label alone, since
-# cycleLabel is the one field start_next_cycle requires precisely so a typo'd
-# resubmission can be caught before it closes the wrong cycle.
-ERROR_CODE_SAME_ACTIVE_CYCLE_LABEL = "same_active_cycle_label"
-
-_SAME_ACTIVE_CYCLE_LABEL_MSG = (
-    "ชื่อรอบปลูก (cycleLabel) ซ้ำกับรอบที่กำลังเปิดอยู่ กรุณาเปลี่ยนเป็นชื่อรอบใหม่ "
-    "หากต้องการแก้ข้อมูลรอบเดิมให้ใช้ update_current_cycle"
-)
-
-# Commit-time-only message (round 8-2.7.1 Part D/H): the plot's active-cycle
-# state changed between preview and this row's commit-time re-check under the
-# plot lock (a same-label collision or a full duplicate plan appeared that
-# preview didn't see) — distinct wording from the preview-time messages above,
-# matching the existing convention that a commit-time race gets its own
-# phrasing (see ACTION_START/ACTION_ROLLOVER's own re-check messages below).
-_RACE_STATE_CHANGED_MSG = "สถานะรอบปลูกมีการเปลี่ยนแปลง กรุณาตรวจสอบไฟล์อีกครั้ง"
 
 
 # Round 8-6J Part E — business decision: a reactivate_plot_with_cycle row's
@@ -1095,19 +1031,6 @@ def _label_reused_in_history_labels(labels: set[str], label: str | None) -> bool
     return any(
         (existing := _norm_plan_str(candidate)) is not None and existing.casefold() == target
         for candidate in labels
-    )
-
-
-def _same_active_cycle_label(cycle: PlotCycle, p: _Parsed) -> bool:
-    """True when the row's cycleLabel matches the active cycle's, after
-    trim + casefold — the case/whitespace-insensitive comparison start_
-    next_cycle's contract requires. Both sides None never counts as a match
-    (an active cycle with no label is not "the same" as any label)."""
-    active_label = _norm_plan_str(cycle.cycle_label)
-    incoming_label = _norm_plan_str(p.cycle_label)
-    return (
-        active_label is not None and incoming_label is not None
-        and active_label.casefold() == incoming_label.casefold()
     )
 
 
@@ -1164,9 +1087,15 @@ async def _validate_row(
     errors.extend(_range_errors(p))
     state = _RowState(row_number=row_no, parsed=p, errors=errors, raw=dict(raw))
 
-    if not p.action or p.action not in SUPPORTED_ACTIONS:
+    if p.action in RETIRED_ACTIONS:
+        # Round K — named separately from "unknown action" on purpose. These
+        # four were valid until round E and still appear in files people
+        # downloaded then, so the message has to say what replaced them
+        # instead of implying the user typed something wrong.
+        errors.append(_MSG_RETIRED_ACTION.format(action=p.action))
+    elif not p.action or p.action not in OFFERED_ACTIONS:
         errors.append(
-            "action ต้องเป็นหนึ่งใน: " + ", ".join(SUPPORTED_ACTIONS)
+            "action ต้องเป็นหนึ่งใน: " + ", ".join(OFFERED_ACTIONS)
         )
     if not p.supplier_code:
         errors.append("ต้องระบุ supplierCode")
@@ -1249,27 +1178,15 @@ async def _validate_row(
     # can still run the actions their permission covers.
     if p.action == ACTION_CREATE and not ctx.can_create:
         errors.append("ต้องมีสิทธิ์ plots.create สำหรับ create_plot_with_cycle")
-    if (
-        p.action in (ACTION_START, ACTION_UPDATE, ACTION_ROLLOVER, ACTION_START_NEXT, ACTION_FINAL)
-        and not ctx.can_update
-    ):
+    if p.action in (ACTION_UPDATE, ACTION_FINAL) and not ctx.can_update:
         errors.append(
-            "ต้องมีสิทธิ์ plots.update สำหรับ start_new_cycle/update_current_cycle/"
-            "close_and_start_new_cycle/start_next_cycle/final_plot"
-        )
-    # Round 8-6H — reactivate_plot_with_cycle requires BOTH the activation
-    # privilege (plots.delete, mirrored by ctx.can_reactivate — same
-    # privilege plain deactivate/reactivate require) AND plots.update (every
-    # other cycle-creating action's requirement). Neither alone is enough; a
-    # Supplier Owner who only has plots.update is denied here exactly like
-    # the API endpoint's stacked require_permission dependencies deny them.
-    if p.action == ACTION_REACTIVATE_WITH_CYCLE and not (ctx.can_reactivate and ctx.can_update):
-        errors.append(
-            "ต้องมีสิทธิ์ plots.delete และ plots.update สำหรับ reactivate_plot_with_cycle"
+            "ต้องมีสิทธิ์ plots.update สำหรับ update_current_cycle/final_plot"
         )
 
     # Stop before DB lookups if the row is already unusable (no action/codes).
-    if not p.action or p.action not in SUPPORTED_ACTIONS or not p.supplier_code or not p.plot_code:
+    # A retired action fails this too — its error is already recorded above,
+    # and there is nothing to look up for a row that will never execute.
+    if not p.action or p.action not in OFFERED_ACTIONS or not p.supplier_code or not p.plot_code:
         return state
 
     supplier = await supplier_repo.get_supplier_by_code(db, p.supplier_code)
@@ -1359,38 +1276,16 @@ async def _validate_row(
         state.needs_master_data_check = True
         return state
 
-    # start_new_cycle / update_current_cycle / close_and_start_new_cycle /
-    # start_next_cycle / reactivate_plot_with_cycle all need an EXISTING
-    # plot; every action except reactivate_plot_with_cycle additionally
-    # needs it ACTIVE (reactivate_plot_with_cycle needs the opposite —
-    # inactive — since reopening an already-active plot makes no sense).
+    # update_current_cycle and final_plot both address an EXISTING, ACTIVE
+    # plot. (create_plot_with_cycle returned above — it has no plot to find.)
     if plot is None:
-        if p.action == ACTION_START_NEXT:
-            # Round 8-2.7.1 Part B item 1: point the user at the right action
-            # instead of the generic message (which still applies to the
-            # three legacy actions unchanged).
-            errors.append(
-                "ไม่พบแปลง (plotCode) สำหรับ Supplier นี้ — หากต้องการสร้างแปลงใหม่ "
-                "ให้ใช้ create_plot_with_cycle"
-            )
-        else:
-            errors.append("ไม่พบแปลง (plotCode) สำหรับ Supplier นี้")
+        errors.append(
+            "ไม่พบแปลง (plotCode) สำหรับ Supplier นี้ — หากต้องการสร้างแปลงใหม่ "
+            "ให้ใช้ create_plot_with_cycle"
+        )
         return state
-    if p.action == ACTION_REACTIVATE_WITH_CYCLE:
-        # Round 8-6H — inverted precondition: this action ONLY runs against
-        # an already-inactive plot. An active plot is a clean per-row error,
-        # never silently reinterpreted as some other action.
-        if plot.is_active:
-            errors.append(
-                "แปลงนี้เปิดใช้งานอยู่แล้ว ไม่ต้องเปิดใช้งานซ้ำ — หากต้องการเริ่มรอบปลูกใหม่ "
-                "ให้ใช้ start_next_cycle"
-            )
-            return state
-    elif not plot.is_active:
-        if p.action == ACTION_START_NEXT:
-            errors.append("แปลงนี้ปิดใช้งานอยู่ ไม่สามารถเริ่มรอบปลูกใหม่ได้")
-        else:
-            errors.append("แปลงนี้ถูกปิดถาวร (inactive) — เริ่ม/แก้รอบปลูกไม่ได้")
+    if not plot.is_active:
+        errors.append("แปลงนี้ถูกปิดถาวร (inactive) — แก้/ปิดรอบปลูกไม่ได้")
         return state
 
     active = await plot_cycle_repo.get_active_cycle_for_plot(db, plot.id)
@@ -1414,18 +1309,11 @@ async def _validate_row(
     # cycle on a reopened plot) — flag for the batched Master Data check.
     if p.action != ACTION_FINAL:
         state.needs_master_data_check = True
-    if p.action == ACTION_START and active is not None:
-        # active is already the loaded PlotCycle for this row's own plot (no
-        # extra query) — naming it in the message helps the user tell whether
-        # they meant the cycle that's already open (round 8-2.7).
-        cycle_ref = active.cycle_label or f"รอบที่ {active.cycle_no}"
-        errors.append(
-            f"แปลงนี้มีรอบปลูกที่เปิดอยู่แล้ว ({cycle_ref}) — หากเป็นรอบเดิมให้ใช้ "
-            "update_current_cycle หรือหากต้องการขึ้นรอบใหม่ให้ใช้ "
-            "close_and_start_new_cycle"
-        )
     if p.action == ACTION_UPDATE and active is None:
-        errors.append("แปลงนี้ยังไม่มีรอบปลูกที่เปิดอยู่ — ใช้ start_new_cycle แทน")
+        errors.append(
+            "แปลงนี้ยังไม่มีรอบปลูกที่เปิดอยู่ — ไม่มีรอบให้แก้ไข "
+            "(1 แปลง = 1 รอบปลูก: ฤดูถัดไปให้สร้างแปลงใหม่)"
+        )
     elif p.action == ACTION_UPDATE and active is not None:
         # Round 8-17A.1 — update_current_cycle replaces cycle_label in full
         # (see the fields dict built in _execute_row: unlike poNumber/pCode,
@@ -1438,56 +1326,6 @@ async def _validate_row(
             errors.append(
                 "กรุณาระบุชื่อรอบปลูก เนื่องจากใช้ระบุรอบและสร้าง Lot No อัตโนมัติ"
             )
-    if p.action == ACTION_ROLLOVER:
-        if active is None:
-            errors.append("ไม่พบรอบปลูกที่เปิดอยู่สำหรับปิดรอบ")
-        elif _cycle_plan_matches_import(active, p):
-            # Probable duplicate re-upload — refuse to close+recreate an
-            # identical cycle (round 8-2.3). Only rollover is guarded;
-            # update_current_cycle with the same plan stays valid/idempotent.
-            errors.append(_DUPLICATE_ROLLOVER_MSG)
-            state.error_code = ERROR_CODE_DUPLICATE_ROLLOVER
-    if p.action == ACTION_START_NEXT:
-        # Round 8-2.7.1 Part B: resolve to whichever legacy action the plot's
-        # CURRENT state calls for. This is a preview-time estimate only —
-        # _execute_row recomputes it fresh under the plot's row lock at
-        # commit time and never trusts this value (Part A).
-        if active is None:
-            state.resolved_action = ACTION_START
-        elif _same_active_cycle_label(active, p):
-            # A typo'd resubmission of the SAME cycle's label would otherwise
-            # silently close it — refuse (Part B item 7 / Part H).
-            errors.append(_SAME_ACTIVE_CYCLE_LABEL_MSG)
-            state.error_code = ERROR_CODE_SAME_ACTIVE_CYCLE_LABEL
-        else:
-            state.resolved_action = ACTION_ROLLOVER
-            state.current_cycle_no = active.cycle_no
-            state.current_cycle_label = active.cycle_label
-            if _cycle_plan_matches_import(active, p):
-                # Defense-in-depth reuse of the round 8-2.3 full-plan guard
-                # (Part C) — the cycleLabel check above already catches the
-                # everyday re-upload case since cycleLabel always differs
-                # once labels don't match, but this stays as a second layer
-                # for any other 7-field-identical scenario.
-                errors.append(_DUPLICATE_ROLLOVER_MSG)
-                state.error_code = ERROR_CODE_DUPLICATE_ROLLOVER
-    if p.action == ACTION_REACTIVATE_WITH_CYCLE:
-        if active is not None:
-            # Defensive (round 8-6H Part A): an inactive plot should never
-            # have an active cycle after the hardened deactivate invariant
-            # (Part B) — this guards against any pre-existing/legacy
-            # inconsistent row rather than silently rolling it over.
-            errors.append(
-                "พบข้อมูลไม่สอดคล้องกัน (แปลงปิดใช้งานแต่มีรอบปลูกที่เปิดอยู่) "
-                "กรุณาติดต่อผู้ดูแลระบบ"
-            )
-        elif p.cycle_label:
-            # Round 8-6K Part B — the actual history lookup is now batched
-            # across every row in the file by _validate_all's second pass
-            # (_apply_cycle_label_history_checks); this row only marks
-            # itself as needing that check (no DB call here — the whole
-            # point is ONE query for every reactivate row, not one per row).
-            state.needs_cycle_label_history_check = True
     if p.action == ACTION_FINAL:
         if active is None:
             errors.append("แปลงนี้ไม่มีรอบปลูกที่เปิดอยู่ จึงไม่สามารถลงผลผลิตสุดท้ายได้")
@@ -1839,17 +1677,6 @@ def _build_preview_state(
     the resolution it was shown (start ⇄ rollover) and the authoritative
     active-cycle id. Errored start_next rows are omitted — they block the
     whole file at commit re-validation anyway, before this is ever checked."""
-    start_next_rows = [
-        PlotImportPreviewStateRow(
-            row_number=s.row_number,
-            supplier_code=s.parsed.supplier_code or "",
-            plot_code=s.parsed.plot_code or "",
-            resolved_action=s.resolved_action or "",
-            active_cycle_id=s.active_cycle_id,
-        )
-        for s in states
-        if s.parsed.action == ACTION_START_NEXT and not s.errors
-    ]
     # Round 8-7A — same "valid rows only" rule as start_next_rows above: an
     # errored final_plot row blocks the whole file at commit re-validation
     # anyway, before this binding is ever consulted. plot/active_cycle_id are
@@ -1889,7 +1716,6 @@ def _build_preview_state(
     ]
     return PlotImportPreviewState(
         file_sha256=file_digest(content),
-        start_next_rows=start_next_rows,
         final_plot_rows=final_plot_rows,
         credential_rows=credential_rows,
     )
@@ -2027,13 +1853,7 @@ async def _lock_existing_plots(
             raise ImportFileError(
                 f"แปลง {row.parsed.plot_code} ถูกปิดใช้งานหรือหายไประหว่างนำเข้า"
             )
-        if row.parsed.action == ACTION_REACTIVATE_WITH_CYCLE:
-            if plot.is_active:
-                raise ImportFileError(
-                    f"แปลง {row.parsed.plot_code} เปิดใช้งานอยู่แล้วระหว่างนำเข้า "
-                    "— ไม่ต้องเปิดใช้งานซ้ำ"
-                )
-        elif not plot.is_active:
+        if not plot.is_active:
             raise ImportFileError(
                 f"แปลง {row.parsed.plot_code} ถูกปิดใช้งานหรือหายไประหว่างนำเข้า"
             )
@@ -2129,162 +1949,6 @@ async def _execute_row(
     # performs (it is a field, never an action of its own), under the Plot lock
     # already held. A blank cell makes this a no-op.
     await _apply_credential(db, plot, state, ctx)
-
-    if p.action == ACTION_START:
-        # Re-check under the plot lock that no active cycle exists NOW — the
-        # partial unique index remains the final backstop, but with every
-        # cycle-mutating path locking the plot first this round, that race
-        # should no longer be reachable in practice.
-        existing_active = await plot_cycle_repo.get_active_cycle_for_plot_for_update(db, plot.id)
-        if existing_active is not None:
-            raise ImportFileError(
-                f"แปลง {p.plot_code} มีรอบปลูกที่เปิดอยู่แล้ว — เกิดขึ้นระหว่างนำเข้า"
-            )
-        cycle = await plot_cycle_repo.create_cycle(
-            db, plot,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
-            supplier_lot_no=p.supplier_lot_no,
-            po_number=p.po_number, p_code=p.p_code,
-            oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
-            ref_account=p.ref_account,
-            planting_date=p.planting_date, plant_count=p.plant_count,
-            expected_yield_full=p.expected_yield_full,
-            expected_yield_unit=p.expected_yield_unit,
-            started_at=_started_at(p.planting_date),
-        )
-        # Fresh cycle → clear the previous cycle's inspection snapshot (mirror
-        # was already synced by create_cycle). Same as the start-cycle endpoint.
-        await plot_cycle_repo.clear_plot_inspection_snapshot(db, plot)
-        _capture_lot_result(state, cycle)
-        await _apply_phone_config(db, plot, p)
-        state.result_cycle_no = cycle.cycle_no
-        return ACTION_START
-
-    if p.action == ACTION_ROLLOVER:
-        # Close the existing active cycle as harvested (history preserved — its
-        # records are never touched), then open a fresh active cycle from this
-        # same row. Re-fetch under a row lock so a concurrent transition can't
-        # race us into two active cycles; the partial unique index is the final
-        # backstop (surfaces as a 409 at the endpoint). Records and the QR key
-        # are untouched; the plot stays active. Uses the shared rollover_cycle
-        # helper — same close→create→clear-snapshot core as the single-plot
-        # rollover endpoint (round 7.9B), so the two can't drift.
-        cycle = await plot_cycle_repo.get_active_cycle_for_plot_for_update(db, plot.id)
-        if cycle is None:
-            # Validated as present; only reachable if it closed between preview
-            # and commit — fail the whole transaction rather than silently skip.
-            raise ImportFileError("รอบปลูกที่เปิดอยู่หายไประหว่างนำเข้า")
-        # Race-safe duplicate re-check under the plot lock (round 8-2.3): the
-        # active cycle may have changed between preview and this locked
-        # re-fetch. If it now matches the row's plan exactly, refuse — never
-        # close/create/clear an identical cycle. The exception propagates so
-        # the endpoint's transaction rolls the whole file back.
-        if _cycle_plan_matches_import(cycle, p):
-            raise ImportFileError(_DUPLICATE_ROLLOVER_MSG)
-        _closed, new_cycle = await plot_cycle_repo.rollover_cycle(
-            db, plot, cycle,
-            close_status=CYCLE_STATUS_HARVESTED,
-            closed_by_id=ctx.user_id, close_reason=ROLLOVER_CLOSE_REASON,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
-            supplier_lot_no=p.supplier_lot_no,
-            po_number=p.po_number, p_code=p.p_code,
-            oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
-            ref_account=p.ref_account,
-            planting_date=p.planting_date, plant_count=p.plant_count,
-            expected_yield_full=p.expected_yield_full,
-            expected_yield_unit=p.expected_yield_unit,
-            started_at=_started_at(p.planting_date),
-        )
-        _capture_lot_result(state, new_cycle)
-        await _apply_phone_config(db, plot, p)
-        state.result_cycle_no = new_cycle.cycle_no
-        return ACTION_ROLLOVER
-
-    if p.action == ACTION_START_NEXT:
-        # Round 8-2.7.1 Part D: recompute the resolution FRESH under the plot
-        # lock — never trust state.resolved_action from validation/preview,
-        # since the plot's active-cycle state may have changed since then.
-        active = await plot_cycle_repo.get_active_cycle_for_plot_for_update(db, plot.id)
-        if active is None:
-            cycle = await plot_cycle_repo.create_cycle(
-                db, plot,
-                crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
-                supplier_lot_no=p.supplier_lot_no,
-                po_number=p.po_number, p_code=p.p_code,
-                oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
-                ref_account=p.ref_account,
-                planting_date=p.planting_date, plant_count=p.plant_count,
-                expected_yield_full=p.expected_yield_full,
-                expected_yield_unit=p.expected_yield_unit,
-                started_at=_started_at(p.planting_date),
-            )
-            # Same "fresh cycle → clear the old inspection snapshot" behavior
-            # as the plain start_new_cycle branch above.
-            _capture_lot_result(state, cycle)
-            await plot_cycle_repo.clear_plot_inspection_snapshot(db, plot)
-            await _apply_phone_config(db, plot, p)
-            state.resolved_action = ACTION_START
-            state.result_cycle_no = cycle.cycle_no
-            return ACTION_START_NEXT
-
-        # An active cycle exists NOW — re-check the same two guards preview
-        # did (label collision, full-plan duplicate), under the lock. Either
-        # match means the plot's state diverged from what preview saw; abort
-        # the whole file with the race-flavored message rather than silently
-        # closing a cycle the user didn't knowingly approve closing.
-        if _same_active_cycle_label(active, p) or _cycle_plan_matches_import(active, p):
-            raise ImportFileError(_RACE_STATE_CHANGED_MSG)
-        _closed, new_cycle = await plot_cycle_repo.rollover_cycle(
-            db, plot, active,
-            close_status=CYCLE_STATUS_HARVESTED,
-            closed_by_id=ctx.user_id, close_reason=ROLLOVER_CLOSE_REASON_START_NEXT,
-            crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
-            supplier_lot_no=p.supplier_lot_no,
-            po_number=p.po_number, p_code=p.p_code,
-            oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
-            ref_account=p.ref_account,
-            planting_date=p.planting_date, plant_count=p.plant_count,
-            expected_yield_full=p.expected_yield_full,
-            expected_yield_unit=p.expected_yield_unit,
-            started_at=_started_at(p.planting_date),
-        )
-        _capture_lot_result(state, new_cycle)
-        await _apply_phone_config(db, plot, p)
-        state.resolved_action = ACTION_ROLLOVER
-        state.result_cycle_no = new_cycle.cycle_no
-        return ACTION_START_NEXT
-
-    if p.action == ACTION_REACTIVATE_WITH_CYCLE:
-        # Round 8-6H — delegate to the SAME shared helper the API endpoint
-        # calls (plot_repository.reactivate_plot_with_cycle): no parallel
-        # "flip is_active + create cycle" implementation. `plot` is already
-        # locked (Plot-before-PlotCycle order, via _lock_existing_plots
-        # above); the helper re-checks is_active/active-cycle under that
-        # lock itself and raises the two domain errors below if the plot's
-        # state diverged from what preview/the up-front lock check saw —
-        # mapped here to the same whole-file-abort ImportFileError every
-        # other commit-time race in this module uses.
-        try:
-            plot, cycle = await plot_repo.reactivate_plot_with_cycle(
-                db, plot,
-                crop=p.crop, variety=p.variety, cycle_label=p.cycle_label,
-                supplier_lot_no=p.supplier_lot_no,
-                po_number=p.po_number, p_code=p.p_code,
-                oracle_supplier_code=p.oracle_supplier_code, oracle_invoice=p.oracle_invoice,
-                ref_account=p.ref_account,
-                planting_date=p.planting_date, plant_count=p.plant_count,
-                expected_yield_full=p.expected_yield_full,
-                expected_yield_unit=p.expected_yield_unit,
-                started_at=_started_at(p.planting_date),
-            )
-        except (plot_repo.PlotAlreadyActiveError, plot_repo.PlotHasActiveCycleError) as exc:
-            raise ImportFileError(
-                f"แปลง {p.plot_code}: สถานะเปลี่ยนแปลงระหว่างนำเข้า ({exc})"
-            ) from exc
-        _capture_lot_result(state, cycle)
-        await _apply_phone_config(db, plot, p)
-        state.result_cycle_no = cycle.cycle_no
-        return ACTION_REACTIVATE_WITH_CYCLE
 
     if p.action == ACTION_FINAL:
         # Round 8-7A.1 — lock order (per this action's own contract): Plot
@@ -2431,24 +2095,15 @@ async def _execute_row(
 
 
 def _counts_from_states(states: list[_RowState]) -> dict[str, int]:
-    """Bucket every executed row into the action counters. A start_next_cycle
-    row (round 8-2.7.1) is bucketed by state.resolved_action — which
-    _execute_row overwrites with the ACTUAL outcome — never by its own
-    literal action string, so PlotImportCommitResult's existing started_
-    cycles/rolled_over_cycles counters stay accurate without adding a new
-    field (matches the frontend's equivalent resolved-action grouping).
-    reactivate_plot_with_cycle (round 8-6H) is unambiguous — always bucketed
-    by its own literal action string, no resolution step needed."""
-    counts = {
-        ACTION_CREATE: 0, ACTION_START: 0, ACTION_UPDATE: 0, ACTION_ROLLOVER: 0,
-        ACTION_REACTIVATE_WITH_CYCLE: 0, ACTION_FINAL: 0,
-    }
+    """Bucket every executed row into the action counters.
+
+    Round K — one bucket per offered action, and no resolution step: the
+    start_next_cycle row that used to resolve to start-or-rollover at commit
+    time is gone, so a row's own action is now the only thing it can be."""
+    counts = {action: 0 for action in OFFERED_ACTIONS}
     for s in states:
-        action = s.parsed.action
-        if action == ACTION_START_NEXT:
-            action = s.resolved_action
-        if action in counts:
-            counts[action] += 1
+        if s.parsed.action in counts:
+            counts[s.parsed.action] += 1
     return counts
 
 
@@ -2467,65 +2122,6 @@ def _check_preview_state_file(
     if preview_state.file_sha256 != file_digest(content):
         raise ImportPreviewStateConflict(_PS_DIGEST_MISMATCH, _MSG_FILE_DIGEST_MISMATCH)
     return preview_state
-
-
-async def _verify_start_next_snapshot(
-    db: AsyncSession,
-    start_next_states: list[_RowState],
-    preview_state: PlotImportPreviewState,
-    locked_plots: dict[UUID, Plot],
-) -> None:
-    """Under-lock resolution check (Part D step 4): recompute each start_next_
-    cycle row's ACTUAL resolution from the plot's live active cycle — held
-    under the plot row lock — and compare it to the expectation the user
-    approved in Preview. Any divergence aborts the whole file BEFORE a single
-    row executes (the caller runs this before the execute loop).
-
-    Divergence includes: the set of start_next rows not matching the snapshot
-    (row added/removed/identity-swapped, or a snapshot row missing/extra); a
-    row whose (resolved_action, active_cycle_id) pair changed — i.e. an active
-    cycle appeared where Preview saw none, vanished where Preview saw one, or
-    the active cycle is now a DIFFERENT cycle (compared by authoritative
-    active_cycle_id, never the editable cycle_label).
-
-    Never mutates. The active-cycle SELECT ... FOR UPDATE re-uses the plot lock
-    already held; a second SELECT here + in _execute_row can't diverge within
-    the one transaction."""
-    expected_by_row = {r.row_number: r for r in preview_state.start_next_rows}
-    actual_row_numbers = {s.row_number for s in start_next_states}
-
-    # Set/identity: the start_next rows in the (re-validated) file must be
-    # exactly those in the snapshot — a missing/extra snapshot row, or a row
-    # added/removed since Preview, is a conflict.
-    if actual_row_numbers != set(expected_by_row):
-        changed = sorted(actual_row_numbers.symmetric_difference(expected_by_row))
-        raise ImportPreviewStateConflict(_PS_ROW_SET_MISMATCH, _MSG_STATE_CHANGED, changed)
-
-    changed_rows: list[int] = []
-    for s in start_next_states:
-        expected = expected_by_row[s.row_number]
-        # Row identity must match too (supplier+plot) — defense-in-depth on
-        # top of the file digest.
-        if (expected.supplier_code, expected.plot_code) != (
-            s.parsed.supplier_code, s.parsed.plot_code
-        ):
-            changed_rows.append(s.row_number)
-            continue
-        assert s.existing_plot_id is not None  # valid start_next → plot exists
-        plot = locked_plots[s.existing_plot_id]
-        active = await plot_cycle_repo.get_active_cycle_for_plot_for_update(db, plot.id)
-        actual_resolved = ACTION_START if active is None else ACTION_ROLLOVER
-        actual_active_id = None if active is None else active.id
-        if (
-            expected.resolved_action != actual_resolved
-            or expected.active_cycle_id != actual_active_id
-        ):
-            changed_rows.append(s.row_number)
-
-    if changed_rows:
-        raise ImportPreviewStateConflict(
-            _PS_RESOLUTION_CHANGED, _MSG_STATE_CHANGED, sorted(changed_rows)
-        )
 
 
 # --- Preview-state binding for final_plot (round 8-7A.1) -------------------
@@ -2792,14 +2388,13 @@ async def commit_import_execute(
     if any(s.errors for s in states):
         raise ImportHasErrors(_build_preview(states), states)
 
-    # (2) File-digest gate for start_next_cycle/final_plot/password files —
-    # before any lock, and before any bcrypt.
-    start_next_states = [s for s in states if s.parsed.action == ACTION_START_NEXT]
+    # (2) File-digest gate for final_plot/password files — before any lock,
+    # and before any bcrypt.
     final_states = [s for s in states if s.parsed.action == ACTION_FINAL]
     credential_states = [s for s in states if s.credential_change is not None]
     checked_preview_state = (
         _check_preview_state_file(content, preview_state)
-        if start_next_states or final_states or credential_states
+        if final_states or credential_states
         else None
     )
 
@@ -2813,13 +2408,8 @@ async def commit_import_execute(
     # (3) Lock every existing plot in one deterministic order.
     locked_plots = await _lock_existing_plots(db, states)
 
-    # (4) Verify all start_next/final_plot/credential expectations under the
-    # locks, before ANY execute.
-    if start_next_states:
-        assert checked_preview_state is not None
-        await _verify_start_next_snapshot(
-            db, start_next_states, checked_preview_state, locked_plots
-        )
+    # (4) Verify all final_plot/credential expectations under the locks,
+    # before ANY execute.
     if final_states:
         assert checked_preview_state is not None
         await _verify_final_plot_snapshot(
@@ -2876,10 +2466,7 @@ async def commit_import(
     counts = _counts_from_states(states)
     return PlotImportCommitResult(
         created_plots=counts[ACTION_CREATE],
-        started_cycles=counts[ACTION_START],
         updated_cycles=counts[ACTION_UPDATE],
-        rolled_over_cycles=counts[ACTION_ROLLOVER],
-        reactivated_plots=counts[ACTION_REACTIVATE_WITH_CYCLE],
         finalized_plots=counts[ACTION_FINAL],
         skipped_rows=0,
         row_results=[_row_result(s) for s in states],

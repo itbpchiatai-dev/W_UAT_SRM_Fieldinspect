@@ -39,10 +39,14 @@ from app.services import plot_import
 _M = "app.services.plot_import"
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+# Round K — finalPlotRows is the only preview-state binding left.
 _VALID_PREVIEW_STATE = (
-    '{"fileSha256":"' + ("a" * 64) + '","startNextRows":['
+    '{"fileSha256":"' + ("a" * 64) + '","finalPlotRows":['
     '{"rowNumber":3,"supplierCode":"SUP010","plotCode":"P010",'
-    '"resolvedAction":"start_new_cycle","activeCycleId":null}]}'
+    '"plotUpdatedAt":"2026-01-01T00:00:00Z",'
+    '"activeCycleId":"11111111-1111-1111-1111-111111111111","activeCycleNo":1,'
+    '"activeCycleUpdatedAt":"2026-01-01T00:00:00Z","cycleLabel":"jul2026",'
+    '"resolvedFinalInspectionRecordId":null}]}'
 )
 
 
@@ -101,7 +105,7 @@ async def test_commit_multipart_previewState_field_is_parsed_and_forwarded() -> 
     forwarded = m.await_args.kwargs["preview_state"]
     assert forwarded is not None, "previewState must not be dropped to None"
     assert forwarded.file_sha256 == "a" * 64
-    assert forwarded.start_next_rows[0].plot_code == "P010"
+    assert forwarded.final_plot_rows[0].plot_code == "P010"
 
 
 # --- item 2: /import/commit-report parses + forwards the same field -------
@@ -117,7 +121,7 @@ async def test_commit_report_multipart_previewState_field_is_parsed_and_forwarde
     forwarded = m.await_args.kwargs["preview_state"]
     assert forwarded is not None, "previewState must not be dropped to None"
     assert forwarded.file_sha256 == "a" * 64
-    assert forwarded.start_next_rows[0].plot_code == "P010"
+    assert forwarded.final_plot_rows[0].plot_code == "P010"
 
 
 # --- item 3: malformed previewState JSON -> 422, no mutation attempted ----

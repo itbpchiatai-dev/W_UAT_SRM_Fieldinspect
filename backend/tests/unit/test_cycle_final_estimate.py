@@ -173,12 +173,16 @@ def test_close_and_rollover_endpoints_use_shared_helpers() -> None:
     assert "plot_cycle_repo.rollover_cycle(" in src     # rollover endpoint
 
 
-def test_excel_import_rollovers_use_shared_rollover() -> None:
+def test_excel_import_never_rolls_a_cycle_over() -> None:
+    """Round K — the importer has no rollover path at all any more. Under
+    "one plot, one cycle" the next season is a new plot, so an import can
+    create, edit or close a cycle but never close-and-reopen one.
+
+    The shared helper itself is untouched and still guarded above: the
+    single-plot rollover endpoint continues to use it."""
     from app.services import plot_import
     src = inspect.getsource(plot_import)
-    # close_and_start_new_cycle AND start_next_cycle-resolved-to-rollover both
-    # go through the shared rollover_cycle (→ close_cycle → snapshot).
-    assert src.count("plot_cycle_repo.rollover_cycle(") >= 2
+    assert "plot_cycle_repo.rollover_cycle(" not in src
 
 
 def test_snapshot_is_taken_before_status_flip_in_close_cycle() -> None:

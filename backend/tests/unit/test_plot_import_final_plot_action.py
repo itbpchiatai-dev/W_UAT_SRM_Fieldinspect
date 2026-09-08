@@ -142,7 +142,7 @@ async def _final_preview_state(rows, *, plot, active, latest_record=None, ctx=No
 # --- item: action recognized -------------------------------------------------
 
 def test_final_plot_action_is_recognized_supported_action():
-    assert ACTION_FINAL in plot_import.SUPPORTED_ACTIONS
+    assert ACTION_FINAL in plot_import.OFFERED_ACTIONS
     assert ACTION_FINAL == "final_plot"
 
 

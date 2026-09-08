@@ -403,8 +403,10 @@ def test_apply_phone_config_called_after_cycle_mutation_in_source() -> None:
     _execute_row must appear textually AFTER that branch's cycle-mutation
     call, so PlotAccessPhone is always locked/written after PlotCycle."""
     src = inspect.getsource(plot_import._execute_row)
-    # Round 8-6H added a 7th call site (reactivate_plot_with_cycle branch).
-    assert src.count("await _apply_phone_config(") == 7
+    # Round K — two call sites left, one per action that still touches a
+    # cycle (create_plot_with_cycle, update_current_cycle). The other five
+    # went with the actions that owned them.
+    assert src.count("await _apply_phone_config(") == 2
     # Cheap proxy: the FIRST phone-apply call must come after the FIRST
     # cycle-mutation call (create_cycle) — i.e. phone application is never
     # the very first thing this function does.

@@ -41,7 +41,7 @@ _M = "app.services.plot_import"
 
 # Every action except final_plot — the set this round scopes finalYieldUnit
 # AWAY from.
-NON_FINAL_ACTIONS = tuple(a for a in plot_import.SUPPORTED_ACTIONS if a != ACTION_FINAL)
+NON_FINAL_ACTIONS = tuple(a for a in plot_import.OFFERED_ACTIONS if a != ACTION_FINAL)
 
 
 def _xlsx(rows: list[dict[str, str]]) -> bytes:
@@ -93,7 +93,7 @@ def _record(**kw) -> SimpleNamespace:
 
 
 def _patch_lookups(*, supplier=..., plot=None, active=None, labels=None, latest_record=None):
-    """Patches every repo lookup any SUPPORTED_ACTIONS row might reach.
+    """Patches every repo lookup any OFFERED_ACTIONS row might reach.
     get_cycle_labels_for_plots is only awaited when a reactivate row needs the
     history check; get_latest_active_record_for_cycle only for final_plot —
     patching both unconditionally is harmless for the other actions (never
@@ -150,32 +150,20 @@ _NON_FINAL_FIXTURES = {
         _row_create(),
         dict(plot=None, active=None),
     ),
-    ACTION_START: (
-        _row_create(action=ACTION_START, plotCode="P001"),
-        dict(plot=_plot(), active=None),
-    ),
     ACTION_UPDATE: (
         _row_create(action=ACTION_UPDATE, plotCode="P002"),
         dict(plot=_plot(), active=_cycle()),
     ),
-    ACTION_ROLLOVER: (
-        _row_create(action=ACTION_ROLLOVER, plotCode="P003"),
-        dict(plot=_plot(), active=_cycle()),
-    ),
-    ACTION_START_NEXT: (
-        _row_create(action=ACTION_START_NEXT, plotCode="P003", cycleLabel="sep2026"),
-        dict(plot=_plot(), active=None),
-    ),
-    ACTION_REACTIVATE_WITH_CYCLE: (
-        _row_create(action=ACTION_REACTIVATE_WITH_CYCLE, plotCode="P002", cycleLabel="aug2026"),
-        dict(plot=_plot(is_active=False), active=None),
-    ),
+    # Round K — the fixtures for start_new_cycle, close_and_start_new_cycle,
+    # start_next_cycle and reactivate_plot_with_cycle went with the actions.
+    # The rule they covered ("finalYieldUnit is scoped to final_plot alone")
+    # is unchanged and still exercised by the two that remain.
 }
 
 
 def test_every_supported_action_has_a_fixture():
     """Guard against silently skipping an action this round should also cover
-    (e.g. a future action added to SUPPORTED_ACTIONS)."""
+    (e.g. a future action added to OFFERED_ACTIONS)."""
     assert set(_NON_FINAL_FIXTURES) == set(NON_FINAL_ACTIONS)
 
 

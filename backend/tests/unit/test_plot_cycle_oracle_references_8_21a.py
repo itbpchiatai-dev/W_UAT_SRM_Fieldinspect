@@ -498,12 +498,13 @@ def test_plots_api_forwards_reference_fields_at_every_call_site() -> None:
 
 def test_plot_import_service_forwards_reference_fields_at_every_call_site() -> None:
     src = Path("app/services/plot_import.py").read_text(encoding="utf-8")
-    # 5 create_cycle/rollover_cycle/reactivate_plot_with_cycle call sites
-    # (create, start, rollover, start_next->create, start_next->rollover,
-    # reactivate) + the update_current_cycle presence-aware fields dict.
-    assert src.count("oracle_supplier_code=p.oracle_supplier_code") >= 5
-    assert src.count("oracle_invoice=p.oracle_invoice") >= 5
-    assert src.count("ref_account=p.ref_account") >= 5
+    # Round K — two call sites: create_plot_with_cycle's create_cycle, and
+    # update_current_cycle's presence-aware fields dict. The rest went with
+    # the retired actions. The rule is unchanged: EVERY site that writes a
+    # cycle forwards all three reference fields.
+    assert src.count("oracle_supplier_code=p.oracle_supplier_code") >= 2
+    assert src.count("oracle_invoice=p.oracle_invoice") >= 2
+    assert src.count("ref_account=p.ref_account") >= 2
 
 
 # ===========================================================================

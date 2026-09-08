@@ -37,7 +37,8 @@ from app.services.excel_reader import read_first_sheet
 from app.services.excel_workbook import _sheet_xml, build_xlsx
 from app.services.plot_import import (
     IMPORT_COLUMNS,
-    SUPPORTED_ACTIONS,
+    OFFERED_ACTIONS,
+    RETIRED_ACTIONS,
     TEMPLATE_COLUMN_DESCRIPTIONS,
     TEMPLATE_DESCRIPTION_ACTION,
 )
@@ -233,19 +234,18 @@ def test_row_two_names_the_same_actions_the_example_rows_show() -> None:
         assert action in description, action
 
 
-def test_legacy_rollover_actions_are_not_default_example_rows() -> None:
-    """start_new_cycle and close_and_start_new_cycle are exactly the two
-    behaviors start_next_cycle unifies — a special case, not the everyday
-    path — so neither appears as one of the default worked examples, even
-    though the backend still fully supports both unchanged (see
-    test_plot_import_service.py for their parse/validate/execute coverage)."""
+def test_no_retired_action_appears_in_the_template() -> None:
+    """Round K — the four actions that existed only to open a SECOND cycle on
+    an existing plot are rejected outright now, so a template that still
+    offered one would hand the user a file the importer refuses."""
     _headers, by_no = _example_rows([_fake_supplier()])
-    example_actions = [row["action"] for row in by_no.values()]
-    assert "start_new_cycle" not in example_actions
-    assert "close_and_start_new_cycle" not in example_actions
-    # Still supported actions overall — just not default examples.
-    assert "start_new_cycle" in SUPPORTED_ACTIONS
-    assert "close_and_start_new_cycle" in SUPPORTED_ACTIONS
+    # Rows 2 and 3 are the description and the red "examples only" notice —
+    # prose in the action cell, not an action. The worked examples start at 4.
+    example_actions = {row["action"] for n, row in by_no.items() if n >= 4}
+
+    assert example_actions
+    assert example_actions <= set(OFFERED_ACTIONS)
+    assert example_actions.isdisjoint(RETIRED_ACTIONS)
 
 
 def test_the_create_example_row_has_a_cycle_label() -> None:

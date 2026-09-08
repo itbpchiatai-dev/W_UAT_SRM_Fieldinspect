@@ -35,7 +35,7 @@ from app.services.excel_workbook import StyledCell
 from app.services.plot_import import (
     ACTION_UPDATE,
     IMPORT_COLUMNS,
-    SUPPORTED_ACTIONS,
+    OFFERED_ACTIONS,
     TEMPLATE_DESCRIPTION_ACTION,
 )
 
@@ -451,7 +451,7 @@ def test_read_first_sheet_reads_only_sheet_one_ignoring_the_other_sheets() -> No
 
 
 def test_all_supported_actions_constant_still_includes_start_next_cycle() -> None:
-    assert ACTION_UPDATE in SUPPORTED_ACTIONS
+    assert ACTION_UPDATE in OFFERED_ACTIONS
 
 
 # --- generic template regression (unchanged) --------------------------------

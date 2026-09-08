@@ -144,24 +144,27 @@ async def test_create_rejects_inactive_crop() -> None:
     assert "ปิดใช้งาน" in row.message
 
 
-async def test_start_rejects_missing_variety() -> None:
-    plot = SimpleNamespace(id=uuid4(), is_active=True)
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
+# Round K — these three used start_new_cycle / close_and_start_new_cycle /
+# reactivate_plot_with_cycle as vehicles for rules that were never about those
+# actions: a new cycle must name a seeded variety, must not name a deactivated
+# crop, and never inherits the legacy exemption. The actions are gone; the
+# rules are not, and create_plot_with_cycle is the remaining way to open a
+# cycle, so the coverage moves there rather than being deleted with them.
+
+async def test_new_cycle_rejects_missing_variety() -> None:
+    p_sup, p_plot, p_active = _patch_lookups(plot=None, active=None)
     p_md, _ = _patch_master_data(existing_crops=[_md("crop", "พริก")])  # variety not seeded
-    row = {**_create_row(action="start_new_cycle"), "plotName": None}
     with p_sup, p_plot, p_active, p_md:
-        preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
+        preview = await build_preview(object(), _xlsx([_create_row()]), ctx=_ctx())
     result = _row(preview)
     assert result.status == "error"
     assert "ไม่พบพันธุ์" in result.message
 
 
-async def test_rollover_new_cycle_rejects_inactive_crop() -> None:
-    plot = SimpleNamespace(id=uuid4(), is_active=True)
-    active = _cycle(crop="เดิม", variety=None, cycle_label="เดิม-label", lot_no="OLD-LOT")
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
+async def test_new_cycle_rejects_inactive_crop() -> None:
+    p_sup, p_plot, p_active = _patch_lookups(plot=None, active=None)
     p_md, _ = _patch_master_data(existing_crops=[_md("crop", "พริก", active=False)])
-    row = _create_row(action="close_and_start_new_cycle", cycleLabel="ใหม่-label")
+    row = _create_row(cycleLabel="ใหม่-label")
     with p_sup, p_plot, p_active, p_md:
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
     result = _row(preview)
@@ -169,14 +172,13 @@ async def test_rollover_new_cycle_rejects_inactive_crop() -> None:
     assert "ปิดใช้งาน" in result.message
 
 
-async def test_reactivate_new_cycle_has_no_current_pair() -> None:
-    """reactivate_plot_with_cycle opens a first NEW cycle on a reopened
-    plot — always a full check (current=None), never a legacy exemption."""
-    plot = SimpleNamespace(id=uuid4(), is_active=False)
-    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=None)
+async def test_new_cycle_has_no_current_pair() -> None:
+    """A brand-new cycle is always a full master-data check (current=None) —
+    the legacy exemption only ever applied to a pair already on the plot."""
+    p_sup, p_plot, p_active = _patch_lookups(plot=None, active=None)
     p_md, _ = _patch_master_data(existing_crops=[_md("crop", "พริก")],
                                   existing_varieties=[_md("variety", "พริกขี้หนู", parent="พริก")])
-    row = _create_row(action="reactivate_plot_with_cycle", cycleLabel="jun2026")
+    row = _create_row(cycleLabel="jun2026")
     with p_sup, p_plot, p_active, p_md, \
          patch(f"{_M}.plot_cycle_repo.get_cycle_labels_for_plots", AsyncMock(return_value={})):
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())

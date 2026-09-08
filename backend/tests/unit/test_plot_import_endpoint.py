@@ -147,9 +147,14 @@ async def test_commit_endpoint_parses_and_forwards_preview_state() -> None:
         created_plots=0, started_cycles=1, updated_cycles=0, skipped_rows=0, row_results=[],
     )
     raw = (
-        '{"fileSha256":"' + ("a" * 64) + '","startNextRows":['
+        # Round K — finalPlotRows is the only binding left; startNextRows went
+        # with the action it bound.
+        '{"fileSha256":"' + ("a" * 64) + '","finalPlotRows":['
         '{"rowNumber":3,"supplierCode":"SUP010","plotCode":"P010",'
-        '"resolvedAction":"start_new_cycle","activeCycleId":null}]}'
+        '"plotUpdatedAt":"2026-01-01T00:00:00Z",'
+        '"activeCycleId":"11111111-1111-1111-1111-111111111111","activeCycleNo":1,'
+        '"activeCycleUpdatedAt":"2026-01-01T00:00:00Z","cycleLabel":"jul2026",'
+        '"resolvedFinalInspectionRecordId":null}]}'
     )
     with patch(f"{_M}.commit_import", AsyncMock(return_value=summary)) as m:
         await commit_plot_import(
@@ -157,7 +162,7 @@ async def test_commit_endpoint_parses_and_forwards_preview_state() -> None:
     forwarded = m.await_args.kwargs["preview_state"]
     assert forwarded is not None
     assert forwarded.file_sha256 == "a" * 64
-    assert forwarded.start_next_rows[0].plot_code == "P010"
+    assert forwarded.final_plot_rows[0].plot_code == "P010"
 
 
 async def test_commit_endpoint_malformed_preview_state_is_422() -> None:

@@ -24,14 +24,14 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
 
     total_records = (
         await db.scalar(
-            select(func.count(Record.id)).where(Record.is_active == True)
+            select(func.count(Record.id)).where(Record.is_active.is_(True))
         )
     ) or 0
 
     records_this_month = (
         await db.scalar(
             select(func.count(Record.id)).where(
-                Record.is_active == True,
+                Record.is_active.is_(True),
                 Record.record_date >= month_start,
             )
         )
@@ -45,7 +45,7 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
                 func.avg(Record.weather_score),
                 func.avg(Record.care_score),
                 func.avg(Record.variety_resistance_score),
-            ).where(Record.is_active == True)
+            ).where(Record.is_active.is_(True))
         )
     ).one()
     _present = [float(v) for v in score_avgs if v is not None]
@@ -54,7 +54,7 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
     low_score_count = (
         await db.scalar(
             select(func.count(Record.id)).where(
-                Record.is_active == True,
+                Record.is_active.is_(True),
                 (Record.field_prep_score <= 3)
                 | (Record.weather_score <= 3)
                 | (Record.care_score <= 3)
@@ -65,7 +65,7 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
 
     total_plots = (
         await db.scalar(
-            select(func.count(Plot.id)).where(Plot.is_active == True)
+            select(func.count(Plot.id)).where(Plot.is_active.is_(True))
         )
     ) or 0
 
@@ -73,7 +73,7 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
     if include_suppliers:
         total_suppliers = (
             await db.scalar(
-                select(func.count(Supplier.id)).where(Supplier.is_active == True)
+                select(func.count(Supplier.id)).where(Supplier.is_active.is_(True))
             )
         ) or 0
 
@@ -81,7 +81,7 @@ async def get_summary(db: AsyncSession, *, include_suppliers: bool) -> Dashboard
     rows = (
         await db.execute(
             select(Record.crop, func.count(Record.id).label("cnt"))
-            .where(Record.is_active == True)
+            .where(Record.is_active.is_(True))
             .group_by(Record.crop)
             .order_by(func.count(Record.id).desc())
             .limit(6)

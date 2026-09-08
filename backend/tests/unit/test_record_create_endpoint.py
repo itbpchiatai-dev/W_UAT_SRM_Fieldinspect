@@ -248,7 +248,7 @@ async def test_with_photos_too_many_photos_rejected_before_create(tmp_path: Path
 
 async def test_with_photos_malformed_json_payload_rejected_422() -> None:
     with pytest.raises(HTTPException) as exc_info:
-        await create_record_with_photos(request=_fake_request(), 
+        await create_record_with_photos(request=_fake_request(),
             current_user=_current_user(), payload="not json", photos=_four_photos(), db=_mock_db(),
         )
 

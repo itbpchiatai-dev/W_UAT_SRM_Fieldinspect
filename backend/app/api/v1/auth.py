@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -39,7 +39,6 @@ from app.core.config import get_settings
 from app.core.rate_limit import limiter
 from app.db.models.app_setting import AppSetting
 from app.db.models.revoked_token import RevokedToken
-from app.db.models.role import Role
 from app.db.models.user import User
 from app.db.session import DbDep
 from app.schemas.auth import CamelBaseModel, LoginRequest, TokenResponse

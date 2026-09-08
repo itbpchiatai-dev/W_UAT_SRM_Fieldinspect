@@ -376,7 +376,6 @@ async def test_update_omitted_fields_leave_existing_values_untouched() -> None:
     from app.repositories import plot_cycle_repository as repo
 
     db = _mock_db()
-    plot = _plot()
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
         await repo.update_cycle(db, cycle, {"crop": "พริก"})
@@ -389,7 +388,6 @@ async def test_update_present_none_clears_existing_values() -> None:
     from app.repositories import plot_cycle_repository as repo
 
     db = _mock_db()
-    plot = _plot()
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
         await repo.update_cycle(
@@ -405,7 +403,6 @@ async def test_update_present_text_trims_and_saves() -> None:
     from app.repositories import plot_cycle_repository as repo
 
     db = _mock_db()
-    plot = _plot()
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
         await repo.update_cycle(
@@ -422,7 +419,6 @@ async def test_update_present_blank_string_clears() -> None:
     from app.repositories import plot_cycle_repository as repo
 
     db = _mock_db()
-    plot = _plot()
     cycle = _active_cycle()
     with patch(f"{_REPO}._supplier_code_for_plot", AsyncMock(return_value="SUP010")):
         await repo.update_cycle(db, cycle, {"oracle_invoice": "   "})

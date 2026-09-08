@@ -50,7 +50,6 @@ def test_deactivate_still_gated_by_plots_delete() -> None:
     requires the weaker plots.update — so the PATCH guard above is the only
     way plots.update-holders could otherwise have flipped is_active."""
     src = Path(inspect.getfile(plots_module)).read_text(encoding="utf-8")
-    deactivate = src[src.index("async def deactivate_plot"):]
     # the decorator block sits just above the function; grab a window before it
     deactivate_decorator = src[src.index('/{plot_id}/deactivate'):src.index("async def deactivate_plot")]
     assert "PermissionKey.PLOTS_DELETE" in deactivate_decorator

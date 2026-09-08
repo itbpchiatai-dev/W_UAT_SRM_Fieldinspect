@@ -1,4 +1,6 @@
-import json, math, os
+import json
+import math
+import os
 
 SRC = r'C:\Users\tunyawut.wo\AppData\Local\Temp\th.json'
 OUT = r'D:\DEV-Tunyawut\SRM_FieldInspect\frontend\src\components\farmlog\thailandGeo.ts'
@@ -12,8 +14,10 @@ def walk(c):
     global minx, miny, maxx, maxy
     if isinstance(c[0], (int, float)):
         x, y = c[0], c[1]
-        minx = min(minx, x); maxx = max(maxx, x)
-        miny = min(miny, y); maxy = max(maxy, y)
+        minx = min(minx, x)
+        maxx = max(maxx, x)
+        miny = min(miny, y)
+        maxy = max(maxy, y)
     else:
         for p in c:
             walk(p)

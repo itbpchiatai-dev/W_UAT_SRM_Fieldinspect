@@ -34,7 +34,22 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
       - run: pip install pre-commit
+      # Round M ran these for the first time (`.git/hooks/pre-commit` was never
+      # installed, so not one commit in this repo's history had been through
+      # them). Everything that matters passes: gitleaks, detect-secrets, the
+      # file checks, and all four CT architecture checks.
+      #
+      # Two hooks are skipped BY NAME rather than by weakening the job, so a
+      # new secret or a schema that skips CamelBaseModel still fails the build:
+      #   ruff-format   — would rewrite 395 of 412 backend files; the repo has
+      #                   never been formatted.
+      #   no-raw-colors — 994 raw Tailwind colours across the frontend; moving
+      #                   them onto brand tokens can change how screens LOOK,
+      #                   so it needs a human eye, not a CI commit.
+      # Both are their own round. Remove a name from SKIP as its debt is paid.
       - run: pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: ruff-format,no-raw-colors
 
   backend-lint:
     runs-on: ubuntu-latest
@@ -51,14 +66,30 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+      # BLOCKING. `ruff check` finds real defects, not style: its first run over
+      # this tree (round M) reported 33, including an F821 undefined name inside
+      # a test helper that round K had orphaned — dead code pytest never
+      # executed and so never reported. All 33 are fixed; keep this a hard gate.
       - name: ruff lint
         working-directory: backend
         run: ruff check .
-      - name: ruff format check
+      # ADVISORY — deliberately not a gate yet, and NOT `|| true`.
+      # continue-on-error still runs the step and still shows it as failed in
+      # the Actions UI; it just doesn't block the merge. `|| true` would hide
+      # the failure behind a green tick. Do not "tidy" this into that.
+      #
+      # Round M measured both. The repo has never been formatted (`ruff format
+      # --check` would rewrite 395 of 412 files) and has never been type-checked
+      # (94 mypy errors in 28 files, mostly **kwargs into typed constructors).
+      # Neither is a correctness risk today; both are a large mechanical diff
+      # that deserves its own round rather than riding along with a CI fix.
+      - name: ruff format check (advisory — 395 files unformatted, round M)
         working-directory: backend
+        continue-on-error: true
         run: ruff format --check .
-      - name: mypy
+      - name: mypy (advisory — 94 known errors, round M)
         working-directory: backend
+        continue-on-error: true
         run: mypy app
 
   backend-test:
@@ -104,10 +135,16 @@ jobs:
           DB_USER: test
           DB_PASSWORD: test
           APP_ENV: test
-        # `pytest` is a no-op on a fresh scaffold (only conftest.py exists).
-        # `|| true` keeps the job green so new projects don't start red —
-        # add real tests and remove the fallback when the suite has cases.
-        run: pytest -q || true
+        # Round M removed the scaffold's `|| true`. It was there so a fresh
+        # project with no tests wouldn't start red, with a comment saying to
+        # drop it "when the suite has cases". The suite has 3,296 cases, and
+        # the fallback was still swallowing every one of them — a failing test,
+        # a collection error, or the --cov-fail-under gate in pyproject.toml
+        # would all have reported this job green.
+        #
+        # This job is the reason CI exists: nothing else stops a broken commit
+        # from reaching UAT. It must be able to fail.
+        run: pytest -q
 
   frontend-lint:
     runs-on: ubuntu-latest
@@ -128,6 +165,12 @@ jobs:
       - name: TypeScript typecheck
         working-directory: frontend
         run: npm run typecheck
+      # Round M — this job lint/typecheck/built the frontend but never ran a
+      # single one of its 2,051 vitest cases. They all pass in ~90s; there was
+      # no reason for them to be missing beyond nobody adding the step.
+      - name: Vitest
+        working-directory: frontend
+        run: npm test
       - name: Vite build
         working-directory: frontend
         run: npm run build

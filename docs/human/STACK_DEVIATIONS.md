@@ -150,4 +150,3 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 from pgvector.sqlalchemy import Vector
 embedding = Column(Vector(1536))  # OpenAI/Claude embedding dimension
 ```
-

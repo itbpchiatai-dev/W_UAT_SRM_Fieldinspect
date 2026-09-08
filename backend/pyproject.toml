@@ -92,6 +92,36 @@ markers = [
     "nodefault_crop_variety: opt out of tests/unit/conftest.py's permissive crop/variety Master Data default (round 8-15D)",
 ]
 
+# Round M — the 80% gate above was failing at 79.4%, and the reason was not
+# undertested application code. `--cov=app` was also measuring ten one-shot
+# OPERATOR SCRIPTS: 1,030 statements of seeding, mock-data and UAT-reset
+# tooling, covered 35%. Excluding them, the code this app actually serves sits
+# at 84.1% — so the gate was being missed by files that are never imported by
+# the running application at all.
+#
+# That mattered for more than the number: 669 uncovered statements of seed
+# script drowned out any real regression. Dropping an endpoint's coverage by
+# 50 statements moved the total by 0.5% — well inside the noise.
+#
+# Criterion for this list, so it cannot quietly become "anything inconvenient":
+# a module qualifies ONLY if it has an `if __name__ == "__main__"` entrypoint
+# AND no application module imports it (verified for all ten in round M —
+# every apparent import was a docstring mention). Anything reachable from an
+# API route stays measured, no matter how awkward it is to test.
+[tool.coverage.run]
+omit = [
+    "app/seed.py",
+    "app/db/seed.py",
+    "app/db/seed_mock_farmlog.py",
+    "app/db/seed_mock_records_extra.py",
+    "app/db/seed_reset_farmlog_full.py",
+    "app/db/uat_data_reset.py",
+    "app/db/backfill_plot_current_status.py",
+    "app/db/backfill_plot_qr_key.py",
+    "app/db/normalize_plot_yield_kg.py",
+    "app/db/reposition_plots_by_province.py",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

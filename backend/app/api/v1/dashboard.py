@@ -1,7 +1,7 @@
 """Dashboard — scope-aware KPI summary endpoint."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.scope import RLSContext

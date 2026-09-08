@@ -1555,4 +1555,3 @@ def test_create_role_validates_name_scope_prefix(scaffolded: Path) -> None:
     assert "status_code=400" in roles_router, (
         "role validator must reject mismatches with HTTP 400"
     )
-

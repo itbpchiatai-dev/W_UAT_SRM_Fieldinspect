@@ -114,7 +114,8 @@ async def create_user(
     approval_token_hash: str | None = None
     approval_token_expires_at: datetime | None = None
     if payload.require_approval:
-        import hashlib, secrets as _secrets
+        import hashlib
+        import secrets as _secrets
         approval_token_raw = _secrets.token_urlsafe(32)
         approval_token_hash = hashlib.sha256(approval_token_raw.encode("utf-8")).hexdigest()
         # 7-day TTL — see app_settings.notifications.approval_link_ttl_days

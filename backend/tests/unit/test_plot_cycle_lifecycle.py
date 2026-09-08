@@ -523,4 +523,3 @@ def test_write_endpoints_refresh_before_model_validate_in_source() -> None:
         assert src.index("await db.refresh(cycle)") < src.index(
             "PlotCycleRead.model_validate(cycle)"
         ), fn.__name__
-

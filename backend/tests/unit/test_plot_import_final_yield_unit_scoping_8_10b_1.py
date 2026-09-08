@@ -26,10 +26,6 @@ from app.services.excel_workbook import build_xlsx
 from app.services.plot_import import (
     ACTION_CREATE,
     ACTION_FINAL,
-    ACTION_REACTIVATE_WITH_CYCLE,
-    ACTION_ROLLOVER,
-    ACTION_START,
-    ACTION_START_NEXT,
     ACTION_UPDATE,
     IMPORT_COLUMNS,
     ImportContext,

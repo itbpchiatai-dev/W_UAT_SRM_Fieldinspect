@@ -16,7 +16,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.schemas.plot_import import PlotImportPreviewState
 from app.services import plot_import
 from app.services.excel_workbook import build_xlsx
 from app.services.plot_import import (
@@ -24,7 +23,6 @@ from app.services.plot_import import (
     ImportContext,
     ImportHasErrors,
     ImportFileError,
-    ImportPreviewStateConflict,
     build_preview,
     commit_import,
 )
@@ -726,20 +724,9 @@ async def test_result_workbook_reuploaded_is_revalidated_from_input_only() -> No
     assert pv.rows[0].status == "valid"  # recomputed from input, COMPLETED not trusted
 
 
-# --- round 8-2.7.1: unified start_next_cycle action -------------------------
-#
-# start_next_cycle resolves to whichever of start_new_cycle / close_and_
-# start_new_cycle the plot's CURRENT state calls for. Preview computes an
-# estimate (resolved_action); commit recomputes it FRESH under the plot lock
-# and never trusts the preview value (Part A/D). Two lookup points matter:
-#   get_active_cycle_for_plot            — validation (preview AND the
-#                                           re-validation commit_import_execute
-#                                           always runs first)
-#   get_active_cycle_for_plot_for_update — the LOCKED re-check inside
-#                                           _execute_row's start_next_cycle
-#                                           branch specifically
-# A test that wants to simulate "state changed between preview and commit"
-# therefore patches these two to DIFFERENT return values.
+# Round K retired the start_next_cycle action. This builder stays because the
+# tests below still feed such a row in — now to prove the file is REFUSED
+# rather than executed.
 
 def _start_next_row(**over) -> dict[str, str]:
     base = {
@@ -754,15 +741,10 @@ def _start_next_row(**over) -> dict[str, str]:
     return base
 
 
-def _preview_state(content: bytes, snapshot_rows: list[dict]) -> PlotImportPreviewState:
-    """Build the approved preview-state the client would echo back on commit
-    (round 8-2.7.2): the real SHA-256 of `content` plus one snapshot row per
-    start_next_cycle row. Each snapshot dict is {rowNumber, supplierCode,
-    plotCode, resolvedAction, activeCycleId}."""
-    return PlotImportPreviewState(
-        file_sha256=plot_import.file_digest(content),
-        start_next_rows=[PlotImportPreviewStateRow(**r) for r in snapshot_rows],
-    )
+# Its companion `_preview_state()` was deleted in round M: round K removed the
+# PlotImportPreviewStateRow class it built, and nothing had called the helper
+# since — so pytest never executed the dead reference and never reported it.
+# `ruff check` did, as F821, the first time it was run over this tree.
 
 
 # --- validation --------------------------------------------------------

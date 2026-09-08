@@ -14,7 +14,7 @@ annotations`, same reason as public_masterdata.py / public_records.py —
 slowapi's @limiter.limit wraps the route with functools.wraps, which would
 break FastAPI's forward-ref resolution under PEP 563.
 """
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter

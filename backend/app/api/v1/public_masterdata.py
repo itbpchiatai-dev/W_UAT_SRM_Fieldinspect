@@ -31,7 +31,7 @@ FastAPI's forward-ref resolution under PEP 563.
 """
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import limiter

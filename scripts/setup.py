@@ -211,7 +211,7 @@ def _ask_new_container_port(env: "EnvCheck | None" = None) -> int:
         return 5432
     suggested = _suggest_free_db_port(env)
     print()
-    print(f"   ⚠️  Port 5432 ถูกใช้งานอยู่ — DB container ใหม่ต้องใช้ port อื่น")
+    print("   ⚠️  Port 5432 ถูกใช้งานอยู่ — DB container ใหม่ต้องใช้ port อื่น")
     print(f"      port ว่างถัดไปที่เจอ: {suggested}")
     while True:
         raw = input(f"   Port สำหรับ DB container ใหม่ [default: {suggested}]: ").strip()
@@ -536,8 +536,8 @@ def _validate_ident(label: str, value: str) -> str:
     """
     if not _IDENT_RE.match(value):
         print(f"   ❌ ค่า '{label}' ไม่ถูกต้อง: {value!r}")
-        print(f"      ต้องขึ้นต้นด้วยตัวอักษรหรือ '_' ตามด้วย [A-Za-z0-9_] เท่านั้น")
-        print(f"      (PostgreSQL identifier — กรุณาแก้แล้วรันใหม่)")
+        print("      ต้องขึ้นต้นด้วยตัวอักษรหรือ '_' ตามด้วย [A-Za-z0-9_] เท่านั้น")
+        print("      (PostgreSQL identifier — กรุณาแก้แล้วรันใหม่)")
         sys.exit(1)
     return value
 
@@ -932,7 +932,7 @@ def _prompt_identifier(question: str, default: str) -> str:
         if _IDENT_RE.match(value):
             return value
         print(f"   ⚠️  '{value}' ไม่ใช่ PostgreSQL identifier ที่ใช้ได้")
-        print(f"      ต้องขึ้นต้นด้วยตัวอักษรหรือ '_' ตามด้วย [A-Za-z0-9_] เท่านั้น")
+        print("      ต้องขึ้นต้นด้วยตัวอักษรหรือ '_' ตามด้วย [A-Za-z0-9_] เท่านั้น")
 
 
 def _ask_db_credentials(default_db_name: str) -> dict:

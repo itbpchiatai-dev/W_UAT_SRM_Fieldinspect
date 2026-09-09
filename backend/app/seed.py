@@ -144,11 +144,20 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
     ]),
     ("supplier:owner",       "Supplier Owner",      "external", [
         "suppliers.read", "plots.read",
-        # Self-service plots: an owner creates/edits plots for their OWN
-        # supplier only — RLS scope 'supplier' hides everyone else's rows,
-        # and create_plot (app/api/v1/plots.py) additionally rejects a
-        # payload naming another supplier with a clean 403.
-        "plots.create", "plots.update",
+        # Round P — plots.create and plots.update were REMOVED (migration
+        # 0056 drops them from existing databases too).
+        #
+        # An owner is now, by decision, a farmer who can log in: the same
+        # inspection they could already record through /public/inspect, plus
+        # the thing that flow cannot give them — reading their own supplier's
+        # plots, history and reports. Managing plots is Chiatai's job.
+        #
+        # plots.update was the wider of the two by far. It did not just mean
+        # "edit a plot": it unlocked start / edit / CLOSE cycle and the whole
+        # Excel importer. Closing in particular became load-bearing in round P,
+        # where a close also deactivates the plot for anyone holding
+        # plots.delete — so leaving plots.update here would have kept suppliers
+        # one permission away from an action deliberately reserved for admins.
         # Round 8-4F: an owner records inspections for their OWN supplier's
         # plots. records.create only unlocks the ACTION — the data boundary
         # stays RLS scope 'supplier' (app/api/deps/scope.py: owner + supplier_id

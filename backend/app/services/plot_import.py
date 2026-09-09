@@ -81,7 +81,12 @@ from app.repositories import plot_access_phone_repository as phone_repo
 from app.repositories import plot_cycle_repository as plot_cycle_repo
 from app.repositories import plot_repository as plot_repo
 from app.repositories import supplier_repository as supplier_repo
-from app.schemas.plot import PlotAccessPhoneConfig, PlotCreate, normalize_and_validate_phone_config
+from app.schemas.plot import (
+    PlotAccessPhoneConfig,
+    PlotCreate,
+    PlotUpdate,
+    normalize_and_validate_phone_config,
+)
 from app.services.cycle_reference_fields import normalize_cycle_reference_text
 from app.schemas.plot_import import (
     PlotImportCommitResult,
@@ -603,6 +608,11 @@ class _RowState:
     # cycle_no of the cycle this row created/edited on a successful commit
     # (round 8-2.4) — set by _execute_row. None for preview / errored rows.
     result_cycle_no: int | None = None
+    # Round P — True when a final_plot row also took the plot out of service.
+    # Only a caller holding plots.delete can cause that, so False here means
+    # either the row was not a final_plot or the importer lacked the privilege
+    # — never that the deactivation was attempted and failed.
+    result_plot_deactivated: bool = False
     # Round K — kept as a read-only echo on the row result (always None now
     # that no action resolves to another one). The field stays so an older
     # client reading it is unaffected; nothing sets it.
@@ -1963,9 +1973,10 @@ async def _execute_row(
         # ran; this re-fetch is the defense-in-depth that guarantees the
         # record actually snapshotted is the one just re-validated, never a
         # second, independently-diverged query. No new cycle is ever created
-        # here; Plot.is_active is never touched; Records are never written or
-        # deleted; the QR key is untouched (close_cycle never touches any of
-        # these).
+        # here; Records are never written or deleted; the QR key is untouched
+        # (close_cycle never touches any of these). Round P — Plot.is_active
+        # IS now touched, but only after the close and only for a caller
+        # holding plots.delete; see the write at the end of this branch.
         cycle = await plot_cycle_repo.get_active_cycle_for_plot_for_update(db, plot.id)
         if cycle is None:
             # The active cycle this row targeted is gone — either it was
@@ -2034,6 +2045,18 @@ async def _execute_row(
             closed_by_id=ctx.user_id, reason=FINAL_PLOT_CLOSE_REASON,
             final_estimate_record=resolved_record,
         )
+        # Round P — same rule the close ENDPOINT applies (see
+        # api/v1/plots.py close_plot_cycle): under "one plot, one cycle" a
+        # finalized plot is finished for good, so it also leaves service —
+        # but only for a caller who holds plots.delete, because deactivating
+        # is deliberately a narrower privilege than closing and is not
+        # undoable without it. ctx.can_reactivate IS that permission
+        # (PLOTS_DELETE; named for its first use in round 8-6H). A file
+        # imported by someone without it closes the cycle and stops there,
+        # exactly as the endpoint does.
+        if ctx.can_reactivate and plot.is_active:
+            await plot_repo.update_plot(db, plot, PlotUpdate(is_active=False))
+            state.result_plot_deactivated = True
         state.result_cycle_no = cycle.cycle_no
         return ACTION_FINAL
 

@@ -2592,3 +2592,49 @@ describe('PlotDetail — round 8-14D: inspection history page-size selector', ()
     expect(cycleSelect.value).toBe('10');
   });
 });
+
+/**
+ * Round P — closing a cycle also takes the plot out of service, for a caller
+ * holding plots.delete. Undoing that needs the same permission, so the modal
+ * has to say it BEFORE the button, not after.
+ */
+describe('PlotDetail — close warns that the plot is retired too (round P)', () => {
+  beforeEach(() => { allowedPerms = null; });
+
+  async function openCloseModal() {
+    getPlotMock.mockResolvedValue(basePlot());
+    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'ปิดรอบปลูก' }));
+  }
+
+  it('warns that the plot will be deactivated when the user may deactivate it', async () => {
+    allowedPerms = new Set(['plots.read', 'plots.update', 'plots.delete']);
+    await openCloseModal();
+
+    expect(await screen.findByText(/แปลงนี้จะถูกปิดใช้งานทันที/)).toBeTruthy();
+    // and says what that costs, since the farmer-facing effect is invisible
+    // from this screen
+    expect(screen.getByText(/เกษตรกรจะไม่เห็นแปลงนี้ในหน้าตรวจแปลงอีก/)).toBeTruthy();
+  });
+
+  it('does NOT promise deactivation to a caller who lacks plots.delete', async () => {
+    // For them the close is all that happens — the backend gate leaves the
+    // plot in service, so claiming otherwise would be a lie on screen.
+    allowedPerms = new Set(['plots.read', 'plots.update']);
+    await openCloseModal();
+
+    await screen.findByRole('button', { name: 'ยืนยันปิดรอบปลูก' });
+    expect(screen.queryByText(/แปลงนี้จะถูกปิดใช้งานทันที/)).toBeNull();
+  });
+
+  it('no longer says a new cycle can be started on this plot', async () => {
+    // The old copy ended "...จนกว่าจะเริ่มรอบปลูกใหม่", which round E removed.
+    allowedPerms = new Set(['plots.read', 'plots.update', 'plots.delete']);
+    await openCloseModal();
+
+    await screen.findByRole('button', { name: 'ยืนยันปิดรอบปลูก' });
+    expect(screen.queryByText(/จนกว่าจะเริ่มรอบปลูกใหม่/)).toBeNull();
+    expect(screen.getByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
+  });
+});

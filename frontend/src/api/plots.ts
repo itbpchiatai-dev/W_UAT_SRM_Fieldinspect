@@ -1543,12 +1543,24 @@ export async function getPlotCycleClosePreview(
   return res.data;
 }
 
+/** Round P — the closed cycle, plus whether the plot left service with it.
+ *
+ * Under "one plot, one cycle" a closed plot is finished for good, so closing
+ * its cycle also deactivates the plot — but ONLY for a caller holding
+ * plots.delete, since deactivating is a narrower privilege than closing and
+ * cannot be undone without it. `plotDeactivated: false` therefore means the
+ * cycle closed and the plot is still in service, not that anything failed.
+ * Optional so a response from a pre-round-P backend still typechecks. */
+export interface PlotCycleCloseResult extends PlotCycle {
+  plotDeactivated?: boolean;
+}
+
 export async function closePlotCycle(
   plotId: string,
   cycleId: string,
   payload: PlotCycleClosePayload,
-): Promise<PlotCycle> {
-  const res = await apiClient.post<PlotCycle>(
+): Promise<PlotCycleCloseResult> {
+  const res = await apiClient.post<PlotCycleCloseResult>(
     `/api/v1/plots/${plotId}/cycles/${cycleId}/close`,
     payload,
   );

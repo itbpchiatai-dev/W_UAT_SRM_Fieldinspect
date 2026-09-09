@@ -50,6 +50,7 @@ from app.schemas.plot import (
     PlotAssignRequest,
     PlotCreate,
     PlotCycleClose,
+    PlotCycleCloseResult,
     PlotCycleCloseHarvestPreview,
     PlotCycleCreate,
     PlotCycleRead,
@@ -2314,7 +2315,7 @@ async def preview_plot_cycle_close(
     )
 
 
-@router.post("/{plot_id}/cycles/{cycle_id}/close", response_model=PlotCycleRead, dependencies=[
+@router.post("/{plot_id}/cycles/{cycle_id}/close", response_model=PlotCycleCloseResult, dependencies=[
     Depends(require_permission(PermissionKey.PLOTS_UPDATE)),
     Depends(get_rls_context),
 ])
@@ -2324,12 +2325,17 @@ async def close_plot_cycle(
     payload: PlotCycleClose,
     current_user: CurrentUser,
     db: AsyncSession = DbDep,
-) -> PlotCycleRead:
+) -> PlotCycleCloseResult:
     """Close the active cycle as harvested/cancelled (round 7.2B). Preserves
-    history (never deletes the cycle or its records), clears the plot's mirror
-    AND inspection snapshot (the plot now has no active cycle), and leaves
-    plot.is_active and the QR untouched. After this, creating an inspection
-    fails (no active cycle) until a new cycle is started.
+    history (never deletes the cycle or its records) and clears the plot's
+    mirror AND inspection snapshot (the plot now has no active cycle). The QR
+    key, access phones, assignments and record history are untouched. After
+    this, creating an inspection fails (no active cycle).
+
+    Round P — a caller holding plots.delete ALSO takes the plot out of service
+    here, in the same transaction; see the comment at the write below for why
+    that is gated rather than unconditional. `plotDeactivated` on the response
+    says whether it happened.
 
     Round 8.0.7 — locks the plot FIRST (get_plot_for_update), then the active
     cycle (same Plot-before-PlotCycle order as update_plot_cycle/
@@ -2419,10 +2425,35 @@ async def close_plot_cycle(
         closed_by_id=current_user.id, reason=payload.close_reason,
     )
     await plot_cycle_repo.clear_plot_cycle_mirror_and_inspection_snapshot(db, plot)
+
+    # Round P — under "one plot, one cycle" (round E) a closed plot is finished
+    # for good: it will never take another cycle, so leaving it "in service"
+    # states something untrue and keeps it in the farmer's public list, the
+    # plot-status report and the Dashboard count.
+    #
+    # Gated on plots.delete, and that gate is the whole design. Closing a cycle
+    # needs plots.update; deactivating a plot needs plots.delete, deliberately
+    # narrower. Deactivating unconditionally here would hand every plots.update
+    # holder an action the permission model withholds from them — and one they
+    # could not undo, since reactivate is plots.delete too. So a caller without
+    # it closes the cycle and nothing more; an admin finishes the job in one
+    # step. `plot_deactivated` on the response says which happened.
+    #
+    # Same transaction as the close: a plot must never be left closed-but-active
+    # by a failure in between. No 8-6H invariant check is needed — the active
+    # cycle was just closed under this same plot lock, so there is none.
+    perms: set[str] = getattr(current_user, "_effective_permissions", set())
+    deactivated = False
+    if PermissionKey.PLOTS_DELETE in perms and plot.is_active:
+        plot = await repo.update_plot(db, plot, PlotUpdate(is_active=False))
+        deactivated = True
+
     # Re-load the onupdate-computed updated_at the flush expired (round 7.7 fix
     # — see start_plot_cycle) before serialising.
     await db.refresh(cycle)
-    return PlotCycleRead.model_validate(cycle)
+    result = PlotCycleCloseResult.model_validate(cycle)
+    result.plot_deactivated = deactivated
+    return result
 
 
 @router.post(

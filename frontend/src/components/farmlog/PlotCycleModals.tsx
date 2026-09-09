@@ -28,6 +28,7 @@ import {
   type PlotCycleClosePayload,
   type PlotCycleRolloverPayload,
 } from '../../api/plots';
+import { useHasPermission } from '../../hooks/useHasPermission';
 import { MasterDataSelect } from './MasterDataSelect';
 import { listMasterData, masterDataQueryKey } from '../../api/masterdata';
 import { YIELD_UNIT_OPTIONS, formatYieldQuantity } from '../../lib/yield-planning';
@@ -892,6 +893,11 @@ export function CloseCycleModal({
   const status = watch('status');
   const recordingHarvest = status === 'harvested';
 
+  // Round P — plots.delete is what makes a close ALSO deactivate the plot
+  // (backend gate; see api/v1/plots.py close_plot_cycle). Read here only to
+  // tell the truth in the warning above, never to decide anything.
+  const canDeactivatePlot = useHasPermission('plots.delete');
+
   const closeM = useMutation({
     mutationFn: (p: PlotCycleClosePayload) => closePlotCycle(plotId, cycle.id, p),
   });
@@ -915,8 +921,23 @@ export function CloseCycleModal({
   return (
     <ModalShell title={`ปิดรอบปลูก — รอบที่ ${cycle.cycleNo}`} icon={<Archive className="h-4 w-4 text-amber-600" />} onClose={onClose}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 overflow-y-auto px-6 py-5">
+        {/* Round P — the old copy ("...จนกว่าจะเริ่มรอบปลูกใหม่") described a
+            second cycle on the same plot, which round E's "one plot, one
+            cycle" policy no longer allows; and it did not mention that the
+            plot itself now leaves service. Both halves are stated here, BEFORE
+            the button, because this is the last reversible moment: undoing a
+            deactivation needs plots.delete. The second sentence is shown only
+            to a caller who actually holds it — for anyone else the close is
+            all that happens, and promising otherwise would be wrong. */}
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          หลังปิดรอบปลูก จะบันทึกการตรวจใหม่ไม่ได้จนกว่าจะเริ่มรอบปลูกใหม่
+          หลังปิดรอบปลูก จะบันทึกการตรวจของแปลงนี้ไม่ได้อีก — 1 แปลง = 1 รอบปลูก
+          ฤดูถัดไปให้สร้างแปลงใหม่
+          {canDeactivatePlot && (
+            <>
+              {' '}<span className="font-medium">และแปลงนี้จะถูกปิดใช้งานทันที</span>{' '}
+              (เกษตรกรจะไม่เห็นแปลงนี้ในหน้าตรวจแปลงอีก · เปิดกลับได้จากเมนูจัดการแปลง)
+            </>
+          )}
         </p>
         <Field label="สถานะ" error={errors.status?.message}>
           <select {...register('status')} className="field-input">

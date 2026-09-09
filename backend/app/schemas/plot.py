@@ -911,6 +911,24 @@ class PlotCycleRollover(CamelBaseModel):
         return self
 
 
+class PlotCycleCloseResult(PlotCycleRead):
+    """Response for a cycle close (round P).
+
+    A strict superset of PlotCycleRead, which this endpoint used to return: the
+    closed cycle exactly as before, plus one field saying whether the plot was
+    taken out of service in the same transaction.
+
+    That field exists because under "one plot, one cycle" (round E) a closed
+    plot is finished for good, so closing its cycle now also deactivates the
+    plot — but only when the caller holds plots.delete. Without something on
+    the response, the plot would simply vanish from the caller's default-filtered
+    list with no explanation, which is exactly the kind of silent side effect
+    this project keeps removing. False means the cycle closed and the plot is
+    still in service (the caller may close cycles but not deactivate plots)."""
+
+    plot_deactivated: bool = False
+
+
 class PlotCycleRolloverResult(CamelBaseModel):
     """Response for a rollover — carries BOTH the just-closed cycle and the new
     active cycle so the Plot Detail UI can update its history + current-cycle

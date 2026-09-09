@@ -520,6 +520,11 @@ def test_write_endpoints_refresh_before_model_validate_in_source() -> None:
     for fn in (start_plot_cycle, update_plot_cycle, close_plot_cycle):
         src = inspect.getsource(fn)
         assert "await db.refresh(cycle)" in src, fn.__name__
+        # Match on the CALL, not on a specific response model: round P gave
+        # close its own PlotCycleCloseResult, and pinning the class name here
+        # would have let a future model rename silently retire this guard
+        # rather than fail it.
+        assert ".model_validate(cycle)" in src, fn.__name__
         assert src.index("await db.refresh(cycle)") < src.index(
-            "PlotCycleRead.model_validate(cycle)"
+            ".model_validate(cycle)"
         ), fn.__name__

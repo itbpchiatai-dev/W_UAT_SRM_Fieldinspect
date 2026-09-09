@@ -55,11 +55,30 @@ def test_create_plot_has_the_app_layer_supplier_scope_guard() -> None:
     assert "Cannot create a plot for another supplier" in src
 
 
-def test_supplier_owner_seed_grants_create_and_update_but_not_delete_or_assign() -> None:
+def test_supplier_owner_seed_is_read_only_on_plots() -> None:
+    """Round P narrowed this role to view-only (migration 0056 drops the two
+    keys from existing databases as well).
+
+    A Supplier Owner is now a farmer who can log in: the inspection they could
+    already record through /public/inspect, plus their own supplier's plots,
+    history and reports. Managing plots is Chiatai's.
+
+    plots.update was never merely "edit a plot" — it unlocked start / edit /
+    CLOSE cycle and the whole Excel importer. Round P made closing heavier
+    still: a close now also retires the plot for anyone holding plots.delete.
+    Leaving plots.update here would have kept this role one permission away
+    from an action reserved for admins.
+
+    The scope guard the rest of this module tests is unchanged and still
+    matters: it is what confines a supplier-scoped caller to their OWN
+    supplier on every plots route, whatever permissions a future round grants
+    back."""
     keys = set(_role_keys("supplier:owner"))
-    assert {"plots.read", "plots.create", "plots.update"} <= keys
-    assert "plots.delete" not in keys
-    assert "plots.assign" not in keys
+    assert {"plots.read", "records.read", "records.create"} <= keys, (
+        "the role lost the reading and recording that are its entire purpose"
+    )
+    for withheld in ("plots.create", "plots.update", "plots.delete", "plots.assign"):
+        assert withheld not in keys, f"supplier:owner regained {withheld}"
 
 
 def test_supplier_staff_seed_still_has_no_plot_write_permissions() -> None:

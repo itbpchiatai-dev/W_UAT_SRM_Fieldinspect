@@ -47,6 +47,12 @@
 # for backward-compatible migrations (new nullable columns, new tables). A
 # migration that drops or renames something WILL break the running container
 # in that window — deploy those by hand, in a maintenance window.
+#
+# Round N: the migration step can now FAIL. It used to end in `|| true`, so a
+# broken migration was swapped live and announced as DONE — see the comment on
+# migrate() for why the health gate could not catch that. The deploy now stops
+# before the swap unless alembic exits clean AND the database reports itself at
+# head, leaving UAT on the old code with the old schema.
 
 set -euo pipefail
 
@@ -232,16 +238,67 @@ ship() {
 }
 
 # ----------------------------------------------------------------- migrate --
+#
+# ROUND N — this step used to be incapable of failing:
+#
+#     sshu "... alembic upgrade head" 2>&1 | grep -E '...' | sed '...' || true
+#
+# Three separate things were wrong with that one line. It is a PIPELINE, so
+# `$?` is sed's status, not alembic's. `|| true` then discarded even that.
+# And nothing downstream could cover for it: the health gate reads the
+# container healthcheck, which is `/health`, which is documented in main.py as
+# "deliberately touches nothing" — a static dict, so a database hiccup can
+# never restart-loop the app. A container running NEW code against an
+# UN-MIGRATED schema is therefore `healthy`, all the way to "DONE — $SHA is
+# live". You would find out from a 500 on a page, not from this script.
+#
+# That is the same shape of bug rounds I and J removed from the API — a
+# failure reported as a success — except here the thing reporting success is
+# also the thing that decides whether to roll back.
+#
+# migrate() runs BEFORE the containers are swapped, so dying here leaves UAT
+# serving the OLD code on the OLD schema. That is the correct safe state, and
+# it is why these checks `die` rather than call do_rollback: there is nothing
+# to roll back yet.
 migrate() {
     say "MIGRATE"
-    echo "current:"
-    sshu "cd ${UAT_DIR} && docker compose run --rm --no-deps -T backend alembic current" \
-        2>/dev/null | tail -1 | sed 's/^/           /'
-    sshu "cd ${UAT_DIR} && docker compose run --rm --no-deps -T backend alembic upgrade head" \
-        2>&1 | grep -E 'Running upgrade|ERROR' | sed 's/^/           /' || true
-    echo "now:"
-    sshu "cd ${UAT_DIR} && docker compose run --rm --no-deps -T backend alembic current" \
-        2>/dev/null | tail -1 | sed 's/^/           /'
+    local before after heads log
+    log="$WORK/alembic-upgrade.log"
+
+    before="$(alembic_line current)"
+    echo "           before : ${before:-<no version stamped>}"
+
+    # Deliberately NOT a pipeline — the exit status has to be alembic's own.
+    if ! sshu "cd ${UAT_DIR} && docker compose run --rm --no-deps -T backend alembic upgrade head" \
+            > "$log" 2>&1; then
+        echo "--- alembic output (last 25 lines) -------------------------------" >&2
+        tail -25 "$log" >&2
+        echo "------------------------------------------------------------------" >&2
+        die "alembic upgrade head FAILED. The containers were NOT swapped, so UAT is still serving the old code on the old schema. Fix the migration and run this script again."
+    fi
+    grep -E 'Running upgrade' "$log" | sed 's/^/           /' \
+        || echo "           (already up to date — no migrations to apply)"
+
+    # A zero exit is not proof the schema is at head: an empty alembic_version,
+    # a partially applied branch, or a history with two heads all exit 0. Ask
+    # the database what it actually is and compare.
+    after="$(alembic_line current)"
+    heads="$(alembic_line heads)"
+    echo "           after  : ${after:-<no version stamped>}"
+    echo "           head   : ${heads:-<unknown>}"
+
+    [ -n "$after" ] \
+        || die "UAT has no alembic version stamped after the upgrade. The containers were NOT swapped."
+    [ "${after%% *}" = "${heads%% *}" ] \
+        || die "UAT schema is at '${after%% *}' but head is '${heads%% *}'. The containers were NOT swapped — new code must never run on a schema it does not match."
+    echo "           schema is at head — safe to swap"
+}
+
+# Run one read-only alembic command on the host and return its last non-blank
+# line (the revision id, e.g. `0055_log_partition_maintenance (head)`).
+alembic_line() {
+    sshu "cd ${UAT_DIR} && docker compose run --rm --no-deps -T backend alembic $1" 2>/dev/null \
+        | grep -v '^[[:space:]]*$' | tail -1 || true
 }
 
 # -------------------------------------------------------------------- swap --
@@ -265,6 +322,39 @@ swap_and_check() {
     die "deploy rolled back; the database was left as-is (see the backup dir)"
 }
 
+# ------------------------------------------------------------- post-deploy --
+# Round H gave the log-partition runway a place to be read from
+# (/api/v1/health/partitions) after the partitions ran out on 2026-09-01 and
+# every audited write in the system silently rolled back for a week. Nothing
+# ever read it. A deploy is the one moment somebody is definitely watching, so
+# it is read here.
+#
+# Reported, never fatal: a short runway is a warning about NEXT month, not a
+# reason to roll back a deploy that is working. It is fetched from inside the
+# backend container because the route is behind nginx-proxy-manager and
+# Cloudflare from the outside.
+post_deploy_checks() {
+    say "POST-DEPLOY CHECKS"
+    local out
+    out="$(sshu "cd ${UAT_DIR} && docker compose exec -T backend python" 2>/dev/null <<'PY' || true
+import urllib.request
+try:
+    print(urllib.request.urlopen(
+        "http://localhost:8000/api/v1/health/partitions", timeout=10).read().decode())
+except Exception as exc:
+    print('{"status": "unreachable", "error": "%s"}' % exc)
+PY
+    )"
+    case "$out" in
+        *'"ok"'*)      echo "           log partitions: OK — $out" ;;
+        *'"warning"'*) echo "           log partitions: LOW RUNWAY — $out"
+                       echo "           ACT ON THIS: when they run out, every audited write"
+                       echo "           starts rolling back. Run srm_ensure_log_partitions()." ;;
+        *)             echo "           log partitions: could not read — $out"
+                       echo "           (not fatal; the deploy itself is fine)" ;;
+    esac
+}
+
 # -------------------------------------------------------------------- main --
 case "${1:-}" in
     rollback) do_rollback; exit 0 ;;
@@ -282,6 +372,7 @@ fi
 ship
 migrate
 swap_and_check
+post_deploy_checks
 
 say "DONE — $SHA is live"
 echo "rollback with:  ./deploy-uat.sh rollback"

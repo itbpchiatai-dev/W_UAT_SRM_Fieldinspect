@@ -152,6 +152,64 @@ def _apply_plot_status_filter(stmt, *, plot_status: str, active_only: bool):
     return stmt
 
 
+def _apply_cycle_status_filter(stmt, *, cycle_status: str):
+    """"สถานะรอบปลูก" filter (round O) — a DIFFERENT axis from
+    _apply_plot_status_filter above, and keeping them apart is the point.
+
+    plot_status is Plot.is_active: whether an admin has taken the plot out of
+    service. cycle_status is where the plot is in its season. Under "one plot,
+    one cycle" (round E) a plot whose cycle is harvested stays is_active=true
+    forever unless somebody deactivates it, so the existing "สถานะแปลง: ใช้งาน"
+    filter does not hide finished plots and never could — which is exactly the
+    complaint this filter answers.
+
+    Values, all expressed against the plot's cycle history rather than the
+    active_cycle relationship, because three of the five have to see closed
+    cycles:
+
+      unfinished — has an active cycle OR has never had one: "still needs
+                   something from you". What the Plots page sends by default.
+                   Deliberately includes never-started plots — filtering to
+                   active-only would hide a freshly created plot from the very
+                   person whose job is to start its cycle.
+      active     — currently growing.
+      none       — never had a cycle; waiting to start.
+      closed     — harvested or cancelled; the season is over.
+      all        — no filter. THE DEFAULT HERE, and at the endpoint.
+
+    'all' is the default on purpose, even though the Plots page wants
+    'unfinished': GET /plots also feeds SmartPlotPicker (which shows
+    no-active-cycle plots DISABLED rather than hidden — round 7-11's explicit
+    decision, so the user knows they exist) and the Dashboard map. Making
+    'unfinished' the server-side default would silently change both. The new
+    default belongs to the one screen that asked for it, not to the endpoint.
+
+    EXISTS/NOT EXISTS, never a JOIN: a plot with several cycles would come
+    back once per matching row and duplicate the list. Same reasoning as
+    _apply_cycle_label_filter and _apply_invoice_filter.
+    """
+    if cycle_status == "all":
+        return stmt
+    has_any = select(PlotCycle.id).where(PlotCycle.plot_id == Plot.id).exists()
+    has_active = (
+        select(PlotCycle.id)
+        .where(PlotCycle.plot_id == Plot.id, PlotCycle.status == "active")
+        .exists()
+    )
+    if cycle_status == "active":
+        return stmt.where(has_active)
+    if cycle_status == "none":
+        return stmt.where(~has_any)
+    if cycle_status == "closed":
+        # Has a cycle, and none of them is active — i.e. the season is over.
+        # Not "has a harvested/cancelled cycle", which would also match a
+        # legacy plot that closed one cycle and opened another.
+        return stmt.where(has_any & ~has_active)
+    if cycle_status == "unfinished":
+        return stmt.where(has_active | ~has_any)
+    return stmt
+
+
 def _apply_cycle_label_filter(stmt, *, cycle_label: str | None):
     """"รอบปลูกปัจจุบัน" filter — shared by list_plots and
     search_plots_by_phone so the two can't drift (same one-place pattern as
@@ -226,6 +284,48 @@ def _apply_planting_date_filter(
     return stmt.where(exists_clause)
 
 
+def _apply_invoice_filter(stmt, *, invoice: str | None):
+    """"เลขที่ Invoice" filter (round O) — shared by list_plots and
+    search_plots_by_phone, same one-place EXISTS pattern as the two filters
+    above. Two things about it deliberately DIFFER from them, and both
+    differences are the point of the filter:
+
+    1. It matches a cycle of ANY status, not just the active one. The other
+       cycle filters are active-only so that "รอบปลูกปัจจุบัน" and
+       "วันที่เริ่ม" always describe the same live cycle. This one exists to
+       ANSWER THE OPPOSITE QUESTION — "which plot did invoice X belong to",
+       asked precisely about seasons that are already finished. Scoping it to
+       the active cycle would make it useless for every plot it is most often
+       used on. Under "one plot, one cycle" (round E) a plot has at most one
+       cycle anyway, so for anything created since then the distinction is
+       theoretical; it matters for the pre-policy rows.
+
+    2. It is a case-insensitive SUBSTRING match, where cycle_label is exact.
+       An Oracle invoice reference is long and externally formatted; an admin
+       reading one off a document should not have to reproduce it in full.
+       Same reasoning, and same treatment, as phone_digits in round 8-18B.1.
+
+    EXISTS rather than a JOIN for the reason spelled out on
+    _apply_cycle_label_filter: without the active-status predicate there is no
+    partial unique index to lean on here, so a JOIN really could return the
+    same Plot once per matching cycle. EXISTS cannot.
+    """
+    if not invoice:
+        return stmt
+    trimmed = invoice.strip()
+    if not trimmed:
+        return stmt
+    exists_clause = (
+        select(PlotCycle.id)
+        .where(
+            PlotCycle.plot_id == Plot.id,
+            PlotCycle.oracle_invoice.ilike(f"%{trimmed}%"),
+        )
+        .exists()
+    )
+    return stmt.where(exists_clause)
+
+
 def apply_plot_text_filter(stmt, *, q: str | None):
     """Round 8-18B — the free-text "ชื่อแปลงหรือรหัสแปลง" filter, in ONE place
     shared by list_plots, search_plots_by_phone and the template endpoint's
@@ -261,7 +361,9 @@ async def list_plots(
     q: str | None = None,
     active_only: bool = False,
     plot_status: str = "all",
+    cycle_status: str = "all",
     cycle_label: str | None = None,
+    invoice: str | None = None,
     planting_date_from: datetime.date | None = None,
     planting_date_to: datetime.date | None = None,
 ) -> list[Plot]:
@@ -276,6 +378,15 @@ async def list_plots(
             selectinload(Plot.assignments),
             selectinload(Plot.supplier),
             selectinload(Plot.active_cycle),
+            # Round O — the plot's cycle HISTORY, for PlotSummary's
+            # latest_cycle_* read-model (plots.py _populate_latest_cycle):
+            # active_cycle above is null both for a plot that never started
+            # and for one that finished, and the list has to tell those apart.
+            # Cycles is lazy="select", so without this the async request dies
+            # with MissingGreenlet rather than lazy-loading. One more IN-query
+            # for the whole page; under "one plot, one cycle" (round E) it
+            # returns a single row per plot.
+            selectinload(Plot.cycles),
             # active access phones for PlotSummary's primary/additionalPhones
             # (round 8-3A) — one IN-query for the whole page, no N+1.
             selectinload(Plot.access_phones),
@@ -294,7 +405,9 @@ async def list_plots(
         stmt = stmt.where(Plot.current_crop == crop)
     if variety:
         stmt = stmt.where(Plot.current_variety == variety)
+    stmt = _apply_cycle_status_filter(stmt, cycle_status=cycle_status)
     stmt = _apply_cycle_label_filter(stmt, cycle_label=cycle_label)
+    stmt = _apply_invoice_filter(stmt, invoice=invoice)
     stmt = _apply_planting_date_filter(
         stmt, planting_date_from=planting_date_from, planting_date_to=planting_date_to,
     )
@@ -315,7 +428,9 @@ async def search_plots_by_phone(
     limit: int = 50,
     offset: int = 0,
     plot_status: str = "all",
+    cycle_status: str = "all",
     cycle_label: str | None = None,
+    invoice: str | None = None,
     q: str | None = None,
     planting_date_from: datetime.date | None = None,
     planting_date_to: datetime.date | None = None,
@@ -375,6 +490,10 @@ async def search_plots_by_phone(
             selectinload(Plot.assignments),
             selectinload(Plot.supplier),
             selectinload(Plot.active_cycle),
+            # Round O — same latest_cycle_* read-model as list_plots above.
+            # Both feed _to_summary, so both must eager-load this or the phone
+            # search alone would MissingGreenlet.
+            selectinload(Plot.cycles),
             selectinload(Plot.access_phones),
         )
         .where(phone_exists)
@@ -388,7 +507,9 @@ async def search_plots_by_phone(
         stmt = stmt.where(Plot.current_crop == crop)
     if variety:
         stmt = stmt.where(Plot.current_variety == variety)
+    stmt = _apply_cycle_status_filter(stmt, cycle_status=cycle_status)
     stmt = _apply_cycle_label_filter(stmt, cycle_label=cycle_label)
+    stmt = _apply_invoice_filter(stmt, invoice=invoice)
     stmt = _apply_planting_date_filter(
         stmt, planting_date_from=planting_date_from, planting_date_to=planting_date_to,
     )

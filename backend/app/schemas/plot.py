@@ -170,6 +170,11 @@ class PlotPhoneSearchRequest(CamelBaseModel):
     crop: str | None = None
     variety: str | None = None
     plot_status: Literal["all", "active", "inactive"] = "all"
+    # Round O — "สถานะรอบปลูก", the season axis, separate from plot_status
+    # above (which is Plot.is_active). Default "all" for the same reason the
+    # GET endpoint keeps it: the new default belongs to the Plots page, which
+    # sends it explicitly, not to every caller of this API.
+    cycle_status: Literal["all", "unfinished", "active", "none", "closed"] = "all"
     limit: int = Field(default=50, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
     # "รอบปลูกปัจจุบัน" filter — matches ONLY the plot's active PlotCycle.
@@ -181,6 +186,13 @@ class PlotPhoneSearchRequest(CamelBaseModel):
     # same reason as cycle_label: it is plot identity, never PII, so a
     # Pydantic auto-422 echoing it is harmless — unlike `phone` above.
     q: str | None = None
+    # Round O — "เลขที่ Invoice", a substring match against PlotCycle.
+    # oracle_invoice on a cycle of ANY status. Deliberately NOT scoped to the
+    # active cycle the way cycle_label and the planting dates above are: it
+    # exists to find the plot a FINISHED season's invoice belonged to. See
+    # plot_repository._apply_invoice_filter. An Oracle document reference,
+    # not PII — ordinary `str | None`, same as q.
+    invoice: str | None = None
     # Round 8-25K — "วันที่เริ่ม...ถึง", scoped to the plot's ACTIVE
     # PlotCycle.planting_date only (same scope as cycle_label above — see
     # plot_repository._apply_planting_date_filter's docstring). Plain `date`,
@@ -538,6 +550,29 @@ class PlotSummary(CamelBaseModel):
     # authorized numbers without a per-plot fetch (one IN-query for the page).
     primary_phone: str | None = None
     additional_phones: list[str] = []
+
+    # LATEST cycle (round O) — the plot's highest-cycle_no PlotCycle whatever
+    # its status, where active_cycle_* above is filtered to status='active'.
+    #
+    # The distinction is the whole point. active_cycle_id is null for TWO very
+    # different plots: one that has never started a cycle, and one whose season
+    # is finished. The Plots list could not tell them apart, so it labelled
+    # both "รอเริ่มรอบปลูก" — which is actively wrong for a plot that has been
+    # harvested and closed. latest_cycle_status separates them:
+    #
+    #   None                      — never had a cycle ("รอเริ่มรอบปลูก")
+    #   "active"                  — currently growing
+    #   "harvested"/"cancelled"   — closed; the season is over
+    #
+    # Under "one plot, one cycle" (round E) the latest cycle IS the only
+    # cycle, so for anything created since then these simply describe it.
+    latest_cycle_status: str | None = None
+    latest_cycle_closed_at: datetime | None = None
+    # Shown on the row AND searchable via the `invoice` filter — searching for
+    # something the list cannot display is a poor trade. Comes from the latest
+    # cycle rather than the active one for the same reason as the status above:
+    # the invoice an admin looks up usually belongs to a finished season.
+    latest_cycle_oracle_invoice: str | None = None
 
 
 class PlotCycleRead(CamelBaseModel):

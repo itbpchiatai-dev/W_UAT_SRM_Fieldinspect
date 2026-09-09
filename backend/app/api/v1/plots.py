@@ -150,6 +150,31 @@ def _populate_active_cycle(target, plot) -> None:
     target.active_cycle_expected_yield_unit = cycle.expected_yield_unit
 
 
+def _populate_latest_cycle(target, plot) -> None:
+    """Fill the latest_cycle_* read-model (round O) on a PlotSummary from the
+    eager-loaded Plot.cycles history — the highest cycle_no, whatever its
+    status, where _populate_active_cycle above sees only status='active'.
+
+    Why the full history and not a dedicated filtered relationship like
+    active_cycle: "latest" is a MAX, which a primaryjoin cannot express
+    without a correlated subquery, and a JOIN that could return several cycles
+    per plot would duplicate Plot rows in the list. Loading Plot.cycles with
+    selectinload is one extra IN-query for the whole page — the same shape as
+    the three selectinloads already on this query — and under "one plot, one
+    cycle" (round E) it fetches a single row per plot.
+
+    Leaves every field None when the plot has never had a cycle, which is
+    exactly the state the frontend needs to distinguish from a closed one.
+    """
+    cycles = getattr(plot, "cycles", None) or []
+    if not cycles:
+        return
+    latest = max(cycles, key=lambda c: c.cycle_no)
+    target.latest_cycle_status = latest.status
+    target.latest_cycle_closed_at = latest.closed_at
+    target.latest_cycle_oracle_invoice = latest.oracle_invoice
+
+
 def _populate_access_phones(target, plot) -> None:
     """Fill primaryPhone/additionalPhones (round 8-3A) on a PlotRead/PlotSummary
     from the eager-loaded Plot.access_phones relationship (active rows,
@@ -219,6 +244,7 @@ def _to_summary(plot) -> PlotSummary:
         s.supplier_code = plot.supplier.code
         s.supplier_name = plot.supplier.name
     _populate_active_cycle(s, plot)
+    _populate_latest_cycle(s, plot)
     _populate_access_phones(s, plot)
     return s
 
@@ -716,6 +742,12 @@ def _contextual_plot_template_workbook(
 
 
 PlotStatusFilter = Literal["all", "active", "inactive"]
+# Round O — "สถานะรอบปลูก", a SEPARATE axis from PlotStatusFilter above:
+# that one is Plot.is_active (has an admin taken the plot out of service),
+# this one is where the plot is in its season. See
+# plot_repository._apply_cycle_status_filter for why the default stays "all"
+# here even though the Plots page sends "unfinished".
+CycleStatusFilter = Literal["all", "unfinished", "active", "none", "closed"]
 
 
 def _check_plot_status_conflict(plot_status: PlotStatusFilter, active_only: bool) -> None:
@@ -748,7 +780,9 @@ async def list_plots(
     q: str | None = None,
     active_only: bool = False,
     plot_status: PlotStatusFilter = "all",
+    cycle_status: CycleStatusFilter = "all",
     cycle_label: str | None = None,
+    invoice: str | None = None,
     planting_date_from: date | None = None,
     planting_date_to: date | None = None,
 ) -> list[PlotSummary]:
@@ -764,7 +798,9 @@ async def list_plots(
         q=q,
         active_only=active_only,
         plot_status=plot_status,
+        cycle_status=cycle_status,
         cycle_label=cycle_label,
+        invoice=invoice,
         planting_date_from=planting_date_from,
         planting_date_to=planting_date_to,
     )
@@ -892,7 +928,9 @@ async def search_plots_by_phone(
         limit=payload.limit,
         offset=payload.offset,
         plot_status=payload.plot_status,
+        cycle_status=payload.cycle_status,
         cycle_label=payload.cycle_label,
+        invoice=payload.invoice,
         q=payload.q,
         planting_date_from=payload.planting_date_from,
         planting_date_to=payload.planting_date_to,

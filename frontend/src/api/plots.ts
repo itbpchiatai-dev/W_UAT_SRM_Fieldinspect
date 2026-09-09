@@ -131,6 +131,26 @@ export interface PlotSummary {
   // display with lib/phone.ts's formatThaiMobile.
   primaryPhone: string | null;
   additionalPhones: string[];
+
+  /** Round O — the plot's LATEST cycle whatever its status, where the
+   * activeCycle* fields above see only a cycle that is still open.
+   *
+   * activeCycleId is null for two very different plots: one that has never
+   * started a cycle, and one whose season is finished. This list could not
+   * tell them apart, so it called both "รอเริ่มรอบปลูก" — wrong, and
+   * misleading, for a plot that was harvested and closed.
+   *
+   *   null                      never had a cycle
+   *   'active'                  currently growing
+   *   'harvested' | 'cancelled' closed; the season is over
+   *
+   * Optional so a response cached before round O still typechecks — read it
+   * as "unknown", not as "never had a cycle". */
+  latestCycleStatus?: 'active' | 'harvested' | 'cancelled' | null;
+  latestCycleClosedAt?: string | null;
+  /** Oracle invoice of that latest cycle — shown on the row, and searchable
+   * through PlotListParams.invoice. */
+  latestCycleOracleInvoice?: string | null;
 }
 
 export interface PlotDetail {
@@ -235,6 +255,23 @@ export interface PlotDetail {
  * contradiction the backend rejects with a 422 — never combine those two. */
 export type PlotStatusFilter = 'all' | 'active' | 'inactive';
 
+/** Round O — "สถานะรอบปลูก", a SEPARATE axis from PlotStatusFilter above.
+ * That one is the plot's isActive (has an admin taken it out of service);
+ * this one is where the plot is in its season. Under "one plot, one cycle"
+ * a harvested plot stays isActive=true, so plotStatus='active' does NOT
+ * hide finished plots and never could.
+ *
+ *   'unfinished'  active cycle OR never started — "still needs something"
+ *   'active'      currently growing
+ *   'none'        never had a cycle
+ *   'closed'      harvested or cancelled
+ *   'all'         no filter (the endpoint's default)
+ *
+ * The endpoint defaults to 'all' on purpose: GET /plots also feeds
+ * SmartPlotPicker and the Dashboard map, and neither should start hiding
+ * plots. The Plots page sends 'unfinished' explicitly instead. */
+export type CycleStatusFilter = 'all' | 'unfinished' | 'active' | 'none' | 'closed';
+
 export interface PlotListParams {
   supplierId?: string;
   province?: string;
@@ -257,6 +294,14 @@ export interface PlotListParams {
    * after trim. Sourced from listPlotCycleLabels' real values, not free
    * text. */
   cycleLabel?: string;
+  /** Round O — "สถานะรอบปลูก". Omit to get the endpoint's 'all'. */
+  cycleStatus?: CycleStatusFilter;
+  /** Round O — "เลขที่ Invoice": case-insensitive SUBSTRING match against a
+   * cycle's oracleInvoice, on a cycle of ANY status (unlike cycleLabel above,
+   * which is active-only) — the invoice being looked up usually belongs to a
+   * season that is already finished. Its own field, deliberately not folded
+   * into q: round 8-18B removed province from q for exactly that reason. */
+  invoice?: string;
   /** "วันที่เริ่ม...ถึง" filter (round 8-25K) — matches ONLY the plot's
    * ACTIVE PlotCycle.plantingDate (the same date this page already shows as
    * "ปลูก: <date>"), never a closed/historical cycle's — same scope as
@@ -333,6 +378,8 @@ export async function listPlots(params: PlotListParams = {}): Promise<PlotSummar
       active_only: params.activeOnly,
       plot_status: params.plotStatus,
       cycle_label: params.cycleLabel,
+      cycle_status: params.cycleStatus,
+      invoice: params.invoice,
       planting_date_from: params.plantingDateFrom,
       planting_date_to: params.plantingDateTo,
     },
@@ -352,6 +399,11 @@ export interface PlotPhoneSearchParams {
   limit?: number;
   offset?: number;
   cycleLabel?: string;
+  /** Round O — same two filters as PlotListParams, so the phone box and the
+   * rest of the Plots page filter bar combine as an INTERSECTION instead of
+   * one silently widening the other. */
+  cycleStatus?: CycleStatusFilter;
+  invoice?: string;
   /** Round 8-18B — "ชื่อแปลงหรือรหัสแปลง" free text, combined with `phone` as
    * an INTERSECTION by the backend (plot must match both). Travels in the
    * POST body alongside the phone, so using both search boxes together never
@@ -387,6 +439,8 @@ export async function searchPlotsByPhone(params: PlotPhoneSearchParams): Promise
     limit: params.limit,
     offset: params.offset,
     cycleLabel: params.cycleLabel,
+    cycleStatus: params.cycleStatus,
+    invoice: params.invoice,
     q: params.q,
     plantingDateFrom: params.plantingDateFrom,
     plantingDateTo: params.plantingDateTo,

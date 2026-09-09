@@ -65,6 +65,10 @@ async def test_list_plots_passes_province_filter_to_repository() -> None:
         q="P001",
         active_only=True,
         plot_status="all",
+        # Round O — the season axis and the invoice search, forwarded like
+        # every other filter on this page.
+        cycle_status="all",
+        invoice=None,
         cycle_label=None,
         planting_date_from=None,
         planting_date_to=None,
@@ -92,6 +96,10 @@ async def test_list_plots_passes_crop_and_variety_filters_to_repository() -> Non
         q=None,
         active_only=False,
         plot_status="all",
+        # Round O — the season axis and the invoice search, forwarded like
+        # every other filter on this page.
+        cycle_status="all",
+        invoice=None,
         cycle_label=None,
         planting_date_from=None,
         planting_date_to=None,

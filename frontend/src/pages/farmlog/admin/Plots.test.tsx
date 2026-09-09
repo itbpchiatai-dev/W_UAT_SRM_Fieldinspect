@@ -1953,12 +1953,16 @@ describe('Plots list — access phone columns (round 8-3C)', () => {
     }
   });
 
-  it('empty-state row spans all 8 columns', async () => {
+  it('empty-state row spans all 9 columns', async () => {
+    // 9 since round O added the "สถานะรอบปลูก" column. The point of the test
+    // is that the empty row still spans the WHOLE table, not the number.
     listPlotsMock.mockResolvedValue([]);
     renderPlotsPage();
 
     const emptyCell = await screen.findByText('ไม่พบข้อมูล');
-    expect(emptyCell.closest('td')?.getAttribute('colspan')).toBe('8');
+    const columns = document.querySelectorAll('thead th').length;
+    expect(emptyCell.closest('td')?.getAttribute('colspan')).toBe(String(columns));
+    expect(columns).toBe(9);
   });
 
   it('row click still navigates to Plot Detail (unchanged by the new columns)', async () => {
@@ -2405,23 +2409,25 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
     // rely on the guard that requires filterSupplier before mutate() anyway —
     // covered structurally by item 12's test. This test instead confirms the
     // helper text guidance items below don't assume a resolvable supplier.
-    // Round 8-6J — wording updated: no longer claims "active only", since
-    // plotStatus='all' (default) now mixes active AND inactive plots.
-    expect(await screen.findByText(/แปลงที่ใช้งาน: เริ่มรอบถัดไป/)).toBeTruthy();
+    // Round O — this line used to advertise "เริ่มรอบถัดไป" and "เปิดแปลง
+    // พร้อมเริ่มรอบใหม่", the two actions round E's "one plot, one cycle"
+    // policy removed; it now names the three the template really offers.
+    expect(await screen.findByText(/สร้างแปลง\+รอบปลูก/)).toBeTruthy();
   });
 
-  it('the helper copy says every matching active plot is exported, not just the current page (item 28)', async () => {
+  it('the helper copy states the one-plot-one-cycle rule (item 28, reworded round O)', async () => {
     renderPlotsPage();
-    // Round 8-6J — wording updated: no longer claims "active only", since
-    // plotStatus='all' (default) now mixes active AND inactive plots.
-    expect(await screen.findByText(/แปลงที่ปิด: เปิดแปลงพร้อมเริ่มรอบใหม่/)).toBeTruthy();
+    expect(await screen.findByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
   });
 
-  it('the guidance (shown once a Supplier is selected) says cycleLabel must be changed (item 29)', async () => {
+  it('the guidance points at the yellow cells to check (item 29, reworded round O)', async () => {
+    // The old copy told the user cycleLabel must change "ทั้งเริ่มรอบถัดไป
+    // และเปิดใช้งานแปลง" — both retired by round E, so naming them was
+    // instructing people to do what the importer now refuses.
     renderPlotsPage();
     await selectSupplierFilter('SUP001');
 
-    const guidance = await screen.findByText(/cycleLabel ต้องเปลี่ยนเป็นชื่อรอบใหม่/);
+    const guidance = await screen.findByText(/ช่องสีเหลืองในชีต/);
     expect(guidance).toBeTruthy();
   });
 
@@ -3531,7 +3537,10 @@ describe('Plots list — secure phone search (round 8-17A.2)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา' }));
     await waitFor(() => expect(searchPlotsByPhoneMock).toHaveBeenCalled());
 
-    expect(await screen.findByText(/Template ใช้ตัวกรองอื่นที่เลือกไว้ทั้งหมด.*แต่ไม่ใช้หมายเลขสำหรับเข้าตรวจ/)).toBeTruthy();
+    // Round O reworded this: it now lists the filters the template applies
+    // and names the two it does NOT (สถานะรอบปลูก / Invoice are list-only),
+    // instead of claiming "ตัวกรองอื่นที่เลือกไว้ทั้งหมด".
+    expect(await screen.findByText(/Template ใช้ตัวกรอง.*ไม่ใช้หมายเลขสำหรับเข้าตรวจ/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
@@ -4096,5 +4105,138 @@ describe('Plots — round 8-27E: excluded plots are reported on screen, not in a
 
     await screen.findByText('ดาวน์โหลด Excel ไม่สำเร็จ');
     expect(screen.queryByText(/ไม่ได้อยู่ในไฟล์/)).toBeNull();
+  });
+});
+
+/**
+ * Round O — "สถานะรอบปลูก" column and filter, and the Invoice search.
+ *
+ * The list could not tell a plot that had never started a cycle from one whose
+ * season was finished: activeCycleId is null for both, so both rendered
+ * "รอเริ่มรอบปลูก" — telling an admin a harvested, closed plot was waiting to
+ * begin. And the existing "สถานะแปลง" filter is Plot.isActive (has an admin
+ * taken it out of service), a different axis: under "one plot, one cycle" a
+ * harvested plot stays isActive=true, so that filter never hid finished plots
+ * and never could.
+ */
+describe('Plots — cycle status column and filter (round O)', () => {
+  function row(over: Record<string, unknown> = {}) {
+    return {
+      id: 'plot-1', supplierId: 'sup-1', plotCode: 'SUP001-P001', name: 'แปลงทดสอบ',
+      village: null, district: null, province: null, latitude: null, longitude: null,
+      isActive: true, assignedCount: 0, primaryPhone: null, additionalPhones: [],
+      activeCycleId: null, currentStage: null, lastInspectedAt: null,
+      latestCycleStatus: null, latestCycleClosedAt: null, latestCycleOracleInvoice: null,
+      ...over,
+    };
+  }
+
+  it('says "ปิดรอบแล้ว" for a finished plot instead of "รอเริ่มรอบปลูก"', async () => {
+    listPlotsMock.mockResolvedValue([row({
+      latestCycleStatus: 'harvested', latestCycleClosedAt: '2026-09-01T00:00:00Z',
+    })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText(/ปิดรอบแล้ว · เก็บเกี่ยว/)).toBeTruthy();
+    // and NO cell on the row still calls a harvested plot "waiting to start" —
+    // fixing only the new column would have left the ชื่อแปลง/รอบปลูก and
+    // Yield cells saying it.
+    expect(screen.queryByText('รอเริ่มรอบปลูก')).toBeNull();
+    expect(screen.getByText('ปิดรอบปลูกแล้ว')).toBeTruthy();
+  });
+
+  it('distinguishes a cancelled close from a harvested one', async () => {
+    listPlotsMock.mockResolvedValue([row({ latestCycleStatus: 'cancelled' })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText(/ปิดรอบแล้ว · ยกเลิก/)).toBeTruthy();
+  });
+
+  it('still says "รอเริ่มรอบปลูก" for a plot that genuinely never started', async () => {
+    listPlotsMock.mockResolvedValue([row({ latestCycleStatus: null })]);
+    renderPlotsPage();
+
+    // Three cells legitimately say it for a plot that really has not started.
+    await waitFor(() => expect(screen.getAllByText('รอเริ่มรอบปลูก').length).toBeGreaterThan(0));
+    // /ปิดรอบ/ alone would also match the filter dropdown's options and the
+    // template blurb; assert on the row's own closed labels instead.
+    expect(screen.queryByText('ปิดรอบปลูกแล้ว')).toBeNull();
+    expect(screen.queryByText(/ปิดรอบแล้ว ·/)).toBeNull();
+  });
+
+  it('shows the latest inspection stage while the cycle is open', async () => {
+    listPlotsMock.mockResolvedValue([row({
+      activeCycleId: 'cyc-1', latestCycleStatus: 'active',
+      currentStage: 'ติดผล', lastInspectedAt: '2026-08-20T00:00:00Z',
+    })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText('ติดผล')).toBeTruthy();
+  });
+
+  it('marks a plot that reached ผลผลิตสุดท้าย — the signal that it is ready to close', async () => {
+    listPlotsMock.mockResolvedValue([row({
+      activeCycleId: 'cyc-1', latestCycleStatus: 'active', currentStage: 'ผลผลิตสุดท้าย',
+    })]);
+    renderPlotsPage();
+
+    const badge = await screen.findByTitle('บันทึกผลผลิตสุดท้ายแล้ว — พร้อมให้ปิดรอบ');
+    expect(badge.textContent).toContain('ผลผลิตสุดท้าย');
+  });
+
+  it('a deactivated plot reports that, not its cycle state', async () => {
+    listPlotsMock.mockResolvedValue([row({ isActive: false, latestCycleStatus: 'harvested' })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText('ปิดใช้งานแปลง')).toBeTruthy();
+  });
+
+  it('defaults to hiding finished plots — cycleStatus "unfinished" on first load', async () => {
+    listPlotsMock.mockResolvedValue([row()]);
+    renderPlotsPage();
+
+    await waitFor(() => expect(listPlotsMock).toHaveBeenCalled());
+    expect(listPlotsMock.mock.calls[0][0]).toMatchObject({ cycleStatus: 'unfinished' });
+  });
+
+  it('sends the chosen cycle status, and keeps it separate from plotStatus', async () => {
+    listPlotsMock.mockResolvedValue([row()]);
+    renderPlotsPage();
+    await waitFor(() => expect(listPlotsMock).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('กรองสถานะรอบปลูก'), { target: { value: 'closed' } });
+
+    await waitFor(() => {
+      const last = listPlotsMock.mock.calls[listPlotsMock.mock.calls.length - 1][0];
+      expect(last.cycleStatus).toBe('closed');
+      // plotStatus is the OTHER axis and must not have moved with it
+      expect(last.plotStatus).toBe('active');
+    });
+  });
+
+  it('sends the invoice as its own filter, never folded into q', async () => {
+    listPlotsMock.mockResolvedValue([row()]);
+    renderPlotsPage();
+    await waitFor(() => expect(listPlotsMock).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByPlaceholderText(/ค้นหาบางส่วนได้ · ค้นรอบที่ปิดแล้วด้วย/), {
+      target: { value: 'INV-2026' },
+    });
+
+    await waitFor(() => {
+      const last = listPlotsMock.mock.calls[listPlotsMock.mock.calls.length - 1][0];
+      expect(last.invoice).toBe('INV-2026');
+      expect(last.q).toBeUndefined();
+    });
+  });
+
+  it('no longer tells the user to do the two things round E removed', async () => {
+    listPlotsMock.mockResolvedValue([row()]);
+    renderPlotsPage();
+    await screen.findByText('SUP001-P001');
+
+    expect(screen.queryByText(/เริ่มรอบถัดไป/)).toBeNull();
+    expect(screen.queryByText(/เปิดแปลงพร้อมเริ่มรอบใหม่/)).toBeNull();
+    expect(screen.getByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
   });
 });

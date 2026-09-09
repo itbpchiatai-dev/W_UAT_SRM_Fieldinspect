@@ -15,6 +15,7 @@ import {
   Download,
   ExternalLink,
   Eye,
+  FileText,
   Loader2,
   MapPin,
   Pencil,
@@ -44,6 +45,7 @@ import {
   updatePlot,
   type PlotImportTemplateParams,
   type PlotStatusFilter,
+  type CycleStatusFilter,
   type PlotUpdatePayload,
   type PlotWithCycleCreatePayload,
   type PlotSummary,
@@ -115,6 +117,17 @@ function YieldCell({ plot, onPlanClick }: { plot: PlotSummary; onPlanClick?: () 
     return (
       <span className="inline-flex items-center justify-center gap-1 rounded-full bg-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600">
         ปิดใช้งาน
+      </span>
+    );
+  }
+  // Round O — a finished season has no yield left to plan, and calling it
+  // "รอเริ่มรอบปลูก" (as this did) told the reader the opposite of the truth.
+  // Checked before the no-active-cycle branch below, which a closed plot also
+  // satisfies.
+  if (cycleIsClosed(plot)) {
+    return (
+      <span className="inline-flex items-center justify-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+        ปิดรอบแล้ว
       </span>
     );
   }
@@ -201,6 +214,12 @@ function PlantingCycleCell({ plot, canSeeVariety }: { plot: PlotSummary; canSeeV
     // inactive plot, regardless of what plotHasActiveCycle would say.
     return <div className="text-xs text-muted-foreground">ไม่มีรอบปลูกที่เปิดอยู่</div>;
   }
+  // Round O — see cycleIsClosed. Before it, this line said "รอเริ่มรอบปลูก"
+  // at a plot whose season was over, which under "one plot, one cycle" will
+  // never start again.
+  if (cycleIsClosed(plot)) {
+    return <div className="text-xs text-muted-foreground">ปิดรอบปลูกแล้ว</div>;
+  }
   if (!plotHasActiveCycle(plot)) {
     return <div className="text-xs text-muted-foreground">รอเริ่มรอบปลูก</div>;
   }
@@ -251,6 +270,107 @@ function PlantingCycleCell({ plot, canSeeVariety }: { plot: PlotSummary; canSeeV
     </div>
   );
 }
+
+/** "สถานะรอบปลูก" cell (round O) — the column an admin scans to find the
+ * plots that are ready to be closed.
+ *
+ * Before round O the list had no way to say this. activeCycleId is null both
+ * for a plot that has never started a cycle and for one whose season is
+ * finished, so both showed "รอเริ่มรอบปลูก" — telling an admin that a
+ * harvested, closed plot was waiting to begin. latestCycleStatus separates
+ * the two (see PlotSummary in api/plots.ts).
+ *
+ * What it shows, in the order the checks run:
+ *   plot deactivated  — "ปิดใช้งานแปลง" (wins over everything, same
+ *                       precedence as YieldCell/PlantingCycleCell, because a
+ *                       deactivated plot's cycle state is not what the reader
+ *                       needs to know)
+ *   cycle closed      — "ปิดรอบแล้ว" + เก็บเกี่ยว / ยกเลิก + the close date
+ *   cycle open        — the LATEST INSPECTION's growth stage, which is the
+ *                       actual tracking signal: a plot showing "ผลผลิตสุดท้าย"
+ *                       has recorded its final yield and is waiting for an
+ *                       admin to close it. Highlighted for exactly that
+ *                       reason; every other stage is neutral.
+ *   never started     — "รอเริ่มรอบปลูก", now meaning only what it says.
+ *
+ * currentStage is deliberately not read for a CLOSED plot: closing a cycle
+ * clears the plot's inspection snapshot (plot_cycle_repository
+ * .clear_plot_cycle_mirror_and_inspection_snapshot) so a finished plot stops
+ * advertising the last season's reading. There is nothing to show there but
+ * the close result, which is what this renders. */
+/** Round O — has this plot's season finished? Three cells need the answer,
+ * and before round O none of them could get it: activeCycleId is null both
+ * for a plot that never started and for one that closed, so all three said
+ * "รอเริ่มรอบปลูก" at a plot that had already been harvested. Fixing only the
+ * new status column would have left the other two still saying it. */
+function cycleIsClosed(plot: PlotSummary): boolean {
+  return plot.latestCycleStatus === 'harvested' || plot.latestCycleStatus === 'cancelled';
+}
+
+const READY_TO_CLOSE_STAGE = 'ผลผลิตสุดท้าย';
+
+function CycleStatusCell({ plot }: { plot: PlotSummary }) {
+  if (!plot.isActive) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600">
+        ปิดใช้งานแปลง
+      </span>
+    );
+  }
+
+  const thaiDate = (iso: string | null | undefined) =>
+    iso
+      ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })
+      : null;
+
+  const latest = plot.latestCycleStatus;
+
+  if (latest === 'harvested' || latest === 'cancelled') {
+    const closedOn = thaiDate(plot.latestCycleClosedAt);
+    return (
+      <div className="flex flex-col items-center gap-0.5">
+        <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+          ปิดรอบแล้ว · {latest === 'harvested' ? 'เก็บเกี่ยว' : 'ยกเลิก'}
+        </span>
+        {closedOn && <span className="text-[11px] text-muted-foreground">{closedOn}</span>}
+      </div>
+    );
+  }
+
+  // latestCycleStatus === undefined is a response cached before round O —
+  // fall back to the pre-round-O signal rather than claiming "never started".
+  const hasOpenCycle = latest === 'active' || (latest === undefined && plotHasActiveCycle(plot));
+  if (!hasOpenCycle) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+        รอเริ่มรอบปลูก
+      </span>
+    );
+  }
+
+  const stage = plot.currentStage?.trim();
+  if (!stage) {
+    return <span className="text-xs text-muted-foreground">ยังไม่มีการตรวจ</span>;
+  }
+  const readyToClose = stage === READY_TO_CLOSE_STAGE;
+  const inspectedOn = thaiDate(plot.lastInspectedAt);
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span
+        className={
+          readyToClose
+            ? 'inline-flex items-center rounded-full bg-primary/15 px-2.5 py-1 text-xs font-semibold text-primary'
+            : 'inline-flex items-center rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-foreground'
+        }
+        title={readyToClose ? 'บันทึกผลผลิตสุดท้ายแล้ว — พร้อมให้ปิดรอบ' : undefined}
+      >
+        {stage}
+      </span>
+      {inspectedOn && <span className="text-[11px] text-muted-foreground">ตรวจ {inspectedOn}</span>}
+    </div>
+  );
+}
+
 
 /** เบอร์หลัก cell — full formatted number, or a clear "ยังไม่ตั้ง" badge (never
  * a silent blank) so an admin notices a plot with no access phone yet. */
@@ -514,6 +634,24 @@ const ALL_FETCH_CHUNK = 200;
 // (hasActiveFilters, templateFilterSummary) can't drift apart.
 const DEFAULT_PLOT_STATUS: PlotStatusFilter = 'active';
 
+/** Round O — the Plots page's own default for "สถานะรอบปลูก": show what still
+ * needs something done to it (growing, or waiting to start), and leave out
+ * seasons that are already finished.
+ *
+ * This default lives HERE, not on the endpoint. GET /plots also feeds
+ * SmartPlotPicker — which deliberately SHOWS no-active-cycle plots, disabled,
+ * so the user knows they exist (round 7-11) — and the Dashboard map. Moving
+ * the default server-side would silently change both. */
+const DEFAULT_CYCLE_STATUS: CycleStatusFilter = 'unfinished';
+
+const CYCLE_STATUS_OPTIONS: { value: CycleStatusFilter; label: string }[] = [
+  { value: 'unfinished', label: 'ยังไม่ปิดรอบ' },
+  { value: 'active', label: 'กำลังปลูก' },
+  { value: 'none', label: 'รอเริ่มรอบปลูก' },
+  { value: 'closed', label: 'ปิดรอบแล้ว' },
+  { value: 'all', label: 'ทุกสถานะรอบ' },
+];
+
 // Round 8-18B.1 — partial search bounds for the two search boxes.
 // Identity: a 1-character fragment matches nearly every plot in scope, which
 // is a slow, useless query rather than a search.
@@ -678,6 +816,16 @@ export function Plots() {
   // (DEFAULT_PLOT_STATUS): a fresh visit to the Plots page should show only
   // in-use plots, not every inactive one mixed in.
   const [filterPlotStatus, setFilterPlotStatus] = useState<PlotStatusFilter>(DEFAULT_PLOT_STATUS);
+  // Round O — "สถานะรอบปลูก", the SEASON axis. Not a duplicate of
+  // filterPlotStatus above: that one is the plot's isActive (has an admin
+  // taken it out of service). Under "one plot, one cycle" a harvested plot
+  // stays isActive=true, so "สถานะแปลง: ใช้งาน" never hid finished plots —
+  // which is why they were showing up mixed into the working list.
+  const [filterCycleStatus, setFilterCycleStatus] = useState<CycleStatusFilter>(DEFAULT_CYCLE_STATUS);
+  // Round O — "เลขที่ Invoice": substring match on a cycle of ANY status
+  // (see PlotListParams.invoice). Its own box, never folded into `q` — round
+  // 8-18B removed จังหวัด from q for exactly that reason.
+  const [filterInvoice, setFilterInvoice] = useState<string>('');
   // Round 8-17A.2 Part C/D — secure access-number search. Set only by
   // applySearch(); null means "not currently searching by number" (plain
   // q/text search, or no search at all). Round 8-18B.1 — this now holds a
@@ -772,8 +920,8 @@ export function Plots() {
     // (visible to React Query devtools / any cache inspection) can't carry
     // the PII itself.
     queryKey: phoneSearchDigits
-      ? ['plots', 'phone', page, pageSize, phoneSearchNonce, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleLabel, filterPlantingDateFrom, filterPlantingDateTo]
-      : ['plots', 'text', page, pageSize, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleLabel, filterPlantingDateFrom, filterPlantingDateTo],
+      ? ['plots', 'phone', page, pageSize, phoneSearchNonce, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleStatus, filterInvoice, filterCycleLabel, filterPlantingDateFrom, filterPlantingDateTo]
+      : ['plots', 'text', page, pageSize, q, filterSupplier, filterProvince, filterCrop, filterVariety, filterPlotStatus, filterCycleStatus, filterInvoice, filterCycleLabel, filterPlantingDateFrom, filterPlantingDateTo],
     queryFn: () => {
       // Round 8-17A.2 Part C/D — secure phone search: POST body, never
       // listPlots' GET ?q=. The other filters (supplier/province/crop/
@@ -790,6 +938,8 @@ export function Plots() {
           crop: filterCrop || undefined,
           variety: filterVariety || undefined,
           plotStatus: filterPlotStatus,
+          cycleStatus: filterCycleStatus,
+          invoice: filterInvoice || undefined,
           cycleLabel: filterCycleLabel || undefined,
           plantingDateFrom: filterPlantingDateFrom || undefined,
           plantingDateTo: filterPlantingDateTo || undefined,
@@ -809,6 +959,8 @@ export function Plots() {
         crop: filterCrop || undefined,
         variety: filterVariety || undefined,
         plotStatus: filterPlotStatus,
+        cycleStatus: filterCycleStatus,
+        invoice: filterInvoice || undefined,
         cycleLabel: filterCycleLabel || undefined,
         plantingDateFrom: filterPlantingDateFrom || undefined,
         plantingDateTo: filterPlantingDateTo || undefined,
@@ -1223,11 +1375,16 @@ export function Plots() {
           the FULL explanation (Sheet-by-sheet walkthrough, etc.) lives in
           PlotImportModal instead of repeating it here at length. */}
       <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-        {/* Round 8-6J Part H — wording now matches whichever plot-status
-            filter is selected: "all" (default) mixes both actions in one
-            sheet, so it must never claim the file is active-only. */}
+        {/* Round O — this line described "เริ่มรอบถัดไป" and "เปิดแปลงพร้อม
+            เริ่มรอบใหม่", the two things round E's "one plot, one cycle"
+            policy took away (lib/plot-lifecycle.ts: canRolloverCycle and
+            canReactivateWithCycle both return false, and the importer refuses
+            the matching actions). The page was telling people to do what the
+            system now rejects. Replaced with what the template actually
+            offers. */}
         <p>
-          แปลงที่ใช้งาน: เริ่มรอบถัดไป · แปลงที่ปิด: เปิดแปลงพร้อมเริ่มรอบใหม่
+          เทมเพลตมี 3 แบบ: สร้างแปลง+รอบปลูก · แก้รอบปลูกปัจจุบัน · ปิดรอบ (final) ·
+          1 แปลง = 1 รอบปลูก — ฤดูถัดไปให้สร้างแปลงใหม่
         </p>
         {templateFilterSummary && (
           <p className="flex flex-wrap items-baseline gap-x-1">
@@ -1245,15 +1402,16 @@ export function Plots() {
           <p className="flex items-start gap-1 text-amber-700">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span>
-              Template ใช้ตัวกรองอื่นที่เลือกไว้ทั้งหมด (Supplier/จังหวัด/พืช/พันธุ์/รอบปลูก/สถานะแปลง
-              รวมถึงชื่อ-รหัสแปลงที่ค้นหา) แต่ไม่ใช้หมายเลขสำหรับเข้าตรวจ
-              (การดาวน์โหลดไม่ส่งหมายเลขผ่าน URL)
+              Template ใช้ตัวกรอง Supplier/จังหวัด/พืช/พันธุ์/รอบปลูก/สถานะแปลง
+              รวมถึงชื่อ-รหัสแปลงที่ค้นหา · ไม่ใช้หมายเลขสำหรับเข้าตรวจ
+              (การดาวน์โหลดไม่ส่งหมายเลขผ่าน URL) และไม่ใช้ตัวกรองสถานะรอบปลูก
+              กับเลขที่ Invoice — สองตัวนี้ใช้กับรายการบนหน้าจอเท่านั้น
             </span>
           </p>
         )}
         {templateFilterSummary && (
           <p>
-            ช่องสีเหลืองในชีต &quot;นำเข้ารอบใหม่&quot; คือข้อมูลที่ต้องตรวจ/แก้ (cycleLabel ต้องเปลี่ยนเป็นชื่อรอบใหม่เสมอ ทั้งเริ่มรอบถัดไปและเปิดใช้งานแปลง) ·
+            ช่องสีเหลืองในชีต &quot;นำเข้ารอบใหม่&quot; คือข้อมูลที่ต้องตรวจ/แก้ ·
             คอลัมน์ currentPlotStatus ไว้อ้างอิงเท่านั้น แก้ค่าช่องนี้ไม่ทำให้สถานะแปลงเปลี่ยน ·
             ชีต &quot;ตัวอย่าง&quot; สีแดงระบบไม่นำเข้า · การดาวน์โหลด/ตรวจสอบไฟล์ยังไม่เปลี่ยนข้อมูลใดๆ
             ระบบจะเปลี่ยนข้อมูลก็ต่อเมื่อกดยืนยันนำเข้า (Commit) สำเร็จเท่านั้น
@@ -1324,6 +1482,27 @@ export function Plots() {
                 onKeyDown={(e) => { if (e.key === 'Enter') applySearch(); }}
                 placeholder="ค้นหาบางส่วนได้ เช่น 002 หรือ เมล่อน"
                 aria-invalid={nameCodeError ? true : undefined}
+                className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </span>
+          </label>
+          {/* Round O — "เลขที่ Invoice". Its own box for the same reason the
+              two boxes beside it are separate: round 8-18B folded จังหวัด into
+              the free-text search and the box then disagreed with the จังหวัด
+              dropdown. Unlike the other cycle filters this one searches
+              cycles of ANY status — an invoice being looked up usually belongs
+              to a season that is already closed. Applies live (no Enter, no
+              applySearch): it is not PII, so it needs neither the digit guard
+              nor the POST-body treatment the number box below gets. */}
+          <label className="flex flex-1 flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">เลขที่ Invoice</span>
+            <span className="relative flex items-center">
+              <FileText className="absolute left-2 h-4 w-4 text-muted-foreground" />
+              <input
+                type="search"
+                value={filterInvoice}
+                onChange={(e) => { setPage(0); setFilterInvoice(e.target.value); setTemplateError(null); }}
+                placeholder="ค้นหาบางส่วนได้ · ค้นรอบที่ปิดแล้วด้วย"
                 className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </span>
@@ -1443,6 +1622,26 @@ export function Plots() {
             <option value="all">สถานะแปลง: ทั้งหมด</option>
             <option value="active">สถานะแปลง: ใช้งาน</option>
             <option value="inactive">สถานะแปลง: ปิดใช้งาน</option>
+          </select>
+          {/* Round O — the SEASON axis, next to the plot-service axis above.
+              Two dropdowns that sound alike, so both keep their prefix in
+              every option: "สถานะแปลง" is whether the plot is in service,
+              "สถานะรอบ" is where its season stands. (Prefixed "สถานะรอบ", not
+              "รอบปลูก", so the option text cannot be mistaken for a row's
+              "ปลูก: <date>" cell by a text query.) */}
+          <select
+            aria-label="กรองสถานะรอบปลูก"
+            value={filterCycleStatus}
+            onChange={(e) => {
+              setPage(0);
+              setFilterCycleStatus(e.target.value as CycleStatusFilter);
+              setTemplateError(null);
+            }}
+            className="min-w-[170px] rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {CYCLE_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>สถานะรอบ: {o.label}</option>
+            ))}
           </select>
           {/* Round 8-18A — searchable, same UX pattern as SupplierFilterCombobox:
               must select from the real province list, never free text. */}
@@ -1568,6 +1767,9 @@ export function Plots() {
                     mobile user opens Plot Detail for the full phone list. */}
                 <th className="hidden px-4 py-2 sm:table-cell">เบอร์หลัก</th>
                 <th className="hidden px-4 py-2 sm:table-cell">เบอร์เสริม</th>
+                {/* Round O — the season axis, which the list never showed. See
+                    CycleStatusCell for why "รอเริ่มรอบปลูก" alone was wrong. */}
+                <th className="px-4 py-2 text-center">สถานะรอบปลูก</th>
                 <th className="px-4 py-2 text-center">Yield</th>
                 <th className="px-4 py-2 text-right">จัดการ</th>
               </tr>
@@ -1575,7 +1777,7 @@ export function Plots() {
             <tbody className="divide-y divide-border">
               {plots.length === 0 && !plotsIsError && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                     ไม่พบข้อมูล
                   </td>
                 </tr>
@@ -1687,6 +1889,9 @@ export function Plots() {
                     </td>
                     <td className="hidden px-4 py-2 sm:table-cell">
                       <AdditionalPhonesCell phones={p.additionalPhones} />
+                    </td>
+                    <td className="px-4 py-2 text-center text-xs">
+                      <CycleStatusCell plot={p} />
                     </td>
                     <td className="px-4 py-2 text-center text-xs">
                       <YieldCell

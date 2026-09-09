@@ -147,6 +147,7 @@ async def test_list_plots_endpoint_forwards_planting_date_bounds():
     mocked.assert_awaited_once_with(
         ANY, supplier_id=None, province=None, crop=None, variety=None,
         limit=50, offset=0, q=None, active_only=False, plot_status="all",
+        cycle_status="all", invoice=None,
         cycle_label=None, planting_date_from=_FROM, planting_date_to=_TO,
     )
 

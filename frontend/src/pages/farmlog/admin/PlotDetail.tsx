@@ -45,7 +45,7 @@ import {
   formatYieldFormula,
   formatYieldQuantity,
 } from '../../../lib/yield-planning';
-import { cycleDisplayName, describeCycleStatus, formatCycleTitle, getActiveCycle, recordCycleDisplayName } from '../../../lib/plot-cycle';
+import { describeCycleStatus, formatCycleTitle, getActiveCycle, getLatestCycle, recordCycleDisplayName } from '../../../lib/plot-cycle';
 
 /** Round 8-14D — "ประวัติการตรวจ" (inspection records) page size is now
  * user-selectable, defaulting to 5 so the section stays compact on a plot
@@ -194,9 +194,13 @@ function YieldPlanningSection({
             {plot.isActive ? 'รอเริ่มรอบปลูก' : 'แปลงปิดใช้งานอยู่ ยังตั้งแผนผลผลิตไม่ได้'}
           </p>
           <p className="mt-1 text-xs text-gray-400">
+            {/* Round Q — a plot whose season is over has no plan left to make,
+                but it DOES have real harvest figures, which now sit in the
+                รอบปลูก card above. Say so: leaving this card blank while the
+                one above it is full reads as if the data were missing. */}
             {canStartFirstCycle(cycleCount)
               ? 'ตั้งแผนผลผลิตได้หลังเริ่มรอบปลูก'
-              : 'แปลงนี้ปิดรอบปลูกไปแล้ว — 1 แปลง = 1 รอบปลูก'}
+              : 'แปลงนี้ปิดรอบปลูกไปแล้ว — ดูผลผลิตจริงได้ที่การ์ด "รอบปลูก" ด้านบน'}
           </p>
           {/* Round E — offered only while the plot has never had a cycle: the
               "reserve the plot now, plan the season later" flow. A plot whose
@@ -297,9 +301,25 @@ function YieldPlanningSection({
  * still comes from the plot's inspection-derived snapshot, same source as
  * CurrentStatusSection/YieldPlanningSection above — a cycle doesn't carry
  * its own yield-% snapshot. */
+/** The plot's season, in one readable card (round Q).
+ *
+ * It used to read `activeCycle` and therefore emptied itself the moment the
+ * cycle closed — which round P made the normal end state, not an edge case.
+ * Everything the season contained (crop, lot, PO, Oracle refs, and the harvest
+ * figures) then survived only in the 18-column scrolling history table below,
+ * so a finished plot's detail page showed nothing about what was grown.
+ *
+ * It now reads the LATEST cycle whatever its status, and gains the six
+ * close/harvest fields that only exist once a cycle is closed. With that, the
+ * card carries everything the history table did — which is why the table is
+ * gone: under "one plot, one cycle" (round E) it was a one-row table with a
+ * horizontal scrollbar and a "how many rounds to show" selector.
+ *
+ * The WRITE actions stay gated on the cycle actually being active: a closed
+ * season is a record, not something to edit or close again. */
 function CurrentCycleSection({
   plot,
-  activeCycle,
+  cycle,
   canUpdate,
   // Round E — see YieldPlanningSection above.
   cycleCount,
@@ -309,10 +329,12 @@ function CurrentCycleSection({
   onCloseCycle,
   onRollover,
   canSeeVariety,
+  canReadRecords,
 }: {
   plot: PlotDetailData;
-  activeCycle: PlotCycle | null;
+  cycle: PlotCycle | null;
   canUpdate: boolean;
+  canReadRecords: boolean;
   cycleCount: number;
   cyclesLoading: boolean;
   onStart: () => void;
@@ -321,11 +343,11 @@ function CurrentCycleSection({
   onRollover: () => void;
   canSeeVariety: boolean;
 }) {
-  if (!activeCycle) {
+  if (!cycle) {
     return (
       <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
         <h2 className="mb-3 flex items-center gap-1.5 text-base font-semibold text-gray-800">
-          <Sprout className="h-4 w-4 text-gray-400" /> รอบปลูกปัจจุบัน
+          <Sprout className="h-4 w-4 text-gray-400" /> รอบปลูก
         </h2>
         <div className="rounded-md bg-gray-50 px-4 py-6 text-center">
           <p className="text-sm font-medium text-gray-600">รอเริ่มรอบปลูก</p>
@@ -360,56 +382,116 @@ function CurrentCycleSection({
     );
   }
 
+  const growing = cycle.status === 'active';
   const pct = toNumberOrNull(plot.currentYieldPct);
-  const currentExpected = computeCurrentExpectedYield(activeCycle.expectedYieldFull, plot.currentYieldPct);
+  const currentExpected = computeCurrentExpectedYield(cycle.expectedYieldFull, plot.currentYieldPct);
 
   return (
-    <section className="rounded-lg border border-green-200 bg-green-50/40 p-5 shadow-sm">
+    // A closed season is a record, not live work — the card drops the green
+    // "in progress" tint for it so the two read differently at a glance.
+    <section className={`rounded-lg border p-5 shadow-sm ${
+      growing ? 'border-green-200 bg-green-50/40' : 'border-gray-200 bg-white'
+    }`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-1.5 text-base font-semibold text-gray-800">
-          <Sprout className="h-4 w-4 text-green-600" /> รอบปลูกปัจจุบัน
+          {/* "ปัจจุบัน" was dropped in round Q: this card now also shows a
+              season that is over, and the badge beside it already says which. */}
+          <Sprout className={`h-4 w-4 ${growing ? 'text-green-600' : 'text-gray-400'}`} /> รอบปลูก
         </h2>
-        <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-700">
-          {describeCycleStatus(activeCycle.status)}
+        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${CYCLE_BADGE_TONE[cycle.status]}`}>
+          {describeCycleStatus(cycle.status)}
         </span>
       </div>
-      <p className="mb-3 text-sm font-semibold text-gray-800">{formatCycleTitle(activeCycle)}</p>
+      <p className="mb-3 text-sm font-semibold text-gray-800">{formatCycleTitle(cycle)}</p>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-        <Field label="ชนิดพืช" value={activeCycle.crop} />
-        {canSeeVariety && <Field label="พันธุ์/สายพันธุ์" value={activeCycle.variety} />}
-        <Field label="PO Number" value={activeCycle.poNumber} />
-        <Field label="P.Code" value={activeCycle.pCode} />
+        <Field label="ชนิดพืช" value={cycle.crop} />
+        {canSeeVariety && <Field label="พันธุ์/สายพันธุ์" value={cycle.variety} />}
+        <Field label="PO Number" value={cycle.poNumber} />
+        <Field label="P.Code" value={cycle.pCode} />
         <Field label="Lot No ระบบ"
-          value={<LotValue lotNo={activeCycle.lotNo} lotNoSource={activeCycle.lotNoSource} />} />
+          value={<LotValue lotNo={cycle.lotNo} lotNoSource={cycle.lotNoSource} />} />
         {/* Round 8-12B — the SUPPLIER's own lot, shown as its own field with no
             source badge: it is not derived by the system, so "อัตโนมัติ/กรอกเอง"
             would be meaningless for it. */}
-        <Field label="Supplier Lot No" value={activeCycle.supplierLotNo} />
+        <Field label="Supplier Lot No" value={cycle.supplierLotNo} />
         {/* Round 8-21B — three independent, OPTIONAL back-office reference
             fields, cycle-scoped (never a Plot-level/permanent field) — read
             straight off THIS active cycle, never any other. Field already
             renders "—" for null. */}
-        <Field label="Oracle Supplier Code" value={activeCycle.oracleSupplierCode} />
-        <Field label="Oracle Invoice" value={activeCycle.oracleInvoice} />
-        <Field label="Ref Account" value={activeCycle.refAccount} />
-        <Field label="วันที่ปลูก" value={activeCycle.plantingDate} />
+        <Field label="Oracle Supplier Code" value={cycle.oracleSupplierCode} />
+        <Field label="Oracle Invoice" value={cycle.oracleInvoice} />
+        <Field label="Ref Account" value={cycle.refAccount} />
+        <Field label="วันที่ปลูก" value={cycle.plantingDate} />
         <Field
           label="จำนวนต้น/จำนวนปลูก"
-          value={activeCycle.plantCount != null ? activeCycle.plantCount.toLocaleString('th-TH') : null}
+          value={cycle.plantCount != null ? cycle.plantCount.toLocaleString('th-TH') : null}
         />
         <Field
           label="เป้าผลิต"
-          value={formatYieldQuantity(activeCycle.expectedYieldFull, activeCycle.expectedYieldUnit)}
+          value={formatYieldQuantity(cycle.expectedYieldFull, cycle.expectedYieldUnit)}
         />
-        <Field label="เปอร์เซ็นต์เทียบเป้าผลิต" value={pct != null ? `${pct}%` : null} />
-        <Field
-          label="ผลผลิตที่คาดว่าจะได้"
-          value={currentExpected != null ? formatYieldQuantity(currentExpected, activeCycle.expectedYieldUnit) : null}
-        />
+        {/* Round Q — the live tracking pair only means something while the
+            season is running: closing a cycle clears the plot's inspection
+            snapshot (plot_cycle_repository.clear_plot_cycle_mirror_and_
+            inspection_snapshot), so on a closed cycle both would read a
+            permanent "—" beside the real harvest figures below. */}
+        {growing && (
+          <>
+            <Field label="เปอร์เซ็นต์เทียบเป้าผลิต" value={pct != null ? `${pct}%` : null} />
+            <Field
+              label="ผลผลิตที่คาดว่าจะได้"
+              value={currentExpected != null ? formatYieldQuantity(currentExpected, cycle.expectedYieldUnit) : null}
+            />
+          </>
+        )}
       </dl>
 
-      {canUpdate && (
+      {/* Round Q — how the season ENDED. These six lived only in the history
+          table until now, which is why a closed plot's page showed no harvest
+          at all. Rendered only once the cycle is closed: on a live one every
+          value is null by definition, and six dashes would be noise. */}
+      {!growing && (
+        <div className="mt-4 border-t border-gray-200 pt-4">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500">
+            ผลการปิดรอบ
+          </p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+            <Field label="วันที่เริ่ม" value={thaiDate(cycle.startedAt)} />
+            <Field label="วันที่ปิดรอบ" value={thaiDate(cycle.closedAt)} />
+            <Field label="วันที่เก็บเกี่ยว" value={closedOnly(cycle, cycle.harvestDate)} />
+            <Field label="ประมาณการสุดท้าย" value={<FinalEstimateCell cycle={cycle} />} />
+            <Field
+              label="ผลผลิตตอนเก็บเกี่ยว"
+              value={closedOnly(cycle, formatYieldQuantity(cycle.harvestYield, cycle.finalYieldUnit))}
+            />
+            <Field
+              label="ผลผลิตจริงหลังทำความสะอาด"
+              value={closedOnly(cycle, formatYieldQuantity(cycle.finalYieldAfterClean, cycle.finalYieldUnit))}
+            />
+          </dl>
+          {/* Free text, so it gets a full-width row of its own rather than a
+              grid cell it would overflow. */}
+          {cycle.closeReason?.trim() && (
+            <p className="mt-3 text-xs text-gray-600">
+              <span className="font-medium text-gray-500">เหตุผล/หมายเหตุ:</span>{' '}
+              {cycle.closeReason}
+            </p>
+          )}
+          {/* The history table's last column ("อ้างอิง"): the final_plot note
+              and the inspection record the final estimate was taken from,
+              permission-gated exactly as it was there. Kept, not dropped —
+              it is the audit trail for the numbers just above it. */}
+          <div className="mt-3 text-xs">
+            <CycleReferenceCell cycle={cycle} canReadRecords={canReadRecords} />
+          </div>
+        </div>
+      )}
+
+      {/* Round Q — write actions are for a LIVE season only. A closed one is
+          history: editing or re-closing it are not states the backend allows
+          either (409 "Only active planting cycle can be closed"). */}
+      {canUpdate && growing && (
         <div className="mt-4 flex flex-wrap gap-2 border-t border-green-200 pt-3">
           <button
             type="button"
@@ -459,16 +541,8 @@ const CYCLE_BADGE_TONE: Record<PlotCycle['status'], string> = {
  * can never show more than this, and the summary line says so rather than
  * claiming the plot has exactly this many. */
 export const CYCLE_HISTORY_MAX = 100;
-const CYCLE_HISTORY_LIMITS = [10, 25, 50, 100] as const;
-const CYCLE_HISTORY_DEFAULT_LIMIT = 10;
 
 const dash = <span className="text-gray-300">—</span>;
-
-/** One cell's worth of "value or —". Kept tiny and used everywhere in the table
- * so a null can never render as an empty cell that looks like a layout bug. */
-function Cell({ value }: { value: React.ReactNode }) {
-  return <>{value ?? dash}</>;
-}
 
 function thaiDate(value: string | null): React.ReactNode {
   if (!value) return dash;
@@ -536,166 +610,20 @@ function CycleReferenceCell({
   );
 }
 
-const CYCLE_HISTORY_COLUMNS: { key: string; label: string; className?: string }[] = [
-  { key: 'cycle', label: 'รอบปลูก' },
-  { key: 'status', label: 'สถานะ' },
-  { key: 'crop', label: 'พืช / พันธุ์' },
-  { key: 'po', label: 'PO Number' },
-  { key: 'pcode', label: 'P.Code' },
-  { key: 'lot', label: 'Lot No ระบบ' },
-  { key: 'supplierLot', label: 'Supplier Lot No' },
-  // Round 8-21B — grouped right after Supplier Lot No, same as the current-
-  // cycle section and the Excel Preview table.
-  { key: 'oracleSupplierCode', label: 'Oracle Supplier Code' },
-  { key: 'oracleInvoice', label: 'Oracle Invoice' },
-  { key: 'refAccount', label: 'Ref Account' },
-  { key: 'planting', label: 'วันที่ปลูก' },
-  { key: 'period', label: 'วันที่เริ่ม / ปิด' },
-  { key: 'plan', label: 'แผนผลผลิต', className: 'text-right' },
-  { key: 'estimate', label: 'ประมาณการสุดท้าย', className: 'text-right' },
-  { key: 'harvest', label: 'ผลผลิตตอนเก็บเกี่ยว', className: 'text-right' },
-  { key: 'afterClean', label: 'ผลผลิตจริงหลังทำความสะอาด', className: 'text-right' },
-  { key: 'harvestDate', label: 'วันที่เก็บเกี่ยว' },
-  { key: 'reference', label: 'อ้างอิง' },
-];
 
-/**
- * Round 8-10A — cycle history as a real table.
- *
- * Every cell reads THIS row's PlotCycle. Nothing is inherited from the active
- * cycle and nothing is recomputed on the client; the previous card layout's
- * rules (verbatim final estimate, no fabricated harvest figures for an active
- * or legacy cycle, permission-gated record link) all carry over unchanged —
- * only the presentation moved.
- *
- * The 10/25/50/100 selector slices an already-fetched array, so it issues no
- * request and cannot disturb the current-cycle section above it.
- */
-function CycleHistorySection({
-  cycles, canReadRecords, canSeeVariety,
-}: { cycles: PlotCycle[]; canReadRecords: boolean; canSeeVariety: boolean }) {
-  const [displayLimit, setDisplayLimit] = useState<number>(CYCLE_HISTORY_DEFAULT_LIMIT);
-  const visible = cycles.slice(0, displayLimit);
-  // The fetch is capped at CYCLE_HISTORY_MAX, so a full page means "at least
-  // this many" — never claim it is the plot's total.
-  const capped = cycles.length >= CYCLE_HISTORY_MAX;
-  const summary = capped
-    ? `แสดง ${visible.length} รอบล่าสุด (สูงสุด ${CYCLE_HISTORY_MAX} รอบ)`
-    : `แสดง ${visible.length} จากทั้งหมด ${cycles.length} รอบ`;
-
-  return (
-    <section>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-gray-800">ประวัติรอบปลูก</h2>
-        {cycles.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <label htmlFor="cycle-history-limit" className="text-xs text-gray-500">
-              จำนวนรอบที่แสดง
-            </label>
-            <select
-              id="cycle-history-limit"
-              value={displayLimit}
-              onChange={(e) => setDisplayLimit(Number(e.target.value))}
-              className="rounded-md border border-gray-300 px-2 py-1 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-            >
-              {CYCLE_HISTORY_LIMITS.map((n) => (
-                <option key={n} value={n}>{n} รอบ</option>
-              ))}
-            </select>
-            <span className="text-xs text-gray-400">{summary}</span>
-          </div>
-        )}
-      </div>
-
-      {cycles.length === 0 ? (
-        <p className="py-8 text-center text-sm text-gray-400">ยังไม่มีรอบปลูก</p>
-      ) : (
-        // The table is deliberately wide; it scrolls inside its own container
-        // rather than squeezing columns until the text wraps into itself.
-        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
-          {/* Round 8-21B — widened from 1320px to fit 3 more columns
-              (Oracle Supplier Code / Oracle Invoice / Ref Account). The
-              container above already scrolls its own overflow-x. */}
-          <table className="w-full min-w-[1680px] border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50 text-left text-gray-500">
-                {CYCLE_HISTORY_COLUMNS.map((col) => (
-                  <th
-                    key={col.key}
-                    scope="col"
-                    className={`whitespace-nowrap px-3 py-2 font-medium ${col.className ?? ''}`}
-                  >
-                    {/* Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-
-                        only; this column's header and cell values both drop
-                        it together for a Supplier-side caller. */}
-                    {col.key === 'crop' && !canSeeVariety ? 'พืช' : col.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((c) => (
-                <tr
-                  key={c.id}
-                  className={`border-b border-gray-100 last:border-0 hover:bg-gray-50/70 ${
-                    c.status === 'active' ? 'bg-green-50/40' : ''
-                  }`}
-                >
-                  <td className="px-3 py-2 font-medium text-gray-800">
-                    {cycleDisplayName(c)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${CYCLE_BADGE_TONE[c.status]}`}>
-                      {describeCycleStatus(c.status)}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-gray-600">
-                    <Cell value={[c.crop, canSeeVariety ? c.variety : null].filter(Boolean).join(' / ') || null} />
-                  </td>
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.poNumber} /></td>
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.pCode} /></td>
-                  <td className="px-3 py-2 text-gray-600">
-                    <LotValue lotNo={c.lotNo} lotNoSource={c.lotNoSource} />
-                  </td>
-                  {/* This ROW's own supplier lot — never the active cycle's. */}
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.supplierLotNo} /></td>
-                  {/* Round 8-21B — this ROW's own reference fields, never the
-                      active cycle's — every historical row shows its own
-                      recorded value. */}
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.oracleSupplierCode} /></td>
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.oracleInvoice} /></td>
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.refAccount} /></td>
-                  {/* Verbatim date-only strings — never through Date(), which
-                      would shift them by the browser's timezone. */}
-                  <td className="px-3 py-2 text-gray-600"><Cell value={c.plantingDate} /></td>
-                  <td className="whitespace-nowrap px-3 py-2 text-gray-600">
-                    {thaiDate(c.startedAt)} / {thaiDate(c.closedAt)}
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-600">
-                    <Cell value={formatYieldQuantity(c.expectedYieldFull, c.expectedYieldUnit)} />
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <FinalEstimateCell cycle={c} />
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-600">
-                    <Cell value={closedOnly(c, formatYieldQuantity(c.harvestYield, c.finalYieldUnit))} />
-                  </td>
-                  <td className="px-3 py-2 text-right font-medium text-emerald-700">
-                    <Cell value={closedOnly(c, formatYieldQuantity(c.finalYieldAfterClean, c.finalYieldUnit))} />
-                  </td>
-                  <td className="px-3 py-2 text-gray-600"><Cell value={closedOnly(c, c.harvestDate)} /></td>
-                  <td className="min-w-[180px] px-3 py-2 text-gray-600">
-                    <CycleReferenceCell cycle={c} canReadRecords={canReadRecords} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
+// Round Q — CycleHistorySection was deleted here.
+//
+// Under "one plot, one cycle" (round E) it was a one-row table with 18
+// columns, a horizontal scrollbar and a "how many rounds to show" selector,
+// and after round P (a close also retires the plot) it was the ONLY place
+// the finished season's data appeared at all. Both problems are solved by
+// the same move: everything it showed now lives in CurrentCycleSection
+// above, as a plain label/value list that fits on screen.
+//
+// Removed rather than hidden behind `cycles.length > 1`: neither UAT (zero
+// plot_cycles rows) nor production has a plot with a second cycle — the
+// multi-cycle rows on the dev database are test data from before the
+// policy. Git history holds the table if the policy is ever reversed.
 
 function CurrentStatusSection({
   lastInspectionRecordId,
@@ -1176,6 +1104,7 @@ export function PlotDetail() {
     staleTime: 60 * 1000,
   });
   const activeCycle = getActiveCycle(cycles);
+  const latestCycle = getLatestCycle(cycles);
 
   const { data: history = [], isLoading: historyLoading, isError: historyIsError } = useQuery({
     // historyPageSize is part of the key (round 8-14D) — two different page
@@ -1394,7 +1323,10 @@ export function PlotDetail() {
 
         <CurrentCycleSection
           plot={plot}
-          activeCycle={activeCycle}
+          // Round Q — the LATEST cycle whatever its status, so the card keeps
+          // showing the season after it closes. The write handlers below stay
+          // bound to activeCycle: the card only offers them while it is live.
+          cycle={latestCycle}
           cycleCount={cycles.length}
           canUpdate={canUpdatePlot}
           cyclesLoading={cyclesLoading}
@@ -1403,6 +1335,7 @@ export function PlotDetail() {
           onCloseCycle={() => activeCycle && setClosingCycle(activeCycle)}
           onRollover={() => activeCycle && setRollingOverCycle(activeCycle)}
           canSeeVariety={canSeeVariety}
+          canReadRecords={canReadRecords}
         />
 
         <YieldPlanningSection
@@ -1493,8 +1426,6 @@ export function PlotDetail() {
             )}
           </section>
         )}
-
-        <CycleHistorySection cycles={cycles} canReadRecords={canReadRecords} canSeeVariety={canSeeVariety} />
       </div>
 
       {printItems && (

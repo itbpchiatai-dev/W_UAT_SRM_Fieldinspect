@@ -266,41 +266,24 @@ function renderPage(qc: QueryClient = new QueryClient({ defaultOptions: { querie
   );
 }
 
-// --- Round 8-10A: the cycle-history TABLE --------------------------------
-// Looked up by header text rather than by fixed index, so reordering a column
-// changes one place instead of breaking every assertion below.
+// --- Round Q: the cycle-history TABLE is gone -----------------------------
+// Under "one plot, one cycle" (round E) it was a one-row, 18-column table with
+// a horizontal scrollbar; after round P (a close also retires the plot) it was
+// the only place a finished season's data appeared at all. Everything it
+// showed now lives in the "รอบปลูก" card as a label/value list, so the old
+// historyRow/historyCell helpers become this: read one field by its label.
 
-function historyTable(): HTMLTableElement {
-  const header = screen.getByRole('columnheader', { name: 'รอบปลูก' });
-  const table = header.closest('table');
-  if (!table) throw new Error('cycle history table not found');
-  return table as HTMLTableElement;
+function cycleField(label: string): string {
+  const dt = screen.getAllByText(label).find((el) => el.tagName === 'DT');
+  if (!dt) throw new Error(`no cycle field labelled "${label}"`);
+  return dt.nextElementSibling?.textContent?.trim() ?? '';
 }
 
-function historyColumnIndex(label: string): number {
-  const headers = Array.from(historyTable().querySelectorAll('thead th'));
-  const index = headers.findIndex((th) => th.textContent?.trim() === label);
-  if (index < 0) throw new Error(`no history column named "${label}"`);
-  return index;
-}
-
-function historyRows(): HTMLTableRowElement[] {
-  return Array.from(historyTable().querySelectorAll('tbody tr'));
-}
-
-/** Rows are keyed by the "รอบปลูก" cell (cycleLabel, else "รอบที่ N"). */
-function historyRow(cycleName: string): HTMLTableRowElement {
-  const row = historyRows().find((r) => r.cells[0]?.textContent?.trim() === cycleName);
-  if (!row) throw new Error(`no history row for "${cycleName}"`);
-  return row;
-}
-
-function historyCellText(cycleName: string, columnIndex: number): string {
-  return historyRow(cycleName).cells[columnIndex]?.textContent ?? '';
-}
-
-function historyCell(cycleName: string, columnLabel: string): string {
-  return historyCellText(cycleName, historyColumnIndex(columnLabel));
+/** Same, but null when the field is not rendered at all — which is how the
+ * card reports "this does not apply", e.g. harvest figures on a live cycle. */
+function queryCycleField(label: string): string | null {
+  const dt = screen.queryAllByText(label).find((el) => el.tagName === 'DT');
+  return dt ? (dt.nextElementSibling?.textContent?.trim() ?? '') : null;
 }
 
 beforeEach(() => {
@@ -1053,7 +1036,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     expect((await screen.findAllByText('รอเริ่มรอบปลูก')).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('cycle history renders harvested/cancelled badges alongside the active one', async () => {
+  it('the card badges the LATEST cycle status, never an older one (round Q)', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([
       oneCycle({ id: 'cycle-2', cycleNo: 2, status: 'active', crop: 'ทุเรียน', lotNo: 'LOT-02' }),
@@ -1062,23 +1045,20 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
-    // Round 8-10A — history is a table now: the "รอบปลูก" cell is the cycle's
-    // display NAME (label, else "รอบที่ N"), and crop/lot moved to their own
-    // columns. The current-cycle section above still uses the compact title.
-    expect(screen.getAllByText('รอบที่ 2').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('รอบที่ 1')).toBeTruthy();
-    expect(screen.getAllByText('กำลังปลูก').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('เก็บเกี่ยวแล้ว')).toBeTruthy();
-    expect(screen.getByText('เหตุผล: เก็บเกี่ยวรอบแรก')).toBeTruthy();
+    await screen.findByText('ชนิดพืช');
+    // Round Q — with the history table gone there is one card, and it shows
+    // the LATEST cycle: its title, its status badge, and nothing belonging to
+    // the older closed one beside it.
+    expect(screen.getAllByText(/รอบที่ 2/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('กำลังปลูก')).toBeTruthy();
+    expect(screen.queryByText('เก็บเกี่ยวแล้ว')).toBeNull();
+    expect(screen.queryByText(/เก็บเกี่ยวรอบแรก/)).toBeNull();
   });
 
   it('round 8-3K: labels the current cycle\'s Lot No. clearly as "เลขล็อต (Lot No.)"', async () => {
     getPlotMock.mockResolvedValue(basePlot());
-    // The single active cycle also appears in the history table below (an
-    // active cycle is always its own most-recent history row too) — so the
-    // label renders as a <dt> in the current-cycle section AND as a <th> in
-    // the table; both must lead to the same value.
+    // Round Q — the lot now renders in exactly one place: the รอบปลูก card's
+    // <dt>/<dd> pair. It used to be here AND in the history table's column.
     listPlotCyclesMock.mockResolvedValue([oneCycle({ lotNo: 'LOT-09' })]);
 
     renderPage();
@@ -1088,8 +1068,9 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     const currentCycleLabel = labels.find((el) => el.tagName === 'DT');
     // Round 8-5B — the value carries a source badge, so match the substring.
     expect(currentCycleLabel?.nextElementSibling?.textContent).toContain('LOT-09');
-    // ...and the table shows the same lot in its own column.
-    expect(screen.getAllByText('LOT-09').length).toBeGreaterThanOrEqual(2);
+    // Round Q — ONE place now. It used to appear twice (card + history table),
+    // which is exactly the duplication this round removed.
+    expect(screen.getAllByText('LOT-09').length).toBe(1);
     // A lot with no source tag (legacy) shows the "ข้อมูลเดิม" badge.
     expect(screen.getAllByText('ข้อมูลเดิม').length).toBeGreaterThanOrEqual(1);
   });
@@ -1128,7 +1109,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     expect(screen.queryByText('กรอกเอง')).toBeNull();
   });
 
-  it('round 8-3K/8-10A: every history row carries its OWN Lot No. in the Lot column', async () => {
+  it('round 8-3K/Q: the card shows the LATEST cycle Lot No., never an older one', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([
       oneCycle({ id: 'cycle-2', cycleNo: 2, status: 'active', crop: 'ทุเรียน', lotNo: 'LOT-02' }),
@@ -1137,23 +1118,24 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
-    const lotColumnIndex = historyColumnIndex('Lot No ระบบ');
-    // Each row's lot comes from THAT row's cycle — never inherited from the
-    // active one.
-    expect(historyCellText('รอบที่ 2', lotColumnIndex)).toContain('LOT-02');
-    expect(historyCellText('รอบที่ 1', lotColumnIndex)).toContain('LOT-01');
-    // cycle-2 is the active cycle too, so LOT-02 also appears above the table.
-    expect(screen.getAllByText('LOT-02').length).toBeGreaterThanOrEqual(2);
+    await screen.findByText('ชนิดพืช');
+    // Round Q — the history table this used to check row-by-row is gone. The
+    // guarantee that replaces it: the card reads exactly one cycle, the
+    // latest, and never mixes an older cycle's value into it.
+    expect(cycleField('Lot No ระบบ')).toContain('LOT-02');
+    expect(screen.queryByText('LOT-01')).toBeNull();
   });
 
-  it('shows an empty-history message when the plot has no cycles at all', async () => {
+  it('shows a clear empty state when the plot has no cycles at all', async () => {
+    // Round Q — the history table had its own "ยังไม่มีรอบปลูก" line; with the
+    // table gone the รอบปลูก card's existing empty state is the single answer.
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([]);
 
     renderPage();
 
-    expect(await screen.findByText('ยังไม่มีรอบปลูก')).toBeTruthy();
+    expect((await screen.findAllByText('รอเริ่มรอบปลูก')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('ชนิดพืช')).toBeNull();
   });
 
   it('invalidates plot, plot-cycles, plots, and the plot-status report after starting a cycle', async () => {
@@ -1200,11 +1182,10 @@ describe('PlotDetail — cycle final estimate snapshot (round 8-2.8B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
-    // Round 8-10A — the label is now the column header; the value is the cell.
-    expect(screen.getByRole('columnheader', { name: 'ประมาณการสุดท้าย' })).toBeTruthy();
-    // verbatim stored value (999), never recomputed to expected×pct
-    expect(historyCell('รอบที่ 1', 'ประมาณการสุดท้าย')).toBe('999 kg (80%)');
+    await screen.findByText('ผลการปิดรอบ');
+    // Round Q — a field of the รอบปลูก card, rendered only once the cycle is
+    // closed. Verbatim stored value (999), never recomputed to expected×pct.
+    expect(cycleField('ประมาณการสุดท้าย')).toBe('999 kg (80%)');
   });
 
   it('cancelled cycle uses "ประมาณการล่าสุดก่อนยกเลิก"', async () => {
@@ -1218,12 +1199,12 @@ describe('PlotDetail — cycle final estimate snapshot (round 8-2.8B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
-    // A cancelled cycle's estimate is still shown verbatim in the same column;
-    // the "ก่อนยกเลิก" wording lives in the shared describeFinalEstimate helper
-    // and is covered by its own unit tests.
-    expect(historyCell('รอบที่ 1', 'ประมาณการสุดท้าย')).toBe('405 kg (45%)');
-    expect(historyCell('รอบที่ 1', 'สถานะ')).toContain('ยกเลิก');
+    await screen.findByText('ผลการปิดรอบ');
+    // Still verbatim; the "ก่อนยกเลิก" wording lives in the shared
+    // describeFinalEstimate helper and has its own unit tests. The status is
+    // the card's badge now rather than a table cell.
+    expect(cycleField('ประมาณการสุดท้าย')).toBe('405 kg (45%)');
+    expect(screen.getByText('ยกเลิก')).toBeTruthy();
   });
 
   it('closed cycle with a NULL snapshot shows "ไม่มีข้อมูลประมาณการตอนปิดรอบ"', async () => {
@@ -1237,7 +1218,7 @@ describe('PlotDetail — cycle final estimate snapshot (round 8-2.8B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ผลการปิดรอบ');
     expect(screen.getByText(/ไม่มีข้อมูลประมาณการตอนปิดรอบ/)).toBeTruthy();
   });
 
@@ -1249,11 +1230,12 @@ describe('PlotDetail — cycle final estimate snapshot (round 8-2.8B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
-    // An active cycle has no final snapshot at all — the cell is a plain dash,
-    // never a fabricated number and never the "no data" message meant for a
-    // CLOSED cycle.
-    expect(historyCell('รอบที่ 1', 'ประมาณการสุดท้าย')).toBe('—');
+    await screen.findByText('ชนิดพืช');
+    // Round Q — a live cycle has no final snapshot, so the card omits the
+    // whole ผลการปิดรอบ block: no fabricated number, and not the "no data"
+    // message meant for a CLOSED cycle either.
+    expect(screen.queryByText('ผลการปิดรอบ')).toBeNull();
+    expect(queryCycleField('ประมาณการสุดท้าย')).toBeNull();
     expect(screen.queryByText(/ไม่มีข้อมูลประมาณการตอนปิดรอบ/)).toBeNull();
   });
 });
@@ -1273,15 +1255,15 @@ describe('PlotDetail — actual harvest (round 8-7A/8-7B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
     // Round 8-10A — estimate and actuals are now three SEPARATE columns, so a
     // reader can never mistake one for the other.
-    expect(historyCell('รอบที่ 1', 'ประมาณการสุดท้าย')).toBe('800 kg (80%)');
-    expect(historyCell('รอบที่ 1', 'ผลผลิตตอนเก็บเกี่ยว')).toBe('1,250 kg');
-    expect(historyCell('รอบที่ 1', 'ผลผลิตจริงหลังทำความสะอาด')).toBe('1,180 kg');
+    expect(cycleField('ประมาณการสุดท้าย')).toBe('800 kg (80%)');
+    expect(cycleField('ผลผลิตตอนเก็บเกี่ยว')).toBe('1,250 kg');
+    expect(cycleField('ผลผลิตจริงหลังทำความสะอาด')).toBe('1,180 kg');
     // Date-only string, verbatim (never through Date()).
-    expect(historyCell('รอบที่ 1', 'วันที่เก็บเกี่ยว')).toBe('2026-08-30');
-    expect(historyCell('รอบที่ 1', 'อ้างอิง')).toContain('หมายเหตุ: ผลผลิตหลังคัดแยกและทำความสะอาด');
+    expect(cycleField('วันที่เก็บเกี่ยว')).toBe('2026-08-30');
+    expect(screen.getByText(/หมายเหตุ: ผลผลิตหลังคัดแยกและทำความสะอาด/)).toBeTruthy();
   });
 
   it('an old/legacy cycle with every actual-harvest field null shows nothing extra and does not crash', async () => {
@@ -1296,11 +1278,11 @@ describe('PlotDetail — actual harvest (round 8-7A/8-7B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
     // Every actual-harvest cell is a dash — never a fabricated figure.
-    expect(historyCell('รอบที่ 1', 'ผลผลิตตอนเก็บเกี่ยว')).toBe('—');
-    expect(historyCell('รอบที่ 1', 'ผลผลิตจริงหลังทำความสะอาด')).toBe('—');
-    expect(historyCell('รอบที่ 1', 'วันที่เก็บเกี่ยว')).toBe('—');
+    expect(cycleField('ผลผลิตตอนเก็บเกี่ยว')).toBe('—');
+    expect(cycleField('ผลผลิตจริงหลังทำความสะอาด')).toBe('—');
+    expect(cycleField('วันที่เก็บเกี่ยว')).toBe('—');
   });
 
   it('an active cycle never shows actual-harvest figures, even if fields somehow carry values', async () => {
@@ -1315,11 +1297,15 @@ describe('PlotDetail — actual harvest (round 8-7A/8-7B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
     // Actual harvest belongs to a CLOSED cycle only.
-    expect(historyCell('รอบที่ 1', 'ผลผลิตตอนเก็บเกี่ยว')).toBe('—');
-    expect(historyCell('รอบที่ 1', 'ผลผลิตจริงหลังทำความสะอาด')).toBe('—');
-    expect(historyCell('รอบที่ 1', 'วันที่เก็บเกี่ยว')).toBe('—');
+    // Round Q — stronger than the table's dash: on a live cycle the card does
+    // not render the ผลการปิดรอบ block at all, so there is no cell for a
+    // stray value to leak into.
+    expect(screen.queryByText('ผลการปิดรอบ')).toBeNull();
+    expect(queryCycleField('ผลผลิตตอนเก็บเกี่ยว')).toBeNull();
+    expect(queryCycleField('ผลผลิตจริงหลังทำความสะอาด')).toBeNull();
+    expect(queryCycleField('วันที่เก็บเกี่ยว')).toBeNull();
     expect(screen.queryByText(/ไม่ควรแสดง/)).toBeNull();
   });
 
@@ -1336,7 +1322,7 @@ describe('PlotDetail — actual harvest (round 8-7A/8-7B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
     const link = screen.getByRole('link', { name: /บันทึกที่ใช้สรุป/ });
     expect(link.getAttribute('href')).toBe('/farmlog/records/rec-42/preview');
   });
@@ -1355,13 +1341,13 @@ describe('PlotDetail — actual harvest (round 8-7A/8-7B)', () => {
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
     expect(screen.queryByRole('link', { name: /บันทึกที่ใช้สรุป/ })).toBeNull();
     // Round 8-10A tightened this: previously a truncated id was rendered. An
     // id is still a pointer at a record this caller may not read, so the cell
     // now only states that one exists.
     expect(screen.queryByText(/rec-42/)).toBeNull();
-    expect(historyCell('รอบที่ 1', 'อ้างอิง')).toContain('บันทึกที่ใช้สรุป: มี');
+    expect(screen.getByText(/บันทึกที่ใช้สรุป|หมายเหตุ:/).closest('div')!.textContent!).toContain('บันทึกที่ใช้สรุป: มี');
   });
 });
 
@@ -1976,22 +1962,6 @@ describe('PlotDetail — inspection password section (round 8-9B)', () => {
   });
 });
 
-// --- Round 8-10A: cycle history table (latest 10, up to 100) ---------------
-
-/** N cycles, newest cycleNo first — the order the backend already returns. */
-function manyCycles(count: number) {
-  return Array.from({ length: count }, (_, i) => {
-    const cycleNo = count - i;
-    return oneCycle({
-      id: `cycle-${cycleNo}`,
-      cycleNo,
-      cycleLabel: null,
-      status: cycleNo === count ? 'active' : 'harvested',
-      closedAt: cycleNo === count ? null : '2026-05-01T00:00:00Z',
-    });
-  });
-}
-
 describe('PlotDetail — Supplier Lot No (round 8-12B)', () => {
   it('shows the current cycle System Lot and Supplier Lot as separate fields', async () => {
     getPlotMock.mockResolvedValue(basePlot());
@@ -2019,10 +1989,10 @@ describe('PlotDetail — Supplier Lot No (round 8-12B)', () => {
     // supplier lot field is present but empty
     expect((await screen.findAllByText('2605-SUP010-WM-141-001')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Supplier Lot No').length).toBeGreaterThan(0);
-    expect(historyCell('รอบที่ 1', 'Supplier Lot No')).toBe('—');
+    expect(cycleField('Supplier Lot No')).toBe('—');
   });
 
-  it('every history row shows its OWN supplier lot, never the active cycle value', async () => {
+  it('shows the LATEST cycle supplier lot, never an older one (round Q)', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([
       oneCycle({ id: 'c2', cycleNo: 2, status: 'active', supplierLotNo: 'ACTIVE-LOT' }),
@@ -2030,22 +2000,24 @@ describe('PlotDetail — Supplier Lot No (round 8-12B)', () => {
     ]);
 
     renderPage();
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
 
-    expect(historyCell('รอบที่ 2', 'Supplier Lot No')).toBe('ACTIVE-LOT');
-    expect(historyCell('รอบที่ 1', 'Supplier Lot No')).toBe('OLD-LOT');
+    // Round Q — the table's per-row isolation went with the table. What
+    // replaces it: the card reads ONE cycle, and it must be the latest.
+    expect(cycleField('Supplier Lot No')).toBe('ACTIVE-LOT');
+    expect(screen.queryByText('OLD-LOT')).toBeNull();
   });
 
-  it('a history row with no supplier lot shows an em dash', async () => {
+  it('a CLOSED cycle with no supplier lot still shows an em dash (round Q)', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([
       oneCycle({ id: 'c1', cycleNo: 1, status: 'harvested', supplierLotNo: null }),
     ]);
 
     renderPage();
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
 
-    expect(historyCell('รอบที่ 1', 'Supplier Lot No')).toBe('—');
+    expect(cycleField('Supplier Lot No')).toBe('—');
   });
 });
 
@@ -2073,14 +2045,14 @@ describe('PlotDetail — Oracle reference fields (round 8-21B)', () => {
     ]);
 
     renderPage();
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
 
-    expect(historyCell('รอบที่ 1', 'Oracle Supplier Code')).toBe('—');
-    expect(historyCell('รอบที่ 1', 'Oracle Invoice')).toBe('—');
-    expect(historyCell('รอบที่ 1', 'Ref Account')).toBe('—');
+    expect(cycleField('Oracle Supplier Code')).toBe('—');
+    expect(cycleField('Oracle Invoice')).toBe('—');
+    expect(cycleField('Ref Account')).toBe('—');
   });
 
-  it('every history row shows its OWN values, never the active cycle\'s', async () => {
+  it('shows the LATEST cycle values, never an older one (round Q)', async () => {
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([
       oneCycle({ id: 'c2', cycleNo: 2, status: 'active', oracleSupplierCode: 'ACTIVE-ORC' }),
@@ -2088,10 +2060,11 @@ describe('PlotDetail — Oracle reference fields (round 8-21B)', () => {
     ]);
 
     renderPage();
-    await screen.findByText('ประวัติรอบปลูก');
+    await screen.findByText('ชนิดพืช');
 
-    expect(historyCell('รอบที่ 2', 'Oracle Supplier Code')).toBe('ACTIVE-ORC');
-    expect(historyCell('รอบที่ 1', 'Oracle Supplier Code')).toBe('OLD-ORC');
+    // Round Q — see the Supplier Lot test above: one card, latest cycle.
+    expect(cycleField('Oracle Supplier Code')).toBe('ACTIVE-ORC');
+    expect(screen.queryByText('OLD-ORC')).toBeNull();
   });
 
   it('is never shown as a Plot-level/permanent field — only inside a cycle context', async () => {
@@ -2103,252 +2076,35 @@ describe('PlotDetail — Oracle reference fields (round 8-21B)', () => {
 
     // The plot header/permanent-info area never repeats the label a third
     // time beyond the current-cycle field + its own history row.
-    expect(screen.getAllByText('Oracle Supplier Code').length).toBe(2);
+    // Round Q — one place now (the รอบปลูก card), not card + history table.
+    expect(screen.getAllByText('Oracle Supplier Code').length).toBe(1);
   });
 });
 
-describe('PlotDetail — cycle history table (round 8-10A)', () => {
-  it('fetches the newest 100 cycles once, with limit/offset on the request', async () => {
+/**
+ * Round Q — the "cycle history table (round 8-10A)" describe went with the
+ * table it covered: the 10/25/50/100 selector, newest-first ordering, the
+ * "แสดง X จากทั้งหมด Y รอบ" summary, the horizontal scroll, and the
+ * each-row-owns-its-own-value isolation. None of those behaviours exist any
+ * more, so keeping the tests would have meant making them assert something
+ * else.
+ *
+ * What the table DISPLAYED is still covered — retargeted onto the "รอบปลูก"
+ * card through cycleField() in the describes above (final estimate, actual
+ * harvest, Supplier Lot No, the Oracle references). The one test that was
+ * about the REQUEST rather than the table survives here: the page still
+ * fetches the cycles, it just renders them somewhere else.
+ */
+describe('PlotDetail — cycle fetch (round 8-10A, retargeted round Q)', () => {
+  it('fetches the cycles once, with limit/offset on the request', async () => {
     getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(3));
+    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
 
     renderPage();
+    await screen.findByText('ชนิดพืช');
 
-    await screen.findByText('ประวัติรอบปลูก');
-    expect(listPlotCyclesMock).toHaveBeenCalledWith('plot-1', { limit: 100, offset: 0 });
-  });
-
-  it('renders a semantic table, not divs pretending to be one', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(3));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    const table = historyTable();
-    expect(table.tagName).toBe('TABLE');
-    expect(table.querySelector('thead')).toBeTruthy();
-    expect(table.querySelector('tbody')).toBeTruthy();
-    // Every header is a <th scope="col"> — what a screen reader needs to
-    // announce which column a cell belongs to.
-    const headers = Array.from(table.querySelectorAll('thead th'));
-    expect(headers.length).toBeGreaterThanOrEqual(14);
-    for (const th of headers) expect(th.getAttribute('scope')).toBe('col');
-  });
-
-  it('shows the 10 newest cycles by default and hides the rest', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(15));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    expect(historyRows()).toHaveLength(10);
-    // newest kept...
-    expect(historyRow('รอบที่ 15')).toBeTruthy();
-    expect(historyRow('รอบที่ 6')).toBeTruthy();
-    // ...oldest five dropped
-    for (const n of [5, 4, 3, 2, 1]) {
-      expect(historyRows().some((r) => r.cells[0].textContent?.trim() === `รอบที่ ${n}`)).toBe(false);
-    }
-  });
-
-  it('orders rows newest cycle first', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(4));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    expect(historyRows().map((r) => r.cells[0].textContent?.trim())).toEqual([
-      'รอบที่ 4', 'รอบที่ 3', 'รอบที่ 2', 'รอบที่ 1',
-    ]);
-  });
-
-  it('offers 10 / 25 / 50 / 100 and widens the table when one is picked', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(15));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    const select = screen.getByLabelText('จำนวนรอบที่แสดง') as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(['10', '25', '50', '100']);
-
-    fireEvent.change(select, { target: { value: '25' } });
-
-    await waitFor(() => expect(historyRows()).toHaveLength(15));
-  });
-
-  it('can show all 100 fetched cycles', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(100));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    fireEvent.change(screen.getByLabelText('จำนวนรอบที่แสดง'), { target: { value: '100' } });
-
-    await waitFor(() => expect(historyRows()).toHaveLength(100));
-  });
-
-  it('changing the selector never refetches', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(30));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
     expect(listPlotCyclesMock).toHaveBeenCalledTimes(1);
-
-    const select = screen.getByLabelText('จำนวนรอบที่แสดง');
-    fireEvent.change(select, { target: { value: '25' } });
-    await waitFor(() => expect(historyRows()).toHaveLength(25));
-    fireEvent.change(select, { target: { value: '50' } });
-    await waitFor(() => expect(historyRows()).toHaveLength(30));
-
-    // The whole point of fetching 100 up front: slicing is client-side.
-    expect(listPlotCyclesMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('changing the selector does not disturb the current-cycle section', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(15));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    const before = screen.getByText('รอบปลูกปัจจุบัน').closest('section')?.textContent;
-
-    fireEvent.change(screen.getByLabelText('จำนวนรอบที่แสดง'), { target: { value: '50' } });
-    await waitFor(() => expect(historyRows()).toHaveLength(15));
-
-    expect(screen.getByText('รอบปลูกปัจจุบัน').closest('section')?.textContent).toBe(before);
-  });
-
-  it('summarises "แสดง X จากทั้งหมด Y รอบ" below 100', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(15));
-
-    renderPage();
-
-    expect(await screen.findByText('แสดง 10 จากทั้งหมด 15 รอบ')).toBeTruthy();
-  });
-
-  it('never claims a total it cannot know when the fetch came back full', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(100));
-
-    renderPage();
-
-    // 100 rows back means "at least 100" — the plot may well have more.
-    expect(await screen.findByText('แสดง 10 รอบล่าสุด (สูงสุด 100 รอบ)')).toBeTruthy();
-    expect(screen.queryByText(/จากทั้งหมด 100 รอบ/)).toBeNull();
-  });
-
-  it('uses cycleLabel as the row name and falls back to รอบที่ N', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([
-      oneCycle({ id: 'c2', cycleNo: 2, status: 'active', cycleLabel: 'jun2026' }),
-      oneCycle({ id: 'c1', cycleNo: 1, status: 'harvested', cycleLabel: null, closedAt: '2026-05-01T00:00:00Z' }),
-    ]);
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    expect(historyRows().map((r) => r.cells[0].textContent?.trim())).toEqual(['jun2026', 'รอบที่ 1']);
-  });
-
-  it('renders the right badge for each of the three statuses', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([
-      oneCycle({ id: 'c3', cycleNo: 3, status: 'active', cycleLabel: null }),
-      oneCycle({ id: 'c2', cycleNo: 2, status: 'harvested', cycleLabel: null, closedAt: '2026-05-01T00:00:00Z' }),
-      oneCycle({ id: 'c1', cycleNo: 1, status: 'cancelled', cycleLabel: null, closedAt: '2026-04-01T00:00:00Z' }),
-    ]);
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    expect(historyCell('รอบที่ 3', 'สถานะ')).toContain('กำลังปลูก');
-    expect(historyCell('รอบที่ 2', 'สถานะ')).toContain('เก็บเกี่ยวแล้ว');
-    expect(historyCell('รอบที่ 1', 'สถานะ')).toContain('ยกเลิก');
-  });
-
-  it('reads PO / P.Code / plan from the row own cycle, never the active one', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([
-      oneCycle({
-        id: 'c2', cycleNo: 2, status: 'active', cycleLabel: null,
-        poNumber: 'PO-NEW', pCode: 'PC-NEW', expectedYieldFull: '2000', expectedYieldUnit: 'kg',
-      }),
-      oneCycle({
-        id: 'c1', cycleNo: 1, status: 'harvested', cycleLabel: null, closedAt: '2026-05-01T00:00:00Z',
-        poNumber: 'PO-OLD', pCode: 'PC-OLD', expectedYieldFull: '900', expectedYieldUnit: 'kg',
-      }),
-    ]);
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    expect(historyCell('รอบที่ 2', 'PO Number')).toBe('PO-NEW');
-    expect(historyCell('รอบที่ 1', 'PO Number')).toBe('PO-OLD');
-    expect(historyCell('รอบที่ 2', 'P.Code')).toBe('PC-NEW');
-    expect(historyCell('รอบที่ 1', 'P.Code')).toBe('PC-OLD');
-    expect(historyCell('รอบที่ 2', 'แผนผลผลิต')).toBe('2,000 kg');
-    expect(historyCell('รอบที่ 1', 'แผนผลผลิต')).toBe('900 kg');
-  });
-
-  it('shows an em dash for every missing value', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([
-      oneCycle({
-        id: 'c1', cycleNo: 1, status: 'harvested', cycleLabel: null,
-        closedAt: '2026-05-01T00:00:00Z',
-        crop: null, variety: null, poNumber: null, pCode: null, lotNo: null,
-        lotNoSource: null, plantingDate: null, expectedYieldFull: null,
-        expectedYieldUnit: null, harvestYield: null, finalYieldAfterClean: null,
-        harvestDate: null, finalNote: null, closeReason: null,
-        finalInspectionRecordId: null,
-      }),
-    ]);
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    for (const column of [
-      'พืช / พันธุ์', 'PO Number', 'P.Code', 'Lot No ระบบ', 'Supplier Lot No',
-      'Oracle Supplier Code', 'Oracle Invoice', 'Ref Account', 'วันที่ปลูก',
-      'แผนผลผลิต', 'ผลผลิตตอนเก็บเกี่ยว', 'ผลผลิตจริงหลังทำความสะอาด',
-      'วันที่เก็บเกี่ยว', 'อ้างอิง',
-    ]) {
-      expect(historyCell('รอบที่ 1', column)).toBe('—');
-    }
-  });
-
-  it('keeps the empty state when the plot has no cycles', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue([]);
-
-    renderPage();
-
-    expect(await screen.findByText('ยังไม่มีรอบปลูก')).toBeTruthy();
-    // no table and no selector to operate on nothing
-    expect(screen.queryByLabelText('จำนวนรอบที่แสดง')).toBeNull();
-  });
-
-  it('scrolls horizontally instead of crushing columns on a narrow screen', async () => {
-    getPlotMock.mockResolvedValue(basePlot());
-    listPlotCyclesMock.mockResolvedValue(manyCycles(3));
-
-    renderPage();
-
-    await screen.findByText('ประวัติรอบปลูก');
-    const table = historyTable();
-    expect(table.parentElement?.className).toContain('overflow-x-auto');
-    expect(table.className).toMatch(/min-w-\[\d+px\]/);
-    // fixed type scale — never sized off the viewport
-    expect(table.className).not.toMatch(/text-\[\d+vw\]/);
+    expect(listPlotCyclesMock.mock.calls[0][0]).toBe('plot-1');
   });
 });
 
@@ -2569,27 +2325,27 @@ describe('PlotDetail — round 8-14D: inspection history page-size selector', ()
     expect(await screen.findByText('โหลดประวัติการตรวจไม่สำเร็จ')).toBeTruthy();
   });
 
-  it('8. the cycle-history table keeps its OWN separate selector, untouched by this one', async () => {
+  it('8. is the ONLY page-size selector now, and changing it never refetches cycles', async () => {
+    // Round Q — this used to prove the inspection selector and the cycle-history
+    // table's own selector stayed independent. The cycle table (and its
+    // selector) are gone, so the guarantee becomes the stronger one: there is a
+    // single selector on the page, and driving it still leaves the cycle query
+    // alone.
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([oneCycle()]);
     listRecordsMock.mockResolvedValue(manyRecords(5));
 
     renderPage();
 
-    await screen.findByText('ประวัติรอบปลูก');
-    // Two independent selectors, different labels, different option text.
-    const cycleSelect = screen.getByLabelText('จำนวนรอบที่แสดง') as HTMLSelectElement;
+    await screen.findByText('ชนิดพืช');
+    expect(screen.queryByLabelText('จำนวนรอบที่แสดง')).toBeNull();
     const recordSelect = screen.getByLabelText('แสดงต่อหน้า') as HTMLSelectElement;
-    expect(cycleSelect).not.toBe(recordSelect);
-    expect(cycleSelect.value).toBe('10');   // cycle table's own default, unchanged
-    expect(recordSelect.value).toBe('5');   // inspection history's new default
+    expect(recordSelect.value).toBe('5');   // inspection history's own default
 
-    // Changing the inspection-history size must not refetch or resize cycles.
     listPlotCyclesMock.mockClear();
     fireEvent.change(recordSelect, { target: { value: '20' } });
     await waitFor(() => expect(lastListRecordsCall().limit).toBe(20));
     expect(listPlotCyclesMock).not.toHaveBeenCalled();
-    expect(cycleSelect.value).toBe('10');
   });
 });
 

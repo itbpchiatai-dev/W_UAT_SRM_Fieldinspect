@@ -83,6 +83,10 @@ outputs/
 backend/scratchpad/
 scratchpad/
 
+# Local-markdown issue tracker used by the agent skills (specs/tickets, see
+# docs/agents/issue-tracker.md) — kept out of git because the repo is public.
+.scratch/
+
 # Stray junk file from a Windows `> nul` redirect mistake in some earlier
 # command (not `/dev/null`) — harmless, but not source. Left in place
 # locally rather than deleted; just never committed.

@@ -202,6 +202,41 @@ def test_the_seed_and_the_migration_agree(role: str) -> None:
     assert role in _migration()
 
 
+def test_every_migration_that_adds_a_permission_grants_it_to_super_admin() -> None:
+    """internal:super_admin's keys=None means "every permission" only at SEED
+    time: the seeder expands it against the catalogue AS IT STANDS THEN.
+
+    A permission a MIGRATION introduces afterwards is new to an existing
+    database, so nothing grants it to super_admin unless that migration says
+    so. Round S's first draft left it out, reasoning that super_admin "already
+    holds everything" — and the highest-privilege role ended up missing exactly
+    one key, with no error anywhere. Migration 0051 had it right.
+
+    Scanned rather than asserted against a live database so it fails in CI, on
+    a fresh clone, before anyone deploys.
+    """
+    offenders = []
+    for f in sorted(VERSIONS.glob("*.py")):
+        src = f.read_text(encoding="utf-8")
+        if "def upgrade" not in src:
+            continue
+        # Strip `#` comments FIRST. Without this the scan reads the comment
+        # ABOVE the statement — this very migration explains in prose why
+        # super_admin is listed — and passes while the SQL grants nothing.
+        # The first version of this test did exactly that and missed the bug
+        # it was written for.
+        body = re.sub(r"#.*", "", src[src.index("def upgrade"):])
+        if "INSERT INTO permissions" not in body:
+            continue
+        if "internal:super_admin" not in body:
+            offenders.append(f.name)
+    assert not offenders, (
+        "these migrations add a permission but never grant it to "
+        f"internal:super_admin, so an existing database silently leaves the "
+        f"highest-privilege role without it: {offenders}"
+    )
+
+
 def test_the_permission_is_in_the_catalogue_for_the_admin_ui() -> None:
     """Otherwise the key works but cannot be granted or revoked from the Roles
     screen — invisible permissions are how a permission model rots."""

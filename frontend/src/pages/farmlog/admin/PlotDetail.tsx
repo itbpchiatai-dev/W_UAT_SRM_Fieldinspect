@@ -514,7 +514,7 @@ function CurrentCycleSection({
             onClick={onCloseCycle}
             className="inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 shadow-sm hover:bg-amber-100"
           >
-            <Archive className="h-3.5 w-3.5" /> ปิดรอบปลูก (เก็บเกี่ยว)
+            <Archive className="h-3.5 w-3.5" /> ปิดรอบปลูก (ยืนยันหลังเก็บเกี่ยว)
           </button>
           )}
           {/* Round S — the one ending a Supplier may record. Styled as the

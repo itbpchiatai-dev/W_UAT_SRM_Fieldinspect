@@ -998,7 +998,7 @@ export function CloseCycleModal({
   }
 
   return (
-    <ModalShell title={`ปิดรอบปลูก (เก็บเกี่ยวแล้ว) — รอบที่ ${cycle.cycleNo}`} icon={<Archive className="h-4 w-4 text-amber-600" />} onClose={onClose}>
+    <ModalShell title={`ปิดรอบปลูก (ยืนยันหลังเก็บเกี่ยว) — รอบที่ ${cycle.cycleNo}`} icon={<Archive className="h-4 w-4 text-amber-600" />} onClose={onClose}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 overflow-y-auto px-6 py-5">
         {/* Round P — the old copy ("...จนกว่าจะเริ่มรอบปลูกใหม่") described a
             second cycle on the same plot, which round E's "one plot, one

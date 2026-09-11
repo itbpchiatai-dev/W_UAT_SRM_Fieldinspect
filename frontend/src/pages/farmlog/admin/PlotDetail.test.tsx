@@ -2428,7 +2428,7 @@ describe('PlotDetail — cancel vs close (round S)', () => {
   it('an admin is offered both endings, clearly labelled', async () => {
     await open(['plots.read', 'plots.update', 'plots.delete', 'plots.cancel_cycle']);
 
-    expect(screen.getByRole('button', { name: /ปิดรอบปลูก \(เก็บเกี่ยว\)/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /ปิดรอบปลูก \(ยืนยันหลังเก็บเกี่ยว\)/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /ยกเลิกรอบปลูก/ })).toBeTruthy();
   });
 
@@ -2481,7 +2481,7 @@ describe('PlotDetail — cancel vs close (round S)', () => {
     // Leaving "ยกเลิก" in that dropdown would be a second route to cancelling
     // that skips the mandatory reason and the deactivation.
     await open(['plots.read', 'plots.update', 'plots.delete', 'plots.cancel_cycle']);
-    fireEvent.click(screen.getByRole('button', { name: /ปิดรอบปลูก \(เก็บเกี่ยว\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ปิดรอบปลูก \(ยืนยันหลังเก็บเกี่ยว\)/ }));
 
     await screen.findByRole('button', { name: 'ยืนยันปิดรอบปลูก' });
     expect(screen.queryByLabelText('สถานะ')).toBeNull();

@@ -57,17 +57,25 @@ def upgrade() -> None:
         ON CONFLICT (key) DO NOTHING
         """
     )
-    # internal:super_admin is the keys=None role and already holds everything,
-    # so it is deliberately absent here. The SELECT yields nothing (and
-    # inserts nothing) if a role or the permission is missing, so this never
-    # fails on a partially-seeded database.
+    # internal:super_admin is listed EXPLICITLY, and that is not redundant.
+    # Its keys=None in DEFAULT_ROLES means "every permission" only at SEED
+    # time — the seeder expands it against the catalogue as it stands then.
+    # A permission a MIGRATION adds later is new to an existing database, so
+    # nothing grants it to super_admin unless this statement does. Leaving it
+    # out (the first version of this migration did) left the highest-privilege
+    # role missing exactly one key, silently. Migration 0051 got this right;
+    # copy it, not the first draft of this one.
+    #
+    # The SELECT yields nothing — and inserts nothing — if a role or the
+    # permission is missing, so this never fails on a partially-seeded
+    # database.
     op.execute(
         """
         INSERT INTO role_permissions (role_id, permission_id)
         SELECT r.id, p.id
         FROM roles r
         CROSS JOIN permissions p
-        WHERE r.name IN ('internal:admin', 'supplier:owner')
+        WHERE r.name IN ('internal:super_admin', 'internal:admin', 'supplier:owner')
           AND p.key = 'plots.cancel_cycle'
         ON CONFLICT (role_id, permission_id) DO NOTHING
         """

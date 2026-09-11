@@ -284,8 +284,12 @@ async def test_update_cycle_race_lock_lost_becomes_409() -> None:
 
 # --- close (POST /{plotId}/cycles/{cycleId}/close) --------------------------
 
-@pytest.mark.parametrize("close_status", ["harvested", "cancelled"])
-async def test_close_cycle_success_clears_mirror_and_snapshot(close_status: str) -> None:
+# Round S — no longer parametrized over "cancelled": PlotCycleClose.status is
+# Literal["harvested"] now, because cancelling moved to its own endpoint with
+# its own permission and a mandatory reason (see test_cancel_cycle_round_s.py,
+# which asserts the same clear-the-snapshot behaviour for that path).
+async def test_close_cycle_success_clears_mirror_and_snapshot() -> None:
+    close_status = "harvested"
     plot = _plot()
     cycle = _cycle(plot_id=plot.id, status="active")
     user = SimpleNamespace(id=uuid4())
@@ -307,7 +311,10 @@ async def test_close_cycle_success_clears_mirror_and_snapshot(close_status: str)
     assert mk_close.call_args.kwargs["closed_by_id"] == user.id
     assert mk_close.call_args.kwargs["reason"] == "done"   # trimmed
     mk_clear.assert_awaited_once()
-    # the endpoint never touches plot.is_active (permanent-close is separate)
+    # Round P — a close DOES retire the plot, but only for a caller holding
+    # plots.delete. This stand-in user carries no _effective_permissions at
+    # all, so the gate is closed and is_active is untouched. That is the
+    # assertion: the deactivation is gated, not automatic.
     assert plot.is_active is True
 
 

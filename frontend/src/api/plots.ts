@@ -1468,7 +1468,10 @@ export interface PlotCycleCreatePayload {
 export type PlotCycleUpdatePayload = Partial<PlotCycleCreatePayload>;
 
 export interface PlotCycleClosePayload {
-  status: 'harvested' | 'cancelled';
+  /** Round S — HARVESTED only. Cancelling is its own call (cancelPlotCycle),
+   * with its own permission and a MANDATORY reason; keeping it as a status
+   * here would have left a second route to it that skips that. */
+  status: 'harvested';
   closeReason?: string | null;
   /** Round D — the cycle's ACTUAL harvest, recorded as part of the close.
    * All optional: omit a field and the server fills it in from the cycle's own
@@ -1476,9 +1479,8 @@ export interface PlotCycleClosePayload {
    * an admin confirms the field team's numbers instead of retyping them. Send
    * a value to override one.
    *
-   * Only meaningful on status 'harvested' — a cancelled cycle was never
-   * harvested, and sending figures with one is a 422. There is no unit field:
-   * the figures are always kilograms, stamped server-side. */
+   * There is no unit field: the figures are always kilograms, stamped
+   * server-side. */
   harvestYield?: number | null;
   finalYieldAfterClean?: number | null;
   harvestDate?: string | null;
@@ -1566,6 +1568,28 @@ export async function getPlotCycleClosePreview(
  * Optional so a response from a pre-round-P backend still typechecks. */
 export interface PlotCycleCloseResult extends PlotCycle {
   plotDeactivated?: boolean;
+}
+
+/** Round S — end a season as a FAILURE, and take the plot out of service.
+ *
+ * A separate call from closePlotCycle for three reasons that point the same
+ * way: a different permission performs it (plots.cancel_cycle, which a
+ * Supplier Owner holds and plots.update does not imply), the reason is
+ * REQUIRED, and the plot is deactivated whoever runs it — under "one plot, one
+ * cycle" a cancelled plot is finished, and leaving it in service would keep it
+ * in the farmer's inspection list forever.
+ *
+ * No harvest figures: a cancelled cycle was never harvested. */
+export async function cancelPlotCycle(
+  plotId: string,
+  cycleId: string,
+  reason: string,
+): Promise<PlotCycleCloseResult> {
+  const res = await apiClient.post<PlotCycleCloseResult>(
+    `/api/v1/plots/${plotId}/cycles/${cycleId}/cancel`,
+    { reason },
+  );
+  return res.data;
 }
 
 export async function closePlotCycle(

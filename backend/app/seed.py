@@ -83,6 +83,7 @@ DEFAULT_PERMISSIONS: list[tuple[str, str, str, bool]] = [
     ("plots.create", "สร้างแปลง",       "farmlog", False),
     ("plots.update", "แก้ไขแปลง",       "farmlog", False),
     ("plots.delete", "ปิด/ลบแปลง",      "farmlog", False),
+    ("plots.cancel_cycle", "ยกเลิกรอบปลูก (จบด้วยการยกเลิก)", "farmlog", False),
     ("plots.assign", "มอบหมาย user ให้แปลง", "farmlog", False),
     # FarmLog — Records
     ("records.read",   "ดูบันทึกการตรวจแปลง", "farmlog", True),
@@ -129,6 +130,7 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
         # FarmLog — admin manages supplier + plot master data + records
         "suppliers.read", "suppliers.create", "suppliers.update", "suppliers.delete",
         "plots.read", "plots.create", "plots.update", "plots.delete", "plots.assign",
+        "plots.cancel_cycle",
         "records.read", "records.create", "records.update", "records.delete",
     ]),
     ("internal:super_user",  "Super User",   "internal", [
@@ -158,6 +160,13 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
         # where a close also deactivates the plot for anyone holding
         # plots.delete — so leaving plots.update here would have kept suppliers
         # one permission away from an action deliberately reserved for admins.
+        # Round S — an owner MAY end their own plot's season when the planting
+        # fails, with a reason they must type, and the plot leaves service with
+        # it. Its own key precisely because plots.update (removed above) would
+        # have handed back start/edit/close-as-harvested and the Excel importer
+        # along with it. Closing a season as HARVESTED stays Chiatai's: it is a
+        # claim about a delivered crop, not an admission that one failed.
+        "plots.cancel_cycle",
         # Round 8-4F: an owner records inspections for their OWN supplier's
         # plots. records.create only unlocks the ACTION — the data boundary
         # stays RLS scope 'supplier' (app/api/deps/scope.py: owner + supplier_id

@@ -22,7 +22,7 @@ import app.api.v1.plots as plots_module
 from app.api.v1.plots import close_plot_cycle, preview_plot_cycle_close
 from app.db.models.plot_cycle import ACTUAL_HARVEST_YIELD_UNIT
 from app.repositories import plot_cycle_repository as repo
-from app.schemas.plot import PlotCycleClose
+from app.schemas.plot import PlotCycleCancel, PlotCycleClose
 
 _P = "app.api.v1.plots"
 _NOW = datetime.datetime(2026, 8, 20, tzinfo=datetime.timezone.utc)
@@ -197,24 +197,20 @@ async def test_a_partial_set_that_cannot_be_completed_is_a_422() -> None:
     assert cycle.harvest_yield is None
 
 
-async def test_a_cancelled_cycle_refuses_harvest_figures() -> None:
+def test_a_cancelled_cycle_cannot_carry_harvest_figures_at_all() -> None:
     """A cancelled cycle was never harvested; recording one would be a claim
-    the data does not support. Refused, not silently dropped — the admin chose
-    'cancelled' on purpose."""
-    plot, cycle = _plot(), _cycle()
-    with pytest.raises(HTTPException) as exc:
-        await _close(plot, cycle, _record(), PlotCycleClose(
-            status="cancelled", harvestYield="1250.00",
-        ))
-    assert exc.value.status_code == 422
-    assert cycle.harvest_yield is None
+    the data does not support.
 
-
-async def test_a_plain_cancel_never_carries_figures_forward() -> None:
-    plot, cycle, record = _plot(), _cycle(), _record()
-    await _close(plot, cycle, record, PlotCycleClose(status="cancelled"))
-    assert cycle.harvest_yield is None
-    assert cycle.final_yield_unit is None
+    Round S made that structural rather than a runtime refusal. Cancelling
+    moved to its own endpoint and its own payload (PlotCycleCancel), which
+    carries no figure fields — so there is nothing to send and nothing to
+    reject. The two tests that used to drive this through
+    PlotCycleClose(status="cancelled") could not survive `status` becoming
+    Literal["harvested"]; what they protected is asserted here instead, and
+    exercised end-to-end in test_cancel_cycle_round_s.py."""
+    for field in ("harvest_yield", "final_yield_after_clean", "harvest_date"):
+        assert field not in PlotCycleCancel.model_fields
+    assert "status" not in PlotCycleCancel.model_fields
 
 
 def test_the_unit_is_never_a_client_field() -> None:

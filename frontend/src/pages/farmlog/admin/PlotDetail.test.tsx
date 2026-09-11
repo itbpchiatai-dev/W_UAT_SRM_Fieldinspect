@@ -29,6 +29,7 @@ const listPlotCyclesMock = vi.fn();
 const createPlotCycleMock = vi.fn();
 const updatePlotCycleMock = vi.fn();
 const closePlotCycleMock = vi.fn();
+const cancelPlotCycleMock = vi.fn();
 const rolloverPlotCycleMock = vi.fn();
 const getPlotAccessPhonesMock = vi.fn();
 const replacePlotAccessPhonesMock = vi.fn();
@@ -46,6 +47,7 @@ vi.mock('../../../api/plots', async (importOriginal) => {
     createPlotCycle: (...args: unknown[]) => createPlotCycleMock(...args),
     updatePlotCycle: (...args: unknown[]) => updatePlotCycleMock(...args),
     closePlotCycle: (...args: unknown[]) => closePlotCycleMock(...args),
+    cancelPlotCycle: (...args: unknown[]) => cancelPlotCycleMock(...args),
     rolloverPlotCycle: (...args: unknown[]) => rolloverPlotCycleMock(...args),
     getPlotAccessPhones: (...args: unknown[]) => getPlotAccessPhonesMock(...args),
     replacePlotAccessPhones: (...args: unknown[]) => replacePlotAccessPhonesMock(...args),
@@ -294,6 +296,7 @@ beforeEach(() => {
   createPlotCycleMock.mockReset();
   updatePlotCycleMock.mockReset();
   closePlotCycleMock.mockReset();
+  cancelPlotCycleMock.mockReset();
   rolloverPlotCycleMock.mockReset();
   getPlotAccessPhonesMock.mockReset();
   replacePlotAccessPhonesMock.mockReset();
@@ -1025,7 +1028,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'ปิดรอบปลูก' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ปิดรอบปลูก/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันปิดรอบปลูก' }));
 
     await waitFor(() => expect(closePlotCycleMock).toHaveBeenCalledWith(
@@ -1362,7 +1365,7 @@ describe('PlotDetail — rollover is retired (round E)', () => {
 
     renderPage();
 
-    await screen.findByRole('button', { name: 'ปิดรอบปลูก' });
+    await screen.findByRole('button', { name: /ปิดรอบปลูก/ });
     expect(screen.queryByRole('button', { name: 'จบรอบ + เริ่มรอบใหม่' })).toBeNull();
     expect(rolloverPlotCycleMock).not.toHaveBeenCalled();
   });
@@ -1373,7 +1376,7 @@ describe('PlotDetail — rollover is retired (round E)', () => {
 
     renderPage();
 
-    expect(await screen.findByRole('button', { name: 'ปิดรอบปลูก' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /ปิดรอบปลูก/ })).toBeTruthy();
   });
 });
 
@@ -2361,7 +2364,7 @@ describe('PlotDetail — close warns that the plot is retired too (round P)', ()
     getPlotMock.mockResolvedValue(basePlot());
     listPlotCyclesMock.mockResolvedValue([oneCycle()]);
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'ปิดรอบปลูก' }));
+    fireEvent.click(await screen.findByRole('button', { name: /ปิดรอบปลูก/ }));
   }
 
   it('warns that the plot will be deactivated when the user may deactivate it', async () => {
@@ -2392,5 +2395,96 @@ describe('PlotDetail — close warns that the plot is retired too (round P)', ()
     await screen.findByRole('button', { name: 'ยืนยันปิดรอบปลูก' });
     expect(screen.queryByText(/จนกว่าจะเริ่มรอบปลูกใหม่/)).toBeNull();
     expect(screen.getByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
+  });
+});
+
+/**
+ * Round S — ending a season splits into two actions with two permissions.
+ *
+ * plots.update closes it as HARVESTED (a claim about a delivered crop, so it
+ * stays Chiatai's). plots.cancel_cycle ends it as CANCELLED — the one ending a
+ * Supplier Owner may record, since they are who knows a planting failed. The
+ * reason is mandatory, and the plot leaves service whoever does it.
+ */
+describe('PlotDetail — cancel vs close (round S)', () => {
+  beforeEach(() => { allowedPerms = null; });
+
+  async function open(perms: string[]) {
+    allowedPerms = new Set(perms);
+    getPlotMock.mockResolvedValue(basePlot());
+    listPlotCyclesMock.mockResolvedValue([oneCycle()]);
+    renderPage();
+    await screen.findByText('ชนิดพืช');
+  }
+
+  it('a Supplier Owner is offered ยกเลิก only — never the harvested close or edit', async () => {
+    await open(['plots.read', 'plots.cancel_cycle']);
+
+    expect(screen.getByRole('button', { name: /ยกเลิกรอบปลูก/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /ปิดรอบปลูก/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'แก้รอบปลูก' })).toBeNull();
+  });
+
+  it('an admin is offered both endings, clearly labelled', async () => {
+    await open(['plots.read', 'plots.update', 'plots.delete', 'plots.cancel_cycle']);
+
+    expect(screen.getByRole('button', { name: /ปิดรอบปลูก \(เก็บเกี่ยว\)/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /ยกเลิกรอบปลูก/ })).toBeTruthy();
+  });
+
+  it('someone with neither key is offered no ending at all', async () => {
+    await open(['plots.read']);
+
+    expect(screen.queryByRole('button', { name: /ยกเลิกรอบปลูก/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ปิดรอบปลูก/ })).toBeNull();
+  });
+
+  it('refuses to submit a cancel with no reason, and never calls the API', async () => {
+    await open(['plots.read', 'plots.cancel_cycle']);
+    fireEvent.click(screen.getByRole('button', { name: /ยกเลิกรอบปลูก/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันยกเลิกรอบปลูก' }));
+
+    expect(await screen.findByText('กรุณาระบุเหตุผลที่ยกเลิกรอบปลูก')).toBeTruthy();
+    expect(cancelPlotCycleMock).not.toHaveBeenCalled();
+  });
+
+  it('sends the trimmed reason once one is typed', async () => {
+    cancelPlotCycleMock.mockResolvedValue(oneCycle({ status: 'cancelled' }));
+    await open(['plots.read', 'plots.cancel_cycle']);
+    fireEvent.click(screen.getByRole('button', { name: /ยกเลิกรอบปลูก/ }));
+
+    // Queried by placeholder: PlotCycleModals' shared Field renders a bare
+    // <label> with no htmlFor, so getByLabelText cannot reach the control.
+    // Pre-existing across every cycle modal — not this round's to change.
+    expect(screen.getByText('เหตุผลที่ยกเลิก (บังคับ)')).toBeTruthy();
+    fireEvent.change(await screen.findByPlaceholderText(/ต้นกล้าเสียหายจากน้ำท่วม/), {
+      target: { value: '  ต้นกล้าเสียหายจากน้ำท่วม  ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันยกเลิกรอบปลูก' }));
+
+    await waitFor(() => expect(cancelPlotCycleMock).toHaveBeenCalledWith(
+      'plot-1', 'cycle-1', 'ต้นกล้าเสียหายจากน้ำท่วม',
+    ));
+  });
+
+  it('warns that the plot leaves service, before the button', async () => {
+    // The last reversible moment: reopening needs plots.delete, which a
+    // Supplier does not have.
+    await open(['plots.read', 'plots.cancel_cycle']);
+    fireEvent.click(screen.getByRole('button', { name: /ยกเลิกรอบปลูก/ }));
+
+    expect(await screen.findByText(/แปลงนี้จะถูกปิดใช้งานทันที/)).toBeTruthy();
+    expect(screen.getByText(/เกษตรกรจะไม่เห็นแปลงนี้ในหน้าตรวจแปลงอีก/)).toBeTruthy();
+  });
+
+  it('the harvested close no longer offers a status choice', async () => {
+    // Leaving "ยกเลิก" in that dropdown would be a second route to cancelling
+    // that skips the mandatory reason and the deactivation.
+    await open(['plots.read', 'plots.update', 'plots.delete', 'plots.cancel_cycle']);
+    fireEvent.click(screen.getByRole('button', { name: /ปิดรอบปลูก \(เก็บเกี่ยว\)/ }));
+
+    await screen.findByRole('button', { name: 'ยืนยันปิดรอบปลูก' });
+    expect(screen.queryByLabelText('สถานะ')).toBeNull();
+    expect(screen.queryByRole('option', { name: 'ยกเลิก' })).toBeNull();
   });
 });

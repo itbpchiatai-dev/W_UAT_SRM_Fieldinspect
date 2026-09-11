@@ -838,7 +838,12 @@ class PlotCycleClose(CamelBaseModel):
     (final_yield_pct / final_estimated_yield / final_inspection_record_id) —
     close_cycle derives those itself, from the cycle's latest record."""
 
-    status: Literal["harvested", "cancelled"]
+    # Round S — HARVESTED only. Cancelling moved to its own endpoint and its
+    # own permission (PlotCycleCancel below): it is the one ending a Supplier
+    # may perform, and it requires a written reason, which an optional field on
+    # a shared payload could not enforce. Leaving 'cancelled' acceptable here
+    # would have left a second route to it that skips that requirement.
+    status: Literal["harvested"] = "harvested"
     close_reason: str | None = None
 
     # Round D — the ACTUAL harvest. Bounded exactly like the record-level
@@ -888,6 +893,32 @@ class PlotCycleCloseHarvestPreview(CamelBaseModel):
     # Always "kg" when resolved — echoed so the screen never has to hard-code
     # the unit it displays beside the numbers.
     final_yield_unit: str | None = None
+
+
+class PlotCycleCancel(CamelBaseModel):
+    """POST /plots/{plotId}/cycles/{cycleId}/cancel — end the season as a
+    failure (round S).
+
+    Its own endpoint, not a status on PlotCycleClose, for three reasons that
+    each point the same way: a different permission performs it
+    (plots.cancel_cycle, which supplier:owner holds and plots.update does not
+    imply), it always deactivates the plot whoever runs it, and the reason is
+    MANDATORY. An optional field on a shared payload could not express that
+    last one — and a cancelled season with no recorded reason is the case this
+    round exists to prevent.
+
+    `reason` carries no Field(min_length=...): the value is business text an
+    operator typed, and a Pydantic-level rejection echoes it verbatim in the
+    422 body (see PlotPhoneSearchRequest for where that lesson came from).
+    Blank-after-trim is checked in the endpoint, which answers with a fixed
+    message.
+
+    No harvest figures, deliberately: a cancelled cycle was never harvested,
+    so writing yield onto it would be a claim the data does not support — the
+    same refusal close_plot_cycle already makes for a cancelled close.
+    """
+
+    reason: SkipValidation[str] = Field(...)
 
 
 class PlotCycleRollover(CamelBaseModel):

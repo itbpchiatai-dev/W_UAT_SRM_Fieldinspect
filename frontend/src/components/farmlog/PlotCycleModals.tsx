@@ -16,6 +16,7 @@ import { Archive, Loader2, Lock, Pencil, PowerOff, RefreshCw, Sprout, Unlock } f
 import {
   createPlotCycle,
   updatePlotCycle,
+  cancelPlotCycle,
   closePlotCycle,
   getPlotCycleClosePreview,
   deactivatePlot,
@@ -841,8 +842,91 @@ export function EditCycleModal({
   );
 }
 
+/** Round S — end a season as a FAILURE.
+ *
+ * Its own modal, not a status inside CloseCycleModal, because the three things
+ * that differ all differ in the same direction: a Supplier Owner may do this
+ * and may not close as harvested (plots.cancel_cycle vs plots.update), the
+ * reason is REQUIRED, and the plot leaves service whoever performs it.
+ *
+ * The reason is enforced twice on purpose — here so the user is told before
+ * they submit, and again server-side, because a form is not an authorization
+ * boundary. It is the only record of WHY a season ended without a crop.
+ */
+const cancelSchema = z.object({
+  reason: z.string().trim().min(1, 'กรุณาระบุเหตุผลที่ยกเลิกรอบปลูก'),
+});
+type CancelFormValues = z.infer<typeof cancelSchema>;
+
+export function CancelCycleModal({
+  plotId, cycle, onClose, onSaved,
+}: {
+  plotId: string; cycle: PlotCycle; onClose: () => void; onSaved: () => void;
+}) {
+  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<CancelFormValues>({
+    resolver: zodResolver(cancelSchema),
+    defaultValues: { reason: '' },
+  });
+
+  const cancelM = useMutation({
+    mutationFn: (reason: string) => cancelPlotCycle(plotId, cycle.id, reason),
+  });
+
+  async function onSubmit(values: CancelFormValues) {
+    await cancelM.mutateAsync(values.reason.trim());
+    onSaved();
+  }
+
+  return (
+    <ModalShell
+      title={`ยกเลิกรอบปลูก — รอบที่ ${cycle.cycleNo}`}
+      icon={<PowerOff className="h-4 w-4 text-red-600" />}
+      onClose={onClose}
+    >
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 overflow-y-auto px-6 py-5">
+        {/* Said before the button, because this is the last reversible moment:
+            reopening the plot afterwards needs plots.delete, which a Supplier
+            does not have. */}
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          รอบปลูกนี้จะถูกบันทึกว่า <span className="font-medium">ยกเลิก</span> (ไม่ได้เก็บเกี่ยว)
+          และ <span className="font-medium">แปลงนี้จะถูกปิดใช้งานทันที</span> —
+          เกษตรกรจะไม่เห็นแปลงนี้ในหน้าตรวจแปลงอีก · 1 แปลง = 1 รอบปลูก ฤดูถัดไปให้สร้างแปลงใหม่
+        </p>
+        <Field label="เหตุผลที่ยกเลิก (บังคับ)" error={errors.reason?.message}>
+          <textarea
+            {...register('reason')}
+            rows={3}
+            className="field-input"
+            placeholder="เช่น ต้นกล้าเสียหายจากน้ำท่วม, ยกเลิกคำสั่งซื้อ"
+          />
+        </Field>
+        {cancelM.isError && (
+          <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {cycleMutationErrorMessage(cancelM.error)}
+          </p>
+        )}
+        <div className="flex justify-end gap-2 border-t border-border pt-4">
+          <button type="button" onClick={onClose} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-secondary">
+            ปิดหน้าต่าง
+          </button>
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-red-700 disabled:opacity-60"
+          >
+            {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
+            ยืนยันยกเลิกรอบปลูก
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
 const closeSchema = z.object({
-  status: z.enum(['harvested', 'cancelled']),
+  // Round S — no status choice: this modal closes a season as HARVESTED.
+  // Cancelling is CancelCycleModal below, with its own permission and a reason
+  // it will not let you skip.
   closeReason: z.string().optional().or(z.literal('')),
   // Round D — the ACTUAL harvest, pre-filled from the field team's own report
   // and editable. Left blank they are simply not sent, and the server carries
@@ -859,9 +943,9 @@ export function CloseCycleModal({
 }: {
   plotId: string; cycle: PlotCycle; onClose: () => void; onSaved: () => void;
 }) {
-  const { register, handleSubmit, watch, reset, formState: { errors, isSubmitting } } = useForm<CloseFormValues>({
+  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<CloseFormValues>({
     resolver: zodResolver(closeSchema),
-    defaultValues: { status: 'harvested', closeReason: '' },
+    defaultValues: { closeReason: '' },
   });
 
   // Round D — what the server WILL record if the admin just confirms. Read-only
@@ -881,7 +965,6 @@ export function CloseCycleModal({
     if (!p || !p.resolved || prefilledRef.current) return;
     prefilledRef.current = true;
     reset({
-      status: 'harvested',
       closeReason: '',
       harvestYield: p.harvestYield != null ? Number(p.harvestYield) : undefined,
       finalYieldAfterClean:
@@ -890,8 +973,8 @@ export function CloseCycleModal({
     });
   }, [previewQ.data, reset]);
 
-  const status = watch('status');
-  const recordingHarvest = status === 'harvested';
+  // Round S — this modal is the harvested path, always.
+  const recordingHarvest = true;
 
   // Round P — plots.delete is what makes a close ALSO deactivate the plot
   // (backend gate; see api/v1/plots.py close_plot_cycle). Read here only to
@@ -904,22 +987,18 @@ export function CloseCycleModal({
 
   async function onSubmit(values: CloseFormValues) {
     const payload: PlotCycleClosePayload = {
-      status: values.status,
+      status: 'harvested',
       closeReason: values.closeReason?.trim() || null,
+      harvestYield: values.harvestYield ?? null,
+      finalYieldAfterClean: values.finalYieldAfterClean ?? null,
+      harvestDate: values.harvestDate?.trim() || null,
     };
-    // A cancelled cycle was never harvested — the backend rejects figures sent
-    // with one, so the form never sends them either.
-    if (values.status === 'harvested') {
-      payload.harvestYield = values.harvestYield ?? null;
-      payload.finalYieldAfterClean = values.finalYieldAfterClean ?? null;
-      payload.harvestDate = values.harvestDate?.trim() || null;
-    }
     await closeM.mutateAsync(payload);
     onSaved();
   }
 
   return (
-    <ModalShell title={`ปิดรอบปลูก — รอบที่ ${cycle.cycleNo}`} icon={<Archive className="h-4 w-4 text-amber-600" />} onClose={onClose}>
+    <ModalShell title={`ปิดรอบปลูก (เก็บเกี่ยวแล้ว) — รอบที่ ${cycle.cycleNo}`} icon={<Archive className="h-4 w-4 text-amber-600" />} onClose={onClose}>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 overflow-y-auto px-6 py-5">
         {/* Round P — the old copy ("...จนกว่าจะเริ่มรอบปลูกใหม่") described a
             second cycle on the same plot, which round E's "one plot, one
@@ -939,12 +1018,6 @@ export function CloseCycleModal({
             </>
           )}
         </p>
-        <Field label="สถานะ" error={errors.status?.message}>
-          <select {...register('status')} className="field-input">
-            <option value="harvested">เก็บเกี่ยวแล้ว</option>
-            <option value="cancelled">ยกเลิก</option>
-          </select>
-        </Field>
 
         {/* Round D — the actual harvest, pre-filled from the field team's own
             report. The admin confirms or corrects; nobody retypes. Hidden for a

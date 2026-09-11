@@ -9,13 +9,13 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardCheck, FileText, KeyRound, Loader2, MapPin, Navigation, Pencil, Phone, Printer, RefreshCw, Sprout, Unlock } from 'lucide-react';
+import { AlertTriangle, Archive, ArrowLeft, ChevronDown, ChevronUp, ClipboardCheck, FileText, KeyRound, Loader2, MapPin, Navigation, Pencil, Phone, PowerOff, Printer, RefreshCw, Sprout, Unlock } from 'lucide-react';
 import { getPlot, getPlotInspectionAccessCredential, listPlotCycles, plotToQrLabel, type PlotCycle, type PlotDetail as PlotDetailData } from '../../../api/plots';
 import { listRecords, getRecord, type RecordSummary } from '../../../api/records';
 import { AuthenticatedPhoto } from '../../../components/farmlog/AuthenticatedPhoto';
 import { PlotQrPrintSheet, type PlotQrLabelData } from '../../../components/farmlog/PlotQrPrintSheet';
 import {
-  StartCycleModal, EditCycleModal, CloseCycleModal, RolloverCycleModal, lotSourceBadge,
+  StartCycleModal, EditCycleModal, CloseCycleModal, CancelCycleModal, RolloverCycleModal, lotSourceBadge,
   ReactivatePlotModal, ReactivatePlotWithCycleModal,
 } from '../../../components/farmlog/PlotCycleModals';
 import { plotCodeSourceBadge } from '../../../lib/plot-code';
@@ -327,9 +327,11 @@ function CurrentCycleSection({
   onStart,
   onEdit,
   onCloseCycle,
+  onCancelCycle,
   onRollover,
   canSeeVariety,
   canReadRecords,
+  canCancelCycle,
 }: {
   plot: PlotDetailData;
   cycle: PlotCycle | null;
@@ -340,8 +342,10 @@ function CurrentCycleSection({
   onStart: () => void;
   onEdit: () => void;
   onCloseCycle: () => void;
+  onCancelCycle: () => void;
   onRollover: () => void;
   canSeeVariety: boolean;
+  canCancelCycle: boolean;
 }) {
   if (!cycle) {
     return (
@@ -490,9 +494,12 @@ function CurrentCycleSection({
 
       {/* Round Q — write actions are for a LIVE season only. A closed one is
           history: editing or re-closing it are not states the backend allows
-          either (409 "Only active planting cycle can be closed"). */}
-      {canUpdate && growing && (
+          either (409 "Only active planting cycle can be closed").
+          Round S — the row appears for EITHER privilege: a Supplier Owner has
+          only ยกเลิก, an admin has all three. */}
+      {(canUpdate || canCancelCycle) && growing && (
         <div className="mt-4 flex flex-wrap gap-2 border-t border-green-200 pt-3">
+          {canUpdate && (
           <button
             type="button"
             onClick={onEdit}
@@ -500,13 +507,28 @@ function CurrentCycleSection({
           >
             <Pencil className="h-3.5 w-3.5" /> แก้รอบปลูก
           </button>
+          )}
+          {canUpdate && (
           <button
             type="button"
             onClick={onCloseCycle}
             className="inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 shadow-sm hover:bg-amber-100"
           >
-            <Archive className="h-3.5 w-3.5" /> ปิดรอบปลูก
+            <Archive className="h-3.5 w-3.5" /> ปิดรอบปลูก (เก็บเกี่ยว)
           </button>
+          )}
+          {/* Round S — the one ending a Supplier may record. Styled as the
+              destructive action it is, and separated from the harvest close so
+              the two can never be picked by accident for one another. */}
+          {canCancelCycle && (
+          <button
+            type="button"
+            onClick={onCancelCycle}
+            className="inline-flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-800 shadow-sm hover:bg-red-100"
+          >
+            <PowerOff className="h-3.5 w-3.5" /> ยกเลิกรอบปลูก
+          </button>
+          )}
           {/* Rollover (round 7.9C) — one atomic close+start action, distinct
               from ปิดใช้งานแปลง (permanent plot closure) below it in the
               header actions. Only offered on a still-open plot, once cycles
@@ -1067,6 +1089,11 @@ export function PlotDetail() {
   // Round 8-6I Part F — activation privilege, same permission the backend's
   // deactivate/reactivate endpoints require (plots.delete).
   const canReactivate = useHasPermission('plots.delete');
+  // Round S — ending a season as a FAILURE. A Supplier Owner holds this and
+  // not plots.update: they know when a planting fails and should not wait on
+  // Chiatai to record it, but closing as HARVESTED is a claim about a
+  // delivered crop and stays Chiatai's.
+  const canCancelCycle = useHasPermission('plots.cancel_cycle');
   // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
   const { user } = useAuth();
   const canSeeVariety = canViewVariety(user?.roles);
@@ -1076,6 +1103,7 @@ export function PlotDetail() {
   const [startingCycle, setStartingCycle] = useState(false);
   const [editingCycle, setEditingCycle] = useState<PlotCycle | null>(null);
   const [closingCycle, setClosingCycle] = useState<PlotCycle | null>(null);
+  const [cancellingCycle, setCancellingCycle] = useState<PlotCycle | null>(null);
   const [rollingOverCycle, setRollingOverCycle] = useState<PlotCycle | null>(null);
   const [managingPhones, setManagingPhones] = useState(false);
   // null = modal closed. The boolean is the credential's CONFIGURED state at
@@ -1333,6 +1361,8 @@ export function PlotDetail() {
           onStart={() => setStartingCycle(true)}
           onEdit={() => activeCycle && setEditingCycle(activeCycle)}
           onCloseCycle={() => activeCycle && setClosingCycle(activeCycle)}
+          onCancelCycle={() => activeCycle && setCancellingCycle(activeCycle)}
+          canCancelCycle={canCancelCycle}
           onRollover={() => activeCycle && setRollingOverCycle(activeCycle)}
           canSeeVariety={canSeeVariety}
           canReadRecords={canReadRecords}
@@ -1455,6 +1485,14 @@ export function PlotDetail() {
           cycle={closingCycle}
           onClose={() => setClosingCycle(null)}
           onSaved={() => { setClosingCycle(null); invalidateCycleQueries(); }}
+        />
+      )}
+      {cancellingCycle && plotId && (
+        <CancelCycleModal
+          plotId={plotId}
+          cycle={cancellingCycle}
+          onClose={() => setCancellingCycle(null)}
+          onSaved={() => { setCancellingCycle(null); invalidateCycleQueries(); }}
         />
       )}
       {rollingOverCycle && plotId && (

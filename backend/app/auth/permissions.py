@@ -65,6 +65,11 @@ class PermissionKey:
     PLOTS_UPDATE = "plots.update"
     PLOTS_DELETE = "plots.delete"
     PLOTS_ASSIGN = "plots.assign"
+    # Round S — cancelling a season is deliberately NOT part of plots.update.
+    # A Supplier Owner may end their own plot's season when the planting fails,
+    # but must not start one, edit one, close one as harvested, or run the
+    # Excel importer — all of which plots.update unlocks together.
+    PLOTS_CANCEL_CYCLE = "plots.cancel_cycle"
 
     # FarmLog — Records
     RECORDS_READ   = "records.read"

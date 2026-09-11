@@ -49,6 +49,7 @@ from app.schemas.plot import (
     PlotAccessPhoneRead,
     PlotAssignRequest,
     PlotCreate,
+    PlotCycleCancel,
     PlotCycleClose,
     PlotCycleCloseResult,
     PlotCycleCloseHarvestPreview,
@@ -2368,20 +2369,10 @@ async def close_plot_cycle(
     # Round D — record the ACTUAL harvest as part of the close, from the field
     # team's own report unless the admin overrode a figure.
     #
-    # Only a 'harvested' close carries figures: a CANCELLED cycle was never
-    # harvested, so writing a harvest onto it would be a claim the data does
-    # not support. A cancel that nonetheless carries figures is refused rather
-    # than silently ignored — the admin picked one of the two on purpose.
-    if payload.status == CYCLE_STATUS_CANCELLED and (
-        payload.harvest_yield is not None
-        or payload.final_yield_after_clean is not None
-        or payload.harvest_date is not None
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="รอบปลูกที่ยกเลิกจะบันทึกผลผลิตจริงไม่ได้ กรุณาเลือกสถานะ 'เก็บเกี่ยวแล้ว'",
-        )
-
+    # Round S removed the "a cancelled close must not carry harvest figures"
+    # guard that stood here: `status` is Literal["harvested"] now, so the
+    # branch was unreachable. The rule itself did not go away — cancel_plot_cycle
+    # enforces it by construction, accepting no figures at all.
     if payload.status == CYCLE_STATUS_HARVESTED:
         source = await plot_cycle_repo.get_actual_harvest_source_record(db, cycle.id)
         resolved = plot_cycle_repo.actual_harvest_from_record(source)
@@ -2457,6 +2448,81 @@ async def close_plot_cycle(
 
     # Re-load the onupdate-computed updated_at the flush expired (round 7.7 fix
     # — see start_plot_cycle) before serialising.
+    await db.refresh(cycle)
+    result = PlotCycleCloseResult.model_validate(cycle)
+    result.plot_deactivated = deactivated
+    return result
+
+
+_MSG_CANCEL_REASON_REQUIRED = "กรุณาระบุเหตุผลที่ยกเลิกรอบปลูก"
+
+
+@router.post(
+    "/{plot_id}/cycles/{cycle_id}/cancel",
+    response_model=PlotCycleCloseResult,
+    dependencies=[
+        Depends(require_permission(PermissionKey.PLOTS_CANCEL_CYCLE)),
+        Depends(get_rls_context),
+    ],
+)
+async def cancel_plot_cycle(
+    plot_id: UUID,
+    cycle_id: UUID,
+    payload: PlotCycleCancel,
+    current_user: CurrentUser,
+    db: AsyncSession = DbDep,
+) -> PlotCycleCloseResult:
+    """End the season as a FAILURE, and take the plot out of service (round S).
+
+    Separate from close_plot_cycle above, and the differences are the point:
+
+      * plots.cancel_cycle, not plots.update. A Supplier Owner holds it — they
+        are who knows a planting has failed, and should not wait on Chiatai to
+        say so. plots.update stays Chiatai's because closing as HARVESTED is a
+        claim about a delivered crop, and because it also unlocks start/edit
+        cycle and the Excel importer.
+      * the reason is REQUIRED. A cancelled season with nothing recorded about
+        why is the case this endpoint exists to prevent.
+      * the plot is deactivated UNCONDITIONALLY, not behind plots.delete the
+        way close_plot_cycle gates it. Under "one plot, one cycle" (round E) a
+        cancelled plot is finished for good; leaving it in service would keep
+        it in the farmer's /public/inspect list forever. This is the one place
+        a supplier:owner causes a deactivation, and it is deliberate.
+
+    No harvest figures are written or carried over: a cancelled cycle was never
+    harvested. Same lock order as every other cycle transition — Plot first
+    (the aggregate lock), then the active cycle under it.
+    """
+    # SkipValidation on `reason` means Pydantic accepted anything; check the
+    # shape here, where the answer is a fixed message that never echoes what
+    # was typed (see the schema for why).
+    reason = payload.reason.strip() if isinstance(payload.reason, str) else ""
+    if not reason:
+        raise HTTPException(status_code=422, detail=_MSG_CANCEL_REASON_REQUIRED)
+
+    plot = await repo.get_plot_for_update(db, plot_id)
+    if plot is None:
+        raise HTTPException(status_code=404, detail="Plot not found")
+    cycle = await plot_cycle_repo.get_active_cycle_for_plot_for_update(db, plot.id)
+    if cycle is None or cycle.id != cycle_id:
+        # Either the plot has no open season, or the caller named a different
+        # cycle than the one that is actually open — same 409 either way, and
+        # the same wording close_plot_cycle uses, so a stale page cannot
+        # cancel a season that already ended.
+        raise HTTPException(
+            status_code=409, detail="Only active planting cycle can be closed"
+        )
+
+    await plot_cycle_repo.close_cycle(
+        db, cycle, status=CYCLE_STATUS_CANCELLED,
+        closed_by_id=current_user.id, reason=reason,
+    )
+    await plot_cycle_repo.clear_plot_cycle_mirror_and_inspection_snapshot(db, plot)
+    deactivated = False
+    if plot.is_active:
+        plot = await repo.update_plot(db, plot, PlotUpdate(is_active=False))
+        deactivated = True
+
     await db.refresh(cycle)
     result = PlotCycleCloseResult.model_validate(cycle)
     result.plot_deactivated = deactivated

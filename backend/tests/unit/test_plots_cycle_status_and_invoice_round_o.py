@@ -47,6 +47,10 @@ def _cycle(**over):
         "po_number": "PO25009", "p_code": "Melon-I", "supplier_lot_no": None,
         "planting_date": None, "plant_count": 500, "expected_yield_full": None,
         "expected_yield_unit": None, "closed_at": None, "oracle_invoice": None,
+        # Round R — the plan/result pair the Plots list reads off the latest
+        # cycle. Present here because a real PlotCycle has them; a fixture that
+        # omits a column the read-model touches fails for the wrong reason.
+        "final_yield_after_clean": None, "final_yield_unit": None,
     }
     base.update(over)
     return SimpleNamespace(**base)

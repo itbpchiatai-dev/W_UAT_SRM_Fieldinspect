@@ -573,6 +573,20 @@ class PlotSummary(CamelBaseModel):
     # cycle rather than the active one for the same reason as the status above:
     # the invoice an admin looks up usually belongs to a finished season.
     latest_cycle_oracle_invoice: str | None = None
+    # Round R — the two numbers the Plots list had no way to show once a season
+    # ended: what the cycle was AIMING at, and what it actually brought in after
+    # cleaning. activeCycleExpectedYieldFull above goes null the moment the
+    # cycle closes, so a finished plot's row carried no figures at all.
+    #
+    # The units are carried separately and deliberately NOT assumed equal:
+    # expected_yield_unit is the operator's choice out of kg/g/ตัน/ผล/ลัง, while
+    # the actual harvest is ALWAYS kilograms (plot_cycle.ACTUAL_HARVEST_YIELD_UNIT).
+    # A caller comparing the two must check the units match first — 1,180 kg
+    # against a 5-ตัน target is 23.6%, not 118%.
+    latest_cycle_expected_yield_full: Decimal | None = None
+    latest_cycle_expected_yield_unit: str | None = None
+    latest_cycle_final_yield_after_clean: Decimal | None = None
+    latest_cycle_final_yield_unit: str | None = None
 
 
 class PlotCycleRead(CamelBaseModel):

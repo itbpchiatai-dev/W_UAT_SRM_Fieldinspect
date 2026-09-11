@@ -4240,3 +4240,95 @@ describe('Plots — cycle status column and filter (round O)', () => {
     expect(screen.getByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
   });
 });
+
+/**
+ * Round R — a finished plot's Yield cell used to be the bare "ปิดรอบแล้ว"
+ * badge, so the row carried no numbers at all: the opposite of what rounds O
+ * and P set out to do. It now shows what the season actually produced against
+ * what it aimed at.
+ *
+ * The percentage is the delicate part. expectedYieldUnit is the operator's
+ * pick out of kg/g/ตัน/ผล/ลัง; the actual harvest is ALWAYS kilograms. A ratio
+ * across two different units is wrong by whatever the conversion is — 1,180 kg
+ * against a 5-ตัน target is 23.6%, not 118%.
+ */
+describe('Plots — a closed season shows its real numbers (round R)', () => {
+  function closedRow(over: Record<string, unknown> = {}) {
+    return {
+      id: 'plot-1', supplierId: 'sup-1', plotCode: 'SUP001-P001', name: 'แปลงทดสอบ',
+      village: null, district: null, province: null, latitude: null, longitude: null,
+      isActive: true, assignedCount: 0, primaryPhone: null, additionalPhones: [],
+      activeCycleId: null, currentStage: null, lastInspectedAt: null,
+      latestCycleStatus: 'harvested', latestCycleClosedAt: '2026-09-01T00:00:00Z',
+      latestCycleOracleInvoice: null,
+      latestCycleExpectedYieldFull: '1000.00', latestCycleExpectedYieldUnit: 'kg',
+      latestCycleFinalYieldAfterClean: '1180.00', latestCycleFinalYieldUnit: 'kg',
+      ...over,
+    };
+  }
+
+  it('shows what was harvested against the target, with the percentage', async () => {
+    listPlotsMock.mockResolvedValue([closedRow()]);
+    renderPlotsPage();
+
+    expect(await screen.findByText(/118%/)).toBeTruthy();
+    // the pct sits in its own span so it can be coloured; read the line
+    const line = screen.getByText(/118%/).parentElement;
+    expect(line?.textContent).toContain('1,180 kg');
+    expect(line?.textContent).toContain('1,000 kg');
+  });
+
+  it('refuses to compute a percentage across two different units', async () => {
+    // 1,180 kg against a 5-ตัน target is 23.6%, not 118%. Rather than pick a
+    // conversion the data does not carry, the cell shows both figures and says
+    // why the ratio is missing.
+    listPlotsMock.mockResolvedValue([closedRow({
+      latestCycleExpectedYieldFull: '5.00', latestCycleExpectedYieldUnit: 'ตัน',
+    })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText(/คนละหน่วย/)).toBeTruthy();
+    expect(screen.queryByText(/118%/)).toBeNull();
+    expect(screen.queryByText(/23600%/)).toBeNull();
+    // both real figures are still there, each with its own unit
+    expect(screen.getByText(/1,180 kg/)).toBeTruthy();
+    expect(screen.getByText(/5 ตัน/)).toBeTruthy();
+  });
+
+  it('says nothing numeric for a cancelled cycle that has no figures', async () => {
+    listPlotsMock.mockResolvedValue([closedRow({
+      latestCycleStatus: 'cancelled',
+      latestCycleExpectedYieldFull: null, latestCycleExpectedYieldUnit: null,
+      latestCycleFinalYieldAfterClean: null, latestCycleFinalYieldUnit: null,
+    })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText('ปิดรอบแล้ว')).toBeTruthy();
+    expect(screen.queryByText(/%/)).toBeNull();
+    expect(screen.queryByText(/คนละหน่วย/)).toBeNull();
+  });
+
+  it('still shows the target when a legacy close recorded no harvest', async () => {
+    listPlotsMock.mockResolvedValue([closedRow({
+      latestCycleFinalYieldAfterClean: null, latestCycleFinalYieldUnit: null,
+    })]);
+    renderPlotsPage();
+
+    await screen.findByText('ปิดรอบแล้ว');
+    expect(screen.getByText(/1,000 kg/)).toBeTruthy();
+    expect(screen.queryByText(/%/)).toBeNull();
+  });
+
+  it('a growing plot is untouched — still the live pct → current / target', async () => {
+    listPlotsMock.mockResolvedValue([closedRow({
+      activeCycleId: 'cyc-1', latestCycleStatus: 'active', latestCycleClosedAt: null,
+      currentYieldPct: '80.0', activeCyclePlantCount: 500,
+      activeCycleExpectedYieldFull: '1000.00', activeCycleExpectedYieldUnit: 'kg',
+      latestCycleFinalYieldAfterClean: null, latestCycleFinalYieldUnit: null,
+    })]);
+    renderPlotsPage();
+
+    expect(await screen.findByText(/80% → 800 kg \/ 1,000 kg/)).toBeTruthy();
+    expect(screen.queryByText('ปิดรอบแล้ว')).toBeNull();
+  });
+});

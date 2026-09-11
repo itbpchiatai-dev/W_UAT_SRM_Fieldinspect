@@ -174,6 +174,13 @@ def _populate_latest_cycle(target, plot) -> None:
     target.latest_cycle_status = latest.status
     target.latest_cycle_closed_at = latest.closed_at
     target.latest_cycle_oracle_invoice = latest.oracle_invoice
+    # Round R — the plan and the result, for the Plots list's Yield column.
+    # Units travel with their own value; see the schema for why they must not
+    # be assumed to match.
+    target.latest_cycle_expected_yield_full = latest.expected_yield_full
+    target.latest_cycle_expected_yield_unit = latest.expected_yield_unit
+    target.latest_cycle_final_yield_after_clean = latest.final_yield_after_clean
+    target.latest_cycle_final_yield_unit = latest.final_yield_unit
 
 
 def _populate_access_phones(target, plot) -> None:

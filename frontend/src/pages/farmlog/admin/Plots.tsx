@@ -103,6 +103,58 @@ function plotSupplierDisplay(
   return sup ? { code: sup.code, name: sup.name } : null;
 }
 
+/** What a FINISHED season actually produced, for the Plots list (round R).
+ *
+ * Until now a closed plot's Yield cell was the bare badge "ปิดรอบแล้ว" — the
+ * row carried no figures at all, which is the opposite of what rounds O and P
+ * set out to do: make finished plots easy to follow without opening each one.
+ * It now shows the same shape the live cell uses, built from real numbers:
+ *
+ *     118% → 1,180 kg / 1,000 kg      ได้จริง / เป้าผลิต
+ *
+ * The percentage is computed ONLY when the two units match. expectedYieldUnit
+ * is the operator's pick out of kg/g/ตัน/ผล/ลัง; the actual harvest is always
+ * kilograms. 1,180 kg against a 5-ตัน target is 23.6%, not 118% — so when the
+ * units differ the cell shows both figures with their own units and no ratio,
+ * rather than a confident wrong number.
+ */
+function ClosedYieldCell({ plot }: { plot: PlotSummary }) {
+  const actual = toNumberOrNull(plot.latestCycleFinalYieldAfterClean);
+  const target = toNumberOrNull(plot.latestCycleExpectedYieldFull);
+  const actualUnit = plot.latestCycleFinalYieldUnit ?? null;
+  const targetUnit = plot.latestCycleExpectedYieldUnit ?? null;
+
+  const badge = (
+    <span className="inline-flex items-center justify-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+      ปิดรอบแล้ว
+    </span>
+  );
+
+  // A cycle closed as cancelled, or one finalized before the actual-harvest
+  // fields existed, has no figures — say nothing rather than invent a zero.
+  if (actual == null && target == null) return badge;
+
+  const comparable = actual != null && target != null && target !== 0
+    && actualUnit != null && targetUnit != null && actualUnit === targetUnit;
+  const pctLabel = comparable ? `${Math.round((actual / target) * 1000) / 10}%` : null;
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      {badge}
+      <span className="whitespace-nowrap font-semibold text-foreground">
+        {pctLabel && <span className="text-success-readable">{pctLabel} → </span>}
+        {formatYieldQuantity(actual, actualUnit) ?? '—'}
+        <span className="font-normal text-muted-foreground"> / {formatYieldQuantity(target, targetUnit) ?? '—'}</span>
+      </span>
+      {!comparable && actual != null && target != null && (
+        // Units differ, so the two numbers cannot be divided. Say why the
+        // percentage is missing instead of leaving the reader to wonder.
+        <span className="text-[11px] text-muted-foreground">คนละหน่วย เทียบ % ไม่ได้</span>
+      )}
+    </div>
+  );
+}
+
 /** Compact "80% → 800 kg / 1,000 kg" summary for the Plots list (round 17),
  * or a clear "ยังไม่ตั้งแผนผลผลิต"-style warning (round 18) when the base
  * plan (plant count + expected yield at 100%) isn't set yet — never a
@@ -125,11 +177,7 @@ function YieldCell({ plot, onPlanClick }: { plot: PlotSummary; onPlanClick?: () 
   // Checked before the no-active-cycle branch below, which a closed plot also
   // satisfies.
   if (cycleIsClosed(plot)) {
-    return (
-      <span className="inline-flex items-center justify-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
-        ปิดรอบแล้ว
-      </span>
-    );
+    return <ClosedYieldCell plot={plot} />;
   }
   // Round 7.3 — a plot with no active planting cycle has nothing to plan a
   // yield against yet; say so distinctly from "plan exists but incomplete".

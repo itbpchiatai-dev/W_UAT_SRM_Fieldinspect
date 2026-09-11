@@ -151,6 +151,19 @@ export interface PlotSummary {
   /** Oracle invoice of that latest cycle — shown on the row, and searchable
    * through PlotListParams.invoice. */
   latestCycleOracleInvoice?: string | null;
+  /** Round R — what the season aimed at and what it actually brought in.
+   * activeCycleExpectedYieldFull goes null the moment the cycle closes, so a
+   * finished plot's row had no figures at all.
+   *
+   * The two units are separate on purpose and must NOT be assumed equal:
+   * latestCycleExpectedYieldUnit is the operator's pick out of kg/g/ตัน/ผล/ลัง,
+   * while the actual harvest is ALWAYS kilograms. Comparing 1,180 kg against a
+   * 5-ตัน target gives 23.6%, not 118% — check the units match before dividing.
+   */
+  latestCycleExpectedYieldFull?: string | number | null;
+  latestCycleExpectedYieldUnit?: string | null;
+  latestCycleFinalYieldAfterClean?: string | number | null;
+  latestCycleFinalYieldUnit?: string | null;
 }
 
 export interface PlotDetail {

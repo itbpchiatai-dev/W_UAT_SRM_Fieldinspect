@@ -190,6 +190,37 @@ describe('autoLotPreview — V2 formula, ### for the server-assigned running no'
   });
 });
 
+// Round U — the server strips all whitespace and zero-width characters from a
+// lot, so the preview must too, or it shows a lot that will never exist.
+// The character list mirrors INVISIBLE in
+// backend/tests/unit/test_auto_lot_whitespace_round_u.py.
+describe('autoLotPreview — a lot never contains whitespace (round U)', () => {
+  const INVISIBLE = [
+    ' ', '\t', '\n', '\r', '\u00a0', '\u3000', '\u2009',
+    '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff',
+    '\x1f', '\x85',
+  ];
+
+  it('the case that started the round', () => {
+    expect(autoLotPreview('Aug 2026', 'TDS', 'WM-078')).toBe('Aug2026-TDS-WM-078-###');
+  });
+
+  it.each(INVISIBLE.map((ch) => [`U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`, ch]))(
+    'removes %s from every component',
+    (_name, ch) => {
+      expect(autoLotPreview(`Aug${ch}2026`, `SUP${ch}010`, `WM${ch}-141`)).toBe('Aug2026-SUP010-WM-141-###');
+    },
+  );
+
+  it('keeps Thai letters, dashes and case', () => {
+    expect(autoLotPreview('รอบ ทดลอง', 'Sup 010', 'wm - 141')).toBe('รอบทดลอง-Sup010-wm-141-###');
+  });
+
+  it('a component of only invisible characters shows its placeholder, not an empty segment', () => {
+    expect(autoLotPreview('\u200b \u00a0', 'SUP010', 'WM-141')).toBe('<ชื่อรอบปลูก>-SUP010-WM-141-###');
+  });
+});
+
 describe('lotSourceBadge', () => {
   it('maps source → Thai label/tone; legacy-with-lot → "ข้อมูลเดิม"; nothing when no lot', () => {
     expect(lotSourceBadge('auto', true)?.label).toBe('อัตโนมัติ');

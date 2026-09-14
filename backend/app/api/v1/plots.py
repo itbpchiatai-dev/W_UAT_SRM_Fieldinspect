@@ -124,6 +124,45 @@ def _auto_lot_missing_detail(missing: tuple[str, ...]) -> str:
         "(รูปแบบ: ชื่อรอบปลูก-รหัส Supplier-P.Code-เลขรัน)"
     )
 
+
+# The two unique indexes behind the Auto Lot (migrations 0048/0049). Losing to
+# either means the lot THIS request generated is already taken — a second save
+# in the same series at the same moment, or two series that render one lot —
+# not that the plot already has an active cycle, which is what every
+# cycle-creating endpoint used to answer for any IntegrityError (round U).
+_AUTO_LOT_UNIQUE_INDEXES = frozenset({
+    "uq_plot_cycles_auto_lot_series_running",
+    "uq_plot_cycles_auto_lot_v2_lot_no",
+})
+_MSG_AUTO_LOT_TAKEN = (
+    "เลข Lot ที่ระบบสร้างชนกับที่มีอยู่ หรือมีการสร้างรอบปลูกชุดเดียวกันพร้อมกัน "
+    "— ยังไม่ได้บันทึกข้อมูลใด ๆ กรุณากดบันทึกอีกครั้ง"
+)
+
+
+def _is_auto_lot_conflict(exc: BaseException) -> bool:
+    """True iff `exc` is (or wraps) a violation of one of the Auto Lot unique
+    indexes. Same defensive chain walk as public_records'
+    _is_client_submission_unique_violation — the asyncpg error carrying
+    ``constraint_name`` sits at ``.orig.__cause__`` of SQLAlchemy's
+    IntegrityError — and it matches exact index names only, so a different
+    constraint keeps the endpoint's own message."""
+    seen: set[int] = set()
+    stack: list[object] = [exc]
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if getattr(current, "constraint_name", None) in _AUTO_LOT_UNIQUE_INDEXES:
+            return True
+        stack.append(getattr(current, "__cause__", None))
+        stack.append(getattr(current, "__context__", None))
+        orig = getattr(current, "orig", None)
+        if isinstance(orig, BaseException) and orig is not current:
+            stack.append(orig)
+    return False
+
 _FULL_ACCESS_ROLES = {"internal:super_admin", "internal:admin", "farmlog:supervisor"}
 
 
@@ -1694,6 +1733,8 @@ async def create_plot_with_cycle(
         # 500, never a truncated lot). Round 8-5A; V2 formula since 8-12A.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IntegrityError as exc:
+        if _is_auto_lot_conflict(exc):
+            raise HTTPException(status_code=409, detail=_MSG_AUTO_LOT_TAKEN) from exc
         raise HTTPException(
             status_code=409, detail="Conflict creating the plot or its first planting cycle"
         ) from exc
@@ -2173,9 +2214,11 @@ async def start_plot_cycle(
         # Auto Lot would exceed lot_no's 100-char limit — clean 422 (round 8-5A).
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IntegrityError as exc:
-        # Lost the race to a concurrent start, OR an Auto Lot running-number
-        # collision (uq_plot_cycles_auto_lot_running) — either way a clean 409,
-        # never a 500. Round 8-5A.
+        # Lost the race to a concurrent start, OR the generated Auto Lot is
+        # taken — a clean 409 either way, never a 500 (round 8-5A). Round U
+        # tells the two apart: the lot case used to claim an active cycle.
+        if _is_auto_lot_conflict(exc):
+            raise HTTPException(status_code=409, detail=_MSG_AUTO_LOT_TAKEN) from exc
         raise HTTPException(
             status_code=409, detail="Plot already has an active planting cycle"
         ) from exc
@@ -2618,8 +2661,11 @@ async def rollover_plot_cycle(
         # 422 (round 8-5A). The close rolls back with it (single transaction).
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IntegrityError as exc:
-        # Lost the race to a concurrent start, OR an Auto Lot running-number
-        # collision — either way a clean 409, never a 500.
+        # Lost the race to a concurrent start, OR the generated Auto Lot is
+        # taken — a clean 409 either way, never a 500. Round U tells the two
+        # apart: the lot case used to claim an active cycle.
+        if _is_auto_lot_conflict(exc):
+            raise HTTPException(status_code=409, detail=_MSG_AUTO_LOT_TAKEN) from exc
         raise HTTPException(
             status_code=409, detail="Plot already has an active planting cycle"
         ) from exc
@@ -2855,6 +2901,8 @@ async def reactivate_plot_with_cycle(
         # back, so the plot never ends up stranded active-with-no-cycle.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except IntegrityError as exc:
+        if _is_auto_lot_conflict(exc):
+            raise HTTPException(status_code=409, detail=_MSG_AUTO_LOT_TAKEN) from exc
         raise HTTPException(
             status_code=409,
             detail="Conflict reactivating the plot or starting its new planting cycle",

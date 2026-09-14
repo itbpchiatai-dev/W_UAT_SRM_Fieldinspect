@@ -10,11 +10,20 @@ Auto Lot format V2 (round 8-12A):
        26-may-SUP010-WM-141-004
        MAY26-SUP010-ABC-1000
 
-Every component is used IN FULL after trimming — cycleLabel is never parsed as
-a date, supplierCode is never abbreviated, and pCode is never clipped to three
+Every component is used IN FULL — cycleLabel is never parsed as a date,
+supplierCode is never abbreviated, and pCode is never clipped to three
 characters. The running number is zero-padded to a MINIMUM width of 3 (1 ->
 "001", 9 -> "009", 99 -> "099") and grows naturally beyond that (1000 ->
 "1000") — str.zfill(3) never truncates and never wraps back to "001".
+
+Round U — a lot never contains whitespace. Every component has ALL of it
+removed, inside as well as at the ends, together with the zero-width
+characters that ride along when Thai text is pasted:
+
+    cycleLabel "Aug 2026"  ->  Aug2026-SUP010-WM-141-001
+
+Only the LOT is compacted. The stored cycle_label keeps what the user typed
+("Aug 2026") — it is a display name; the lot is an identifier.
 
 The PO number is NOT part of V2 (it was the leading component of V1). It
 remains a first-class PlotCycle field; it simply no longer builds the lot.
@@ -25,6 +34,8 @@ exactly as generated, and they are identified by auto_lot_series_key IS NULL
 (see migration 0048 and plot_cycle_repository).
 """
 from __future__ import annotations
+
+import re
 
 # lot_no is VARCHAR(100) (app/db/models/plot_cycle.py); a generated Auto Lot
 # must fit that column.
@@ -45,6 +56,19 @@ MAX_AUTO_LOT_SERIES_KEY_LENGTH = 255
 # a new key silently coexist with an old one for the same logical series and
 # restart its running sequence.
 _SERIES_KEY_SCHEME = "v2"
+
+# What a lot component loses (round U): every Unicode whitespace character —
+# `\s` covers the space, tab, line breaks and the no-break space an Excel paste
+# brings — plus the zero-width characters, which are not whitespace to Unicode
+# but are just as invisible, and arrive with text copied from Thai documents.
+# The frontend's autoLotPreview removes the same set, so a preview can never
+# show a lot the server will not produce.
+_NOT_IN_A_LOT = re.compile(r"[\s\u200b-\u200d\u2060\ufeff]")
+
+
+def _compact(component: str | None) -> str:
+    """A lot component with everything invisible removed (round U)."""
+    return _NOT_IN_A_LOT.sub("", component or "")
 
 
 class LotNumberTooLongError(ValueError):
@@ -155,10 +179,21 @@ def build_auto_lot_series_key(
     distinguishable rather than silently colliding with old stored keys.
     Deterministic and stdlib-only — never Python's hash(), whose value is not
     stable across processes (PYTHONHASHSEED) and would break the DB index.
+
+    Round U — the key is built from the SAME compacted components as the lot
+    text. Compacting only the text would put "Aug 2026" and "Aug2026" in two
+    series that render one lot: both would mint 001, and the second cycle
+    would be refused by uq_plot_cycles_auto_lot_v2_lot_no. Keyed alike, they
+    share one sequence (001, 002).
+
+    This needed no scheme bump. A component with no whitespace keys exactly as
+    before, so every existing series continues its count. One that had
+    whitespace now keys differently, but its old lots CONTAIN that whitespace
+    and new ones cannot, so a restarted count can never reproduce an old lot.
     """
     parts = "|".join(
         f"{len(component)}:{component}"
-        for component in (supplier_code, cycle_label, p_code)
+        for component in map(_compact, (supplier_code, cycle_label, p_code))
     )
     return f"{_SERIES_KEY_SCHEME}|{parts}"
 
@@ -181,19 +216,21 @@ def format_auto_lot_no(
 
     Raises AutoLotMissingComponentError if any component is blank, and
     LotNumberTooLongError (never truncates) if the result exceeds
-    MAX_LOT_NO_LENGTH. Never logs the lot or its components."""
+    MAX_LOT_NO_LENGTH. Never logs the lot or its components.
+
+    Round U — components are compacted BEFORE the blank check, so one made of
+    nothing but zero-width characters counts as missing instead of leaving an
+    empty segment in the lot."""
+    label, supplier, code = map(_compact, (cycle_label, supplier_code, p_code))
     missing = _missing_components(
-        cycle_label=cycle_label, supplier_code=supplier_code, p_code=p_code,
+        cycle_label=label, supplier_code=supplier, p_code=code,
     )
     if missing:
         raise AutoLotMissingComponentError(missing)
     if running < 1:
         raise ValueError("Auto Lot running number must be >= 1")
 
-    lot_no = (
-        f"{cycle_label.strip()}-{supplier_code.strip()}-{p_code.strip()}"
-        f"-{str(running).zfill(_RUNNING_MIN_WIDTH)}"
-    )
+    lot_no = f"{label}-{supplier}-{code}-{str(running).zfill(_RUNNING_MIN_WIDTH)}"
     if len(lot_no) > MAX_LOT_NO_LENGTH:
         raise LotNumberTooLongError(
             f"Generated Auto Lot number is {len(lot_no)} characters, exceeding the "
@@ -226,8 +263,9 @@ def auto_lot_preview(cycle_label: str | None, supplier_code: str | None,
 
     Never raises and never allocates a running number — this is display-only,
     used by the Excel import's read-only preview. Missing components render as
-    their own placeholder so the user can see exactly which part is absent."""
-    label = (cycle_label or "").strip() or "<cycleLabel>"
-    supplier = (supplier_code or "").strip() or "<supplierCode>"
-    code = (p_code or "").strip() or "<pCode>"
+    their own placeholder so the user can see exactly which part is absent.
+    Compacted exactly as format_auto_lot_no compacts (round U)."""
+    label = _compact(cycle_label) or "<cycleLabel>"
+    supplier = _compact(supplier_code) or "<supplierCode>"
+    code = _compact(p_code) or "<pCode>"
     return f"{label}-{supplier}-{code}-###"

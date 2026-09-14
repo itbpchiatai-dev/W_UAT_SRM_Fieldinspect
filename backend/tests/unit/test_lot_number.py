@@ -74,7 +74,8 @@ def test_cycle_label_is_trimmed_only() -> None:
 @pytest.mark.parametrize("label", ["2605", "26-may", "MAY26", "รอบทดลอง", "26 May 2026"])
 def test_cycle_label_accepts_any_shape_verbatim(label: str) -> None:
     """No YYMM regex, no date parsing, no case folding — the label is whatever
-    the field team writes, and it must survive into the lot unchanged."""
+    the field team writes, and it is STORED unchanged. (Since round U the lot
+    built from it drops whitespace: see test_auto_lot_whitespace_round_u.)"""
     assert normalize_cycle_label(label) == label
 
 

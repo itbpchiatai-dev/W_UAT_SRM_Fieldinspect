@@ -321,16 +321,31 @@ export function toEditPayload(values: CycleEditFormValues): PlotCycleUpdatePaylo
  * neither.
  *
  * A component that hasn't been filled in yet renders as a readable Thai
- * placeholder rather than a fabricated value. Display-only; never sent. */
+ * placeholder rather than a fabricated value. Display-only; never sent.
+ *
+ * Round U — a lot never contains whitespace: the server removes all of it,
+ * inside as well as at the ends ("Aug 2026" → "Aug2026-…"), plus zero-width
+ * characters. The preview removes the same set so it never shows a lot the
+ * server will not produce. The cycle label itself is still stored as typed. */
 export function autoLotPreview(
   cycleLabel: string | undefined,
   supplierCode: string | undefined,
   pCode: string | undefined,
 ): string {
-  const label = cycleLabel?.trim() || '<ชื่อรอบปลูก>';
-  const supplier = supplierCode?.trim() || '<รหัส Supplier>';
-  const code = pCode?.trim() || '<P.Code>';
+  const label = compactLotComponent(cycleLabel) || '<ชื่อรอบปลูก>';
+  const supplier = compactLotComponent(supplierCode) || '<รหัส Supplier>';
+  const code = compactLotComponent(pCode) || '<P.Code>';
   return `${label}-${supplier}-${code}-###`;
+}
+
+// The same characters backend/app/services/lot_number.py strips. JS's \s and
+// Python's differ at the edges (Python's also covers \x1c-\x1f and \x85), so
+// those are listed explicitly to keep the two sets identical.
+// eslint-disable-next-line no-control-regex -- \x1c-\x1f are named to match Python's \s exactly
+const NOT_IN_A_LOT = /[\s\x1c-\x1f\x85\u200b-\u200d\u2060\ufeff]/g;
+
+function compactLotComponent(value: string | undefined): string {
+  return (value ?? '').replace(NOT_IN_A_LOT, '');
 }
 
 /** Human label + tone for a cycle's lotNoSource badge (round 8-5B). */

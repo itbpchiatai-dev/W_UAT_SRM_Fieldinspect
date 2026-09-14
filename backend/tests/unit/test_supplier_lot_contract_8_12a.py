@@ -18,9 +18,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.v1.plots import (
-    _EDITABLE_COLUMNS,
+    _KIND_EDITABLE,
     _PLOT_TEMPLATE_HEADERS,
-    _REFERENCE_COLUMNS,
+    _TEMPLATE_COLUMN_KIND,
     _template_example_rows,
 )
 from app.schemas.plot import PlotCycleCreate, PlotCycleRead, PlotCycleUpdate
@@ -123,10 +123,12 @@ def test_po_and_lot_fields_are_all_still_present() -> None:
 
 def test_supplier_lot_no_column_sits_between_p_code_and_planting_date() -> None:
     cols = IMPORT_COLUMNS
-    # Round A — lotNo is gone from the input contract, so supplierLotNo (the
-    # one lot column left) now follows pCode directly.
+    # Round A — lotNo is gone from the input contract. Round V — the system
+    # lot is back as the READ-ONLY systemLotNo, right before supplierLotNo so
+    # the two lot numbers sit side by side.
     assert "lotNo" not in cols
-    assert cols.index("pCode") + 1 == cols.index("supplierLotNo")
+    assert cols.index("pCode") + 1 == cols.index("systemLotNo")
+    assert cols.index("systemLotNo") + 1 == cols.index("supplierLotNo")
     # Round 8-21A — oracleSupplierCode/oracleInvoice/refAccount sit between
     # supplierLotNo and plantingDate.
     assert cols.index("supplierLotNo") + 1 == cols.index("oracleSupplierCode")
@@ -141,8 +143,8 @@ def test_template_headers_match_the_import_columns() -> None:
 
 
 def test_supplier_lot_no_is_editable_not_reference_only() -> None:
-    assert "supplierLotNo" in _EDITABLE_COLUMNS
-    assert "supplierLotNo" not in _REFERENCE_COLUMNS
+    # Round V — green: editable on any update row.
+    assert _TEMPLATE_COLUMN_KIND["supplierLotNo"] == _KIND_EDITABLE
 
 
 def test_row_two_description_explains_it_is_not_the_system_lot() -> None:
@@ -150,9 +152,10 @@ def test_row_two_description_explains_it_is_not_the_system_lot() -> None:
     assert "Supplier" in desc
     assert "Lot No" in desc            # says it is unrelated to the system lot
     assert "ไม่เกี่ยวกับ" in desc
-    # Round A — the supplierLotNo description absorbed the V2 formula, since
-    # lotNo no longer has a description row of its own to carry it.
-    assert "ชื่อรอบปลูก" in desc and "P.Code" in desc
+    # Round V — the V2 formula moved to systemLotNo's own description (round
+    # A had parked it here while the system lot had no column).
+    system = plot_import.TEMPLATE_COLUMN_DESCRIPTIONS["systemLotNo"]
+    assert "ชื่อรอบปลูก" in system and "P.Code" in system
     assert "plotCode" not in desc      # V1 wording is gone
 
 
@@ -189,7 +192,7 @@ def _supplier(code="SUP010"):
 def _row(**over):
     base = {
         "action": "create_plot_with_cycle", "supplierCode": "SUP010",
-        "plotCode": "P101", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         "cycleLabel": "2605", "poNumber": "PO25001", "pCode": "WM-141",
         "plantingDate": "2026-06-01",
     }

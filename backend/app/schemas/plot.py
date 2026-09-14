@@ -11,6 +11,7 @@ from pydantic import ConfigDict, Field, SecretStr, SkipValidation, field_validat
 from app.core.phone import normalize_thai_mobile
 from app.schemas.base import CamelBaseModel
 from app.services.cycle_reference_fields import normalize_cycle_reference_text
+from app.services.plot_code import PLOT_CODE_IS_GENERATED_MESSAGE
 from app.services.lot_number import (
     normalize_p_code,
     normalize_po_number,
@@ -318,12 +319,12 @@ class PlotCreate(CamelBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     supplier_id: UUID
-    # Round B — OPTIONAL. Omitted, null, or blank/whitespace all mean "let the
-    # server generate one" ({supplierCode}-{YYMM}-{running}, e.g.
-    # "JPS-2605-001"); a nonblank value is still honoured verbatim (trimmed +
-    # upper-cased) and recorded as plot_code_source='manual'. The
-    # plot_code_source/series-key/running-number bookkeeping is SERVER-derived
-    # and intentionally not accepted here.
+    # Round V — the plot code is ALWAYS generated ({supplierCode}-{YYMM}-
+    # {running}, e.g. "JPS-2605-001"), the same rule the Auto Lot follows.
+    # Round B still honoured a typed one as 'manual'; that path is closed.
+    # The field stays only so a supplied code gets a Thai 422 that says why,
+    # while an omitted/null/blank one — which is what an older browser build
+    # still sends to mean "generate it" — keeps working.
     plot_code: str | None = Field(None, max_length=50)
     name: str = Field(..., min_length=1, max_length=255)
     village: str | None = Field(None, max_length=255)
@@ -332,6 +333,13 @@ class PlotCreate(CamelBaseModel):
     latitude: Decimal | None = Field(None, ge=-90, le=90)
     longitude: Decimal | None = Field(None, ge=-180, le=180)
     rai: Decimal | None = Field(None, ge=0)
+
+    @field_validator("plot_code")
+    @classmethod
+    def _plot_code_is_generated(cls, v: str | None) -> None:
+        if v is not None and v.strip():
+            raise ValueError(PLOT_CODE_IS_GENERATED_MESSAGE)
+        return None
 
 
 class PlotUpdate(CamelBaseModel):
@@ -760,7 +768,14 @@ class PlotCycleUpdate(CamelBaseModel):
     """PATCH /plots/{plotId}/cycles/{cycleId} — edit the ACTIVE cycle's plan
     (round 7.2B). Only the planting/plan fields are editable; status,
     cycle_no, started_at and the closed_* trio are deliberately absent so they
-    can never be changed here (status transitions go through /close)."""
+    can never be changed here (status transitions go through /close).
+
+    Round V — crop / variety / cycle_label / p_code are still ACCEPTED but can
+    no longer change anything: they are set when the cycle is created and the
+    Auto Lot is built from them. Re-sending the stored value passes; a
+    different one is a 422 from the endpoint (changed_one_time_fields). They
+    stay in the schema so that refusal can say why, instead of a generic
+    "extra field" error or a silent drop."""
 
     crop: str | None = Field(None, max_length=100)
     variety: str | None = Field(None, max_length=100)

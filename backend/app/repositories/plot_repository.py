@@ -30,6 +30,8 @@ from app.services.plot_qr_key import generate_qr_key
 # How a generated plot_code is labelled in plots.plot_code_source (round B,
 # migration 0053). 'legacy' is reserved for pre-round-B rows and is
 # deliberately never written by any code path — those rows keep NULL.
+# Round V — 'manual' is no longer written either (codes are generated only);
+# the constant names what rows created between rounds B and V still carry.
 PLOT_CODE_SOURCE_AUTO = "auto"
 PLOT_CODE_SOURCE_MANUAL = "manual"
 
@@ -614,28 +616,23 @@ async def _resolve_plot_code(
     db: AsyncSession,
     *,
     supplier_id: UUID,
-    plot_code: str | None,
     month_source: datetime.date | None,
 ) -> tuple[str, str | None, str | None, int | None]:
     """The single plot-code decision (round B). Returns
-    (plot_code, plot_code_source, plot_code_series_key, plot_code_running_no):
+    (plot_code, plot_code_source, plot_code_series_key, plot_code_running_no)
+    for an AUTO code: {supplierCode}-{YYMM}-{running}, where the month comes
+    from `month_source` (the first cycle's planting date when there is one)
+    and falls back to today in Asia/Bangkok.
 
-      - a nonblank `plot_code` → MANUAL: stored verbatim (trimmed, upper-cased
-        exactly as before this round), joining no series. Kept so an admin can
-        still mirror a code that exists on paper or in another system; the
-        uq_plots_supplier_code index is what stops it duplicating.
-      - blank/None `plot_code` → AUTO: {supplierCode}-{YYMM}-{running}, where
-        the month comes from `month_source` (the first cycle's planting date
-        when there is one) and falls back to today in Asia/Bangkok.
+    Round V — generating is now the ONLY outcome. Round B's MANUAL branch (a
+    typed code stored verbatim) is gone together with the `plot_code`
+    parameter that selected it, the same way round A removed the manual Auto
+    Lot. Rows already stored as 'manual' are untouched and read normally.
 
     Raises PlotCodeSupplierCodeUnusableError / PlotCodeTooLongError from
     services/plot_code.py rather than inventing a fallback code: a code that
     could not be rendered correctly is a data problem the caller must surface,
     never something to paper over with a truncated or sanitised string."""
-    trimmed = plot_code.strip() if isinstance(plot_code, str) else None
-    if trimmed:
-        return trimmed.upper(), PLOT_CODE_SOURCE_MANUAL, None, None
-
     supplier_code = normalize_supplier_code_for_plot_code(
         await _supplier_code_for_id(db, supplier_id)
     )
@@ -662,17 +659,16 @@ async def create_plot(
     syncs them) — see POST /plots/with-cycle for the atomic plot+first-cycle
     create flow.
 
-    Round B — `payload.plot_code` is optional. Blank/omitted means "generate
-    one" ({supplierCode}-{YYMM}-{running}); a value is still honoured verbatim
-    and recorded as 'manual'. `month_source` lets the plot+first-cycle flow
-    stamp the code with the CYCLE's planting month rather than the day the row
-    happened to be created — a plot created in April for a May planting should
-    read 2605, because that is the season everyone will file it under. Omitted
-    (plain POST /plots, no cycle) it falls back to today in Asia/Bangkok."""
+    Round B / V — the code is always generated ({supplierCode}-{YYMM}-
+    {running}); PlotCreate refuses a supplied one. `month_source` lets the
+    plot+first-cycle flow stamp the code with the CYCLE's planting month rather
+    than the day the row happened to be created — a plot created in April for
+    a May planting should read 2605, because that is the season everyone will
+    file it under. Omitted (plain POST /plots, no cycle) it falls back to today
+    in Asia/Bangkok."""
     resolved_code, code_source, series_key, running = await _resolve_plot_code(
         db,
         supplier_id=payload.supplier_id,
-        plot_code=payload.plot_code,
         month_source=month_source,
     )
     plot = Plot(

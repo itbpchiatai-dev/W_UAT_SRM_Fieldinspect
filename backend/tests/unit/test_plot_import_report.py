@@ -64,9 +64,10 @@ def test_every_xml_part_is_well_formed_and_two_named_sheets() -> None:
 def test_row1_has_41_headers_in_order() -> None:
     headers, _ = read_first_sheet(_build([_view(3, "valid", raw={"action": "x"})]))
     assert headers == R.ALL_COLUMNS
-    # Round 8-21A — 33 import columns (oracleSupplierCode/oracleInvoice/
-    # refAccount added after supplierLotNo) + 11 result columns = 44.
-    assert len(headers) == 43
+    # Round 8-21A — oracleSupplierCode/oracleInvoice/refAccount added after
+    # supplierLotNo; round V — read-only supplierName and systemLotNo.
+    # 34 import columns + 11 result columns = 45.
+    assert len(headers) == 45
     assert headers[:len(IMPORT_COLUMNS)] == IMPORT_COLUMNS
     assert headers[len(IMPORT_COLUMNS):] == R.RESULT_COLUMNS
 

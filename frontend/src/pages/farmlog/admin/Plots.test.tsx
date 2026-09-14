@@ -794,7 +794,11 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
-    fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p101' } });
+    // Round V — the plot code is generated, so the form shows a preview and
+    // offers no box to type one into.
+    expect(container.querySelector('input[name="plotCode"]')).toBeNull();
+    expect(screen.getByLabelText('รหัสแปลง').textContent).toContain('###');
+
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง A' } });
     fireEvent.change(container.querySelector('input[name="poNumber"]')!, { target: { value: 'PO25001' } });
     await pickCropAndVariety();
@@ -805,8 +809,11 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     await waitFor(() => expect(createPlotWithCycleMock).toHaveBeenCalledOnce());
     const [payload] = createPlotWithCycleMock.mock.calls[0];
     expect(payload.plot).toEqual(expect.objectContaining({
-      supplierId: 'sup-1', plotCode: 'p101', name: 'แปลง A',
+      supplierId: 'sup-1', name: 'แปลง A',
     }));
+    // Round V — the code is always generated server-side; the form has no
+    // input for it, so the request never names one.
+    expect(payload.plot).not.toHaveProperty('plotCode');
     expect(payload.plot).not.toHaveProperty('cycleLabel');
     expect(payload.cycle).toEqual(expect.objectContaining({ cycleLabel: 'jun2026' }));
   });
@@ -822,7 +829,6 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
-    fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p102' } });
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง B' } });
     // PO Number deliberately left blank.
     await pickCropAndVariety();
@@ -847,7 +853,6 @@ describe('Plots create modal — atomic plot+cycle create (round 8.0.4)', () => 
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
-    fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p101' } });
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง A' } });
     fireEvent.change(container.querySelector('input[name="poNumber"]')!, { target: { value: 'PO25001' } });
     await pickCropAndVariety();
@@ -2027,7 +2032,6 @@ describe('Plots list — "จัดการเบอร์เข้าตรว
 
 describe('Plots create modal — access phones (round 8-3C)', () => {
   async function fillRequiredFields(container: HTMLElement) {
-    fireEvent.change(container.querySelector('input[name="plotCode"]')!, { target: { value: 'p101' } });
     fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลง A' } });
     // Round 8-5B — the first cycle's PO/pCode are required.
     fireEvent.change(container.querySelector('input[name="poNumber"]')!, { target: { value: 'PO25001' } });

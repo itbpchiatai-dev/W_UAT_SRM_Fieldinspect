@@ -23,9 +23,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from app.api.v1.plots import (
-    _EDITABLE_COLUMNS,
     _PLOT_TEMPLATE_HEADERS,
-    _REFERENCE_COLUMNS,
+    _TEMPLATE_COLUMN_KIND,
     _contextual_plot_template_workbook,
     _update_cycle_row_values,
     _new_cycle_sheet,
@@ -81,8 +80,7 @@ def test_the_import_contract_no_longer_has_either_column():
         assert column not in plot_import.IMPORT_COLUMNS
         assert column not in plot_import.TEMPLATE_COLUMN_DESCRIPTIONS
         assert column not in _PLOT_TEMPLATE_HEADERS
-        assert column not in _EDITABLE_COLUMNS
-        assert column not in _REFERENCE_COLUMNS
+        assert column not in _TEMPLATE_COLUMN_KIND
 
 
 def test_the_remaining_columns_kept_their_order():

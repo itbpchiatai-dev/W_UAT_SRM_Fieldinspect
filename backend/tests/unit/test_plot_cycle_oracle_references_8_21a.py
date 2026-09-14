@@ -28,7 +28,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.v1.plots import (
-    _EDITABLE_COLUMNS,
+    _KIND_EDITABLE,
+    _TEMPLATE_COLUMN_KIND,
     _update_cycle_row_values,
     _reactivate_row_values,
     _template_example_rows,
@@ -527,7 +528,7 @@ def test_payload_schema_echoes_all_three_fields() -> None:
 
 def test_editable_columns_include_the_three_new_columns() -> None:
     for col in ("oracleSupplierCode", "oracleInvoice", "refAccount"):
-        assert col in _EDITABLE_COLUMNS
+        assert _TEMPLATE_COLUMN_KIND[col] == _KIND_EDITABLE
 
 
 def test_example_rows_demonstrate_the_three_columns() -> None:
@@ -667,7 +668,7 @@ def _cycle(**kw) -> SimpleNamespace:
 def _create_row(**over) -> dict[str, str]:
     base = {
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         "poNumber": "PO25001", "pCode": "Melon-A", "cycleLabel": "jun2026",
         "crop": "พริก", "variety": "พริกขี้หนู", "lotNo": "LOT-01",
         "plantingDate": "2026-06-01", "plantCount": "1000",
@@ -736,7 +737,8 @@ async def test_commit_update_column_absent_omits_fields_preserves() -> None:
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
         await commit_import(
             object(),
-            _xlsx([_create_row(action="update_current_cycle", plotCode="P002")], columns=old_columns),
+            _xlsx([_create_row(action="update_current_cycle", plotCode="P002",
+                         crop="", variety="", cycleLabel="", pCode="", plotName="", province="")], columns=old_columns),
             ctx=_ctx(),
         )
 
@@ -761,6 +763,7 @@ async def test_commit_update_column_present_blank_clears() -> None:
         await commit_import(
             object(),
             _xlsx([_create_row(action="update_current_cycle", plotCode="P002",
+                         crop="", variety="", cycleLabel="", pCode="", plotName="", province="",
                                 oracleSupplierCode=None, oracleInvoice=None, refAccount=None)]),
             ctx=_ctx(),
         )
@@ -784,6 +787,7 @@ async def test_commit_update_column_present_with_text_sets() -> None:
         await commit_import(
             object(),
             _xlsx([_create_row(action="update_current_cycle", plotCode="P002",
+                         crop="", variety="", cycleLabel="", pCode="", plotName="", province="",
                                 oracleSupplierCode="NEW-ORC", oracleInvoice="NEW-INV",
                                 refAccount="NEW-ACC")]),
             ctx=_ctx(),

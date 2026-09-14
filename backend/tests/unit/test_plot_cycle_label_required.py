@@ -159,7 +159,9 @@ async def test_update_cycle_rejects_clearing_an_existing_label_via_blank() -> No
         with pytest.raises(HTTPException) as exc:
             await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
     assert exc.value.status_code == 422
-    assert "กรุณาระบุชื่อรอบปลูก" in exc.value.detail
+    # Round V — still refused, now as "the label is fixed once the cycle
+    # exists" (a blank is as much a change as any other value).
+    assert "ชื่อรอบปลูก" in exc.value.detail and "ครั้งเดียว" in exc.value.detail
     mk_update.assert_not_awaited()
 
 
@@ -195,16 +197,27 @@ async def test_update_cycle_legacy_null_label_left_untouched_is_a_no_op_not_a_cl
     mk_update.assert_awaited_once()
 
 
-async def test_update_cycle_changing_to_a_new_nonblank_label_is_allowed() -> None:
+async def test_update_cycle_changing_the_label_is_refused() -> None:
+    """Round V — was "changing to a new nonblank label is allowed". The Auto
+    Lot is built from the label, so it is fixed once the cycle exists; re-
+    sending the SAME label (what an older form does) still passes."""
     plot = _plot()
     cycle = _cycle(plot_id=plot.id, cycle_label="jun2026")
-    payload = PlotCycleUpdate(cycleLabel="jul2026")
     with patch(f"{_P}.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.update_cycle", AsyncMock()) as mk_update, \
          patch(f"{_P}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
-        await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
+        with pytest.raises(HTTPException) as exc:
+            await update_plot_cycle(
+                plot_id=plot.id, cycle_id=cycle.id,
+                payload=PlotCycleUpdate(cycleLabel="jul2026"), db=_db(),
+            )
+        assert exc.value.status_code == 422
+        mk_update.assert_not_awaited()
+
+        await update_plot_cycle(
+            plot_id=plot.id, cycle_id=cycle.id,
+            payload=PlotCycleUpdate(cycleLabel="  jun2026 "), db=_db(),
+        )
     mk_update.assert_awaited_once()
-    # update_cycle(db, cycle, fields) — round A dropped the `plot` argument.
-    assert mk_update.call_args.args[2]["cycle_label"] == "jul2026"

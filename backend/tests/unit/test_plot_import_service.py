@@ -71,8 +71,10 @@ def _cycle(**kw) -> SimpleNamespace:
 
 def _create_row(**over) -> dict[str, str]:
     base = {
+        # Round V — a create row's plotCode is always blank: the code is
+        # generated ({supplierCode}-{YYMM}-{running}) and a typed one refused.
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         "poNumber": "PO25001", "pCode": "Melon-A",
         # Round 8-17A.1 — cycleLabel is now required on every new-cycle
         # action (independent of Auto/Manual lot); see
@@ -84,6 +86,19 @@ def _create_row(**over) -> dict[str, str]:
         "plantingDate": "2026-06-01", "plantCount": "1000",
         "expectedYieldFull": "800", "expectedYieldUnit": "kg",
     }
+    base.update(over)
+    return base
+
+
+def _update_row(**over) -> dict[str, str]:
+    """An update_current_cycle row (round V). The one-time columns (crop /
+    variety / cycleLabel / pCode) are left BLANK — blank keeps the stored
+    values; anything else would have to equal them — and so are the plot's own
+    details, which an update now writes (test_plot_import_round_v covers it)."""
+    base = _create_row(
+        action="update_current_cycle", plotCode="P002",
+        crop="", variety="", cycleLabel="", pCode="", plotName="", province="",
+    )
     base.update(over)
     return base
 
@@ -145,7 +160,7 @@ async def test_missing_plot_code_still_errors_on_every_other_action() -> None:
     """Round B — plotCode is how a non-create row ADDRESSES an existing plot,
     so it stays required there; only create_plot_with_cycle may leave it
     blank."""
-    pv = await _preview([_create_row(action="update_current_cycle", plotCode=None)])
+    pv = await _preview([_update_row(plotCode=None)])
     assert pv.rows[0].status == "error"
     assert "plotCode" in pv.rows[0].message
 
@@ -165,13 +180,20 @@ async def test_create_valid_when_plot_absent() -> None:
     pv = await _preview([_create_row()], plot=None)
     assert pv.valid_rows == 1
     assert pv.rows[0].status == "valid"
-    assert pv.rows[0].payload.plot_code == "P101"
+    assert pv.rows[0].payload.plot_code is None      # round V: generated at commit
 
 
-async def test_create_errors_when_plot_exists() -> None:
-    pv = await _preview([_create_row()], plot=_plot())
+async def test_create_refuses_a_typed_plot_code() -> None:
+    """Round V — was "create errors when the plot exists". A create row cannot
+    name a code any more, so there is nothing to collide with: the typed code
+    is what gets refused, and no plot is looked up by it."""
+    lookup = AsyncMock(return_value=_plot())
+    with patch(f"{_M}.supplier_repo.get_supplier_by_code", AsyncMock(return_value=_supplier())), \
+         patch(f"{_M}.plot_repo.get_plot_by_code", lookup):
+        pv = await build_preview(object(), _xlsx([_create_row(plotCode="P101")]), ctx=_ctx())
     assert pv.rows[0].status == "error"
-    assert "มีอยู่แล้ว" in pv.rows[0].message
+    assert "ระบบสร้างให้อัตโนมัติ" in pv.rows[0].message
+    lookup.assert_not_awaited()
 
 
 async def test_create_requires_plot_name() -> None:
@@ -182,14 +204,14 @@ async def test_create_requires_plot_name() -> None:
 
 async def test_update_current_cycle_needs_active_cycle() -> None:
     ok = await _preview(
-        [_create_row(action="update_current_cycle", plotCode="P002")],
+        [_update_row(plotCode="P002")],
         plot=_plot(), active=_cycle(),
     )
     assert ok.rows[0].status == "valid"
     assert ok.rows[0].active_cycle_id is not None
 
     bad = await _preview(
-        [_create_row(action="update_current_cycle", plotCode="P002")],
+        [_update_row(plotCode="P002")],
         plot=_plot(), active=None,
     )
     assert bad.rows[0].status == "error"
@@ -236,7 +258,7 @@ async def test_create_action_requires_plots_create_permission() -> None:
 
 async def test_duplicate_plot_rows_both_error() -> None:
     pv = await _preview(
-        [_create_row(plotCode="P101"), _create_row(plotCode="P101")],
+        [_update_row(plotCode="P002"), _update_row(plotCode="P002")],
         plot=None,
     )
     assert pv.error_rows == 2
@@ -257,7 +279,7 @@ async def test_commit_update_current_cycle_updates_and_syncs_not_clears() -> Non
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()) as m_sync, \
          patch(f"{_M}.plot_cycle_repo.clear_plot_inspection_snapshot", AsyncMock()) as m_clear:
         result = await commit_import(
-            object(), _xlsx([_create_row(action="update_current_cycle", plotCode="P002")]), ctx=_ctx(),
+            object(), _xlsx([_update_row(plotCode="P002")]), ctx=_ctx(),
         )
 
     m_update.assert_awaited_once()
@@ -267,7 +289,7 @@ async def test_commit_update_current_cycle_updates_and_syncs_not_clears() -> Non
 
 
 async def test_commit_all_or_nothing_when_any_row_invalid() -> None:
-    rows = [_create_row(plotCode="P101"), _create_row(action="frobnicate", plotCode="P102")]
+    rows = [_create_row(), _create_row(action="frobnicate", plotCode="P102")]
     p_sup, p_plot, p_active = _patch_lookups(plot=None)
     with p_sup, p_plot, p_active, \
          patch(f"{_M}.plot_repo.create_plot", AsyncMock()) as m_create_plot, \
@@ -329,8 +351,8 @@ async def test_commit_locks_existing_plots_in_sorted_id_order() -> None:
         await commit_import(
             object(),
             _xlsx([
-                _create_row(action="update_current_cycle", plotCode="P002"),
-                _create_row(action="update_current_cycle", plotCode="P001"),
+                _update_row(plotCode="P002"),
+                _update_row(plotCode="P001"),
             ]),
             ctx=_ctx(),
         )
@@ -351,7 +373,7 @@ async def test_commit_raises_when_existing_plot_deactivated_before_lock() -> Non
         with pytest.raises(ImportFileError, match="ปิดใช้งานหรือหายไป"):
             await commit_import(
                 object(),
-                _xlsx([_create_row(action="update_current_cycle", plotCode="P002")]),
+                _xlsx([_update_row(plotCode="P002")]),
                 ctx=_ctx(),
             )
     m_update.assert_not_awaited()
@@ -437,7 +459,7 @@ async def test_expected_yield_unit_over_20_chars_errors() -> None:
 
 
 async def test_plot_code_over_50_chars_errors() -> None:
-    pv = await _preview([_create_row(plotCode="P" * 51)], plot=None)
+    pv = await _preview([_update_row(plotCode="P" * 51)], plot=None)
     assert pv.rows[0].status == "error"
     assert "plotCode" in pv.rows[0].message
 
@@ -468,7 +490,7 @@ async def test_description_row_not_counted_as_preview_data() -> None:
     with p_sup, p_plot, p_active:
         pv = await build_preview(object(), _xlsx_with_desc([_create_row()]), ctx=_ctx())
     assert pv.total_rows == 1
-    assert pv.rows[0].payload.plot_code == "P101"
+    assert pv.rows[0].payload.plot_code is None      # round V: generated at commit
     assert pv.rows[0].status == "valid"
 
 
@@ -485,7 +507,7 @@ async def test_description_row_excluded_from_duplicate_detection() -> None:
     with p_sup, p_plot, p_active:
         pv = await build_preview(
             object(),
-            _xlsx_with_desc([_create_row(plotCode="P101"), _create_row(plotCode="P101")]),
+            _xlsx_with_desc([_update_row(plotCode="P002"), _update_row(plotCode="P002")]),
             ctx=_ctx(),
         )
     assert pv.total_rows == 2
@@ -504,14 +526,14 @@ async def test_description_row_with_pre_827_marker_text_is_still_skipped() -> No
     ]
     content = build_xlsx([("plots", [
         list(IMPORT_COLUMNS), old_row2,
-        [_create_row(plotCode="P101").get(c) for c in IMPORT_COLUMNS],
+        [_create_row().get(c) for c in IMPORT_COLUMNS],
     ])])
     p_sup, p_plot, p_active = _patch_lookups(plot=None)
     with p_sup, p_plot, p_active:
         pv = await build_preview(object(), content, ctx=_ctx())
     assert pv.total_rows == 1
     assert pv.rows[0].status == "valid"
-    assert pv.rows[0].payload.plot_code == "P101"
+    assert pv.rows[0].payload.plot_code is None      # round V: generated at commit
 
 
 async def test_legacy_template_data_at_row_two_still_imports() -> None:
@@ -520,7 +542,7 @@ async def test_legacy_template_data_at_row_two_still_imports() -> None:
     pv = await _preview([_create_row()], plot=None)  # _xlsx puts data at row 2
     assert pv.total_rows == 1
     assert pv.rows[0].status == "valid"
-    assert pv.rows[0].payload.plot_code == "P101"
+    assert pv.rows[0].payload.plot_code is None      # round V: generated at commit
 
 
 async def test_marker_below_row_two_is_invalid_action_not_skipped() -> None:
@@ -530,7 +552,7 @@ async def test_marker_below_row_two_is_invalid_action_not_skipped() -> None:
     p_sup, p_plot, p_active = _patch_lookups(plot=None)
     with p_sup, p_plot, p_active:
         pv = await build_preview(
-            object(), _xlsx([_create_row(plotCode="P101"), marker_row]), ctx=_ctx(),
+            object(), _xlsx([_create_row(), marker_row]), ctx=_ctx(),
         )
     assert pv.total_rows == 2  # nothing skipped
     errors = [r for r in pv.rows if r.status == "error"]
@@ -549,7 +571,7 @@ async def test_max_import_rows_counts_data_rows_only(monkeypatch) -> None:
         with pytest.raises(ImportFileError, match="เกินจำนวนแถวสูงสุด"):
             await build_preview(
                 object(),
-                _xlsx_with_desc([_create_row(plotCode="P101"), _create_row(plotCode="P102")]),
+                _xlsx_with_desc([_create_row(), _create_row(plotName="แปลงใหม่ 2")]),
                 ctx=_ctx(),
             )
 
@@ -616,7 +638,7 @@ async def test_rollover_blank_string_equals_none_still_matches() -> None:
 async def test_update_current_cycle_with_matching_plan_stays_valid() -> None:
     # The duplicate guard is rollover-only — an idempotent update must NOT be blocked.
     pv = await _preview([_rollover_plan_row(action="update_current_cycle")],
-                        plot=_plot(), active=_matching_active_cycle())
+                        plot=_plot(), active=_matching_active_cycle(p_code="Chili-D"))
     assert pv.rows[0].status == "valid"
 
 
@@ -637,7 +659,7 @@ async def test_mixed_batch_with_duplicate_rollover_fails_all_or_nothing() -> Non
         with pytest.raises(ImportHasErrors) as exc:
             await commit_import(
                 object(),
-                _xlsx([_create_row(plotCode="P900"), _rollover_plan_row()]),
+                _xlsx([_create_row(), _rollover_plan_row()]),
                 ctx=_ctx(),
             )
     m_create_plot.assert_not_awaited()
@@ -674,7 +696,7 @@ async def test_commit_update_sets_result_cycle_no() -> None:
          patch(f"{_M}.plot_cycle_repo.update_cycle", AsyncMock()), \
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
         result = await commit_import(
-            object(), _xlsx([_create_row(action="update_current_cycle", plotCode="P002")]), ctx=_ctx())
+            object(), _xlsx([_update_row(plotCode="P002")]), ctx=_ctx())
     assert result.row_results[0].result_cycle_no == 3
 
 
@@ -701,7 +723,7 @@ async def test_result_workbook_reuploaded_is_revalidated_from_input_only() -> No
     raw = {c: None for c in IMPORT_COLUMNS}
     raw.update({
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P900", "plotName": "แปลงใหม่",
+        "plotCode": None, "plotName": "แปลงใหม่",
         # cycleLabel is required alongside pCode whenever lotNo is blank
         # (round 8-12A.1 — a blank lot requests an Auto Lot).
         "cycleLabel": "2605",
@@ -805,7 +827,7 @@ async def test_preview_returns_file_sha256_matching_content() -> None:
 # 17: legacy four actions commit WITHOUT previewState (backward compatible).
 
 async def test_commit_legacy_actions_need_no_preview_state() -> None:
-    rows = [_create_row(plotCode="P900")]
+    rows = [_create_row()]
     p_sup, p_plot, p_active = _patch_lookups(plot=None)
     with p_sup, p_plot, p_active, \
          patch(f"{_M}.plot_repo.create_plot", AsyncMock(return_value=_plot())) as m_create_plot, \
@@ -841,7 +863,7 @@ async def test_legacy_template_row_two_marker_from_827_still_skipped() -> None:
     ]
     content = build_xlsx([("plots", [
         list(IMPORT_COLUMNS), old_row2,
-        [_create_row(plotCode="P101").get(c) for c in IMPORT_COLUMNS],
+        [_create_row().get(c) for c in IMPORT_COLUMNS],
     ])])
     p_sup, p_plot, p_active = _patch_lookups(plot=None)
     with p_sup, p_plot, p_active:
@@ -892,7 +914,7 @@ async def test_create_blank_lot_preview_is_auto_v2_formula() -> None:
     allocated only at commit). The supplier code is the AUTHORITATIVE one
     resolved during validation, not the row's own supplierCode cell."""
     pv = await _preview(
-        [_create_row(lotNo=None, cycleLabel="2605", pCode="WM-141", plotCode="p101")],
+        [_create_row(lotNo=None, cycleLabel="2605", pCode="WM-141")],
         plot=None,
     )
     row = pv.rows[0]
@@ -909,7 +931,7 @@ async def test_update_blank_lot_preserves_existing_lot_preview_and_execute() -> 
     active = _cycle(cycle_no=2, lot_no="OLD-LOT", lot_no_source="manual")
     # preview
     pv = await _preview(
-        [_create_row(action="update_current_cycle", plotCode="P002", lotNo=None,
+        [_update_row(plotCode="P002", lotNo=None,
                      poNumber=None, pCode=None)],
         plot=plot, active=active,
     )
@@ -925,8 +947,7 @@ async def test_update_blank_lot_preserves_existing_lot_preview_and_execute() -> 
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
          patch(f"{_M}.plot_cycle_repo.update_cycle", AsyncMock()) as m_update, \
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
-        await commit_import(object(), _xlsx([_create_row(
-            action="update_current_cycle", plotCode="P002",
+        await commit_import(object(), _xlsx([_update_row(plotCode="P002",
             poNumber=None, pCode=None)]), ctx=_ctx())
     fields = m_update.call_args.args[2]
     assert "lot_no" not in fields         # preserve existing lot
@@ -934,10 +955,10 @@ async def test_update_blank_lot_preserves_existing_lot_preview_and_execute() -> 
     assert "p_code" not in fields
 
 
-async def test_update_sends_new_po_and_p_code_but_never_a_lot() -> None:
-    """Round A — an update still edits PO and P.Code, but the lot columns are
-    off-limits: even changing the very inputs the lot was built from leaves it
-    exactly as created."""
+async def test_update_sends_a_new_po_but_never_p_code_or_a_lot() -> None:
+    """Round A — the lot columns are off-limits to an update. Round V — so is
+    P.Code, which the lot is built from: an update still edits the PO, but
+    P.Code is never sent (and a CHANGED one is refused at preview, below)."""
     plot = _plot()
     active = _cycle(cycle_no=2, lot_no="OLD-LOT", lot_no_source="auto")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
@@ -946,13 +967,16 @@ async def test_update_sends_new_po_and_p_code_but_never_a_lot() -> None:
          patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=active)), \
          patch(f"{_M}.plot_cycle_repo.update_cycle", AsyncMock()) as m_update, \
          patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
-        await commit_import(object(), _xlsx([_create_row(
-            action="update_current_cycle", plotCode="P002",
-            poNumber="po-new", pCode="Melon-Z")]), ctx=_ctx())
+        await commit_import(object(), _xlsx([_update_row(plotCode="P002",
+            poNumber="po-new")]), ctx=_ctx())
     fields = m_update.call_args.args[2]
     assert fields["po_number"] == "PO-NEW"   # normalized upper
-    assert fields["p_code"] == "Melon-Z"
+    assert "p_code" not in fields
     assert "lot_no" not in fields
+
+    changed = await _preview([_update_row(pCode="Melon-Z")], plot=plot, active=active)
+    assert changed.rows[0].status == "error"
+    assert "pCode" in changed.rows[0].message
 
 
 async def test_commit_result_carries_real_lot_source_running() -> None:
@@ -994,7 +1018,7 @@ async def test_legacy_file_without_po_number_column_but_with_pcode_still_valid()
     # reader maps by header name, poNumber is just absent -> None, no error.
     legacy_cols = [c for c in IMPORT_COLUMNS if c != "poNumber"]
     row = {"action": "create_plot_with_cycle", "supplierCode": "SUP001",
-           "plotCode": "P900", "plotName": "แปลงเก่า", "pCode": "Melon-A",
+           "plotName": "แปลงเก่า", "pCode": "Melon-A",
            "cycleLabel": "2605"}
     data = [legacy_cols, [row.get(c) for c in legacy_cols]]
     p_sup, p_plot, p_active = _patch_lookups(plot=None)

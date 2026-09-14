@@ -67,7 +67,7 @@ def _cycle(**kw) -> SimpleNamespace:
 def _create_row(**over) -> dict[str, str]:
     base = {
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         "poNumber": "PO25001", "pCode": "Melon-A",
         "crop": "พริก", "variety": "พริกขี้หนู", "lotNo": "LOT-01",
     }
@@ -203,6 +203,8 @@ async def test_update_unchanged_legacy_pair_passes_even_if_inactive() -> None:
 
 
 async def test_update_changed_to_inactive_value_rejected() -> None:
+    """Round V — still rejected, but as "crop is fixed once the cycle exists":
+    an update cannot change crop at all, so Master Data is never consulted."""
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(crop="เมล่อน", variety="ญี่ปุ่น")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
@@ -212,13 +214,14 @@ async def test_update_changed_to_inactive_value_rejected() -> None:
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
     result = _row(preview)
     assert result.status == "error"
-    assert "ปิดใช้งาน" in result.message
+    assert "crop" in result.message and "ครั้งเดียว" in result.message
 
 
 async def test_update_crop_changed_variety_string_unchanged_revalidates_parent() -> None:
     """'ถ้าเปลี่ยน crop แต่ไม่ส่ง variety และ variety เดิมไม่เข้ากับ crop ใหม่ ต้อง 422' —
     the row repeats the SAME variety string as the active cycle's, but
-    changes crop; the variety's real parent doesn't match the new crop."""
+    changes crop; the variety's real parent doesn't match the new crop.
+    Round V — refused earlier and more simply: crop cannot change at all."""
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(crop="พริก", variety="พริกขี้หนู")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
@@ -231,7 +234,7 @@ async def test_update_crop_changed_variety_string_unchanged_revalidates_parent()
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
     result = _row(preview)
     assert result.status == "error"
-    assert "ไม่ได้อยู่ภายใต้" in result.message
+    assert "crop" in result.message and "ครั้งเดียว" in result.message
 
 
 async def test_update_editing_other_field_passes_with_inactive_legacy_crop() -> None:
@@ -296,7 +299,8 @@ async def test_commit_blocked_when_any_row_has_master_data_error() -> None:
 async def test_master_data_lookup_batches_into_one_query_per_type() -> None:
     """5 rows, several distinct crop/variety values — list_by_type_values
     must be called once per TYPE for the WHOLE file, never once per row
-    (N+1). Three types since round 8-26C added p_code."""
+    (N+1). Three types since round 8-26C added p_code. Round V — create
+    rows: they are the only ones still checked against Master Data."""
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(crop="เมล่อน", variety="ญี่ปุ่น")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
@@ -308,11 +312,11 @@ async def test_master_data_lookup_batches_into_one_query_per_type() -> None:
         ],
     )
     rows = [
-        _update_row(plotCode="P101", crop="พริก", variety="พริกขี้หนู"),
-        _update_row(plotCode="P102", crop="เมล่อน", variety="ญี่ปุ่น"),
-        _update_row(plotCode="P103", crop="ทุเรียน", variety=None),
-        _update_row(plotCode="P104", crop="เมล่อน", variety="ญี่ปุ่น"),
-        _update_row(plotCode="P105", crop="พริก", variety="พริกขี้หนู"),
+        _create_row(plotName="A", crop="พริก", variety="พริกขี้หนู"),
+        _create_row(plotName="B", crop="เมล่อน", variety="ญี่ปุ่น"),
+        _create_row(plotName="C", crop="ทุเรียน", variety=None),
+        _create_row(plotName="D", crop="เมล่อน", variety="ญี่ปุ่น"),
+        _create_row(plotName="E", crop="พริก", variety="พริกขี้หนู"),
     ]
     with p_sup, p_plot, p_active, p_md:
         await build_preview(object(), _xlsx(rows), ctx=_ctx())

@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.plots import create_plot
 from app.schemas.plot import PlotCreate
@@ -36,7 +37,7 @@ def _user(roles: list[str], supplier_id=None, is_supplier_admin: bool = False):
 
 
 def _payload(supplier_id) -> PlotCreate:
-    return PlotCreate(supplier_id=supplier_id, plot_code="P001", name="Test Plot")
+    return PlotCreate(supplier_id=supplier_id, name="Test Plot")
 
 
 async def test_supplier_owner_can_create_for_their_own_supplier() -> None:
@@ -103,19 +104,20 @@ async def test_internal_admin_is_not_blocked_for_any_supplier() -> None:
     mocked_create.assert_awaited_once()
 
 
-async def test_duplicate_plot_code_is_still_409_for_a_supplier_owner() -> None:
-    """The pre-existing duplicate-code check still runs after the scope
-    guard passes — creating your own duplicate is 409, not silently
-    replaced."""
+async def test_a_colliding_plot_code_is_still_409_for_a_supplier_owner() -> None:
+    """After the scope guard passes, a code collision is still a clean 409, not
+    a 500 and not silently replaced. Round V — codes are generated only, so
+    the one way left to collide is losing the running-number race, which the
+    unique index turns into an IntegrityError (this was a pre-insert
+    duplicate lookup for a TYPED code, which no longer exists)."""
     supplier_id = uuid4()
     user = _user(["supplier:owner"], supplier_id=supplier_id)
 
-    with patch("app.api.v1.plots.repo.get_plot_by_code", AsyncMock(return_value=SimpleNamespace())), \
-         patch("app.api.v1.plots.repo.create_plot", AsyncMock()) as mocked_create:
+    with patch("app.api.v1.plots.repo.create_plot",
+               AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("dup")))):
         with pytest.raises(HTTPException) as exc_info:
             await create_plot(
                 payload=_payload(supplier_id), current_user=user, db=AsyncMock(),
             )
 
     assert exc_info.value.status_code == 409
-    mocked_create.assert_not_awaited()

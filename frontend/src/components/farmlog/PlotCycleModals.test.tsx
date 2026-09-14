@@ -125,22 +125,28 @@ describe('toEditPayload (EDIT) — preserve / regenerate semantics', () => {
 
   it('never sends a lot in any form — the stored one is immutable', () => {
     // Round A — not omitted-because-unchanged, but structurally absent: there
-    // is no mode, no input and no key. Changing the very fields the lot was
-    // built from makes no difference.
-    const p = toEditPayload({ ...editBase(), cycleLabel: '26-may', pCode: 'WM-999' });
+    // is no mode, no input and no key.
+    const p = toEditPayload({ ...editBase() });
     expect(Object.prototype.hasOwnProperty.call(p, 'lotNo')).toBe(false);
-    expect(p.cycleLabel).toBe('26-may');
-    expect(p.pCode).toBe('WM-999');
   });
 
-  it('round 8-13B: blank pCode → omitted (preserve); blank poNumber → sent as null (CLEAR, never omitted)', () => {
-    const preserved = toEditPayload({ ...editBase(), poNumber: '', pCode: '' });
-    expect(preserved).toHaveProperty('poNumber');
-    expect(preserved.poNumber).toBeNull();
-    expect(preserved).not.toHaveProperty('pCode');
-    const changed = toEditPayload({ ...editBase(), poNumber: ' po-9 ', pCode: ' Melon-B ' });
+  it('round V: never sends crop / variety / cycleLabel / pCode — the lot is built from them', () => {
+    // Even with values in the form (they are displayed, locked), none of the
+    // four reaches the request: the backend would refuse a change anyway.
+    const p = toEditPayload({
+      ...editBase(), crop: 'พริก', variety: 'พริกขี้หนู', cycleLabel: '26-may', pCode: 'WM-999',
+    } as CycleEditFormValues);
+    for (const key of ['crop', 'variety', 'cycleLabel', 'pCode']) {
+      expect(Object.prototype.hasOwnProperty.call(p, key)).toBe(false);
+    }
+  });
+
+  it('round 8-13B: blank poNumber → sent as null (CLEAR, never omitted)', () => {
+    const cleared = toEditPayload({ ...editBase(), poNumber: '' });
+    expect(cleared).toHaveProperty('poNumber');
+    expect(cleared.poNumber).toBeNull();
+    const changed = toEditPayload({ ...editBase(), poNumber: ' po-9 ' });
     expect(changed.poNumber).toBe('po-9');
-    expect(changed.pCode).toBe('Melon-B');
   });
 
   it('never leaks server-derived lot fields', () => {
@@ -318,24 +324,19 @@ describe('CyclePlanFields — the system lot is generated, never typed (create)'
 // lot is minted there) but NOT on EDIT, where a blank P.Code is back to
 // meaning "preserve the stored one" because nothing is minted. -------------
 
-describe('refineEditCyclePlan — an edit requires cycleLabel, never the lot components', () => {
-  it('edit + blank cycleLabel -> rejected, naming ONLY the label', () => {
+// Round V — an edit validates only what it can change. The label, crop,
+// variety and P.Code are fixed once the cycle exists (the lot is built from
+// them), shown locked and never sent — so round 8-17A.1's "the label must be
+// filled in before any edit" is gone with them.
+describe('refineEditCyclePlan — an edit validates only what it can change', () => {
+  it('edit + blank cycleLabel -> ok: the label is locked, not required', () => {
     const r = cycleEditFormSchema.safeParse({ poNumber: '', pCode: '' });
-    expect(r.success).toBe(false);
-    if (!r.success) {
-      const paths = r.error.issues.map((i) => i.path[0]);
-      expect(paths).toContain('cycleLabel');
-      // Round A — a blank P.Code is a PRESERVE, not an error: an edit mints no
-      // lot, and a legacy cycle may never have had one to begin with.
-      expect(paths).not.toContain('pCode');
-      // the retired PO rule must be gone too
-      expect(paths).not.toContain('poNumber');
-    }
+    expect(r.success).toBe(true);
   });
 
-  it('edit + a PO but no cycleLabel -> STILL rejected (a PO is not a label)', () => {
+  it('edit + a PO and no cycleLabel -> ok', () => {
     const r = cycleEditFormSchema.safeParse({ poNumber: 'PO25001', pCode: '' });
-    expect(r.success).toBe(false);
+    expect(r.success).toBe(true);
   });
 
   it('edit + cycleLabel + pCode and NO PO -> ok (V2 never needs the PO)', () => {
@@ -345,8 +346,10 @@ describe('refineEditCyclePlan — an edit requires cycleLabel, never the lot com
     expect(r.success).toBe(true);
   });
 
-  it('edit + blank cycleLabel -> rejected (round 8-17A.1: required in every edit)', () => {
-    expect(cycleEditFormSchema.safeParse({ poNumber: '', pCode: '' }).success).toBe(false);
+  it('edit still requires a unit whenever a yield target is given', () => {
+    const r = cycleEditFormSchema.safeParse({ poNumber: '', expectedYieldFull: 500 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('expectedYieldUnit');
   });
 
   it('edit + blank everything ELSE but cycleLabel present -> ok (preserve still works for pCode/PO)', () => {
@@ -513,16 +516,27 @@ describe('EditCycleModal — the system lot is display-only', () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 
-  it('a blank cycleLabel still blocks the save (it identifies the cycle)', async () => {
+  it('round V: crop / variety / label / P.Code are shown locked, and a legacy unlabelled cycle still saves', async () => {
+    // Round 8-17A.1 blocked this save until a label was typed. The label is
+    // fixed once the cycle exists now, so there is nothing to type it into.
     updatePlotCycleMock.mockReset();
-    renderEdit(legacyCycle({ cycleLabel: null, pCode: 'WM-141' }));
+    updatePlotCycleMock.mockResolvedValue(legacyCycle());
+    renderEdit(legacyCycle({ cycleLabel: null, crop: 'พริก', variety: 'พริกขี้หนู', pCode: 'WM-141' }));
+
+    expect(screen.queryByPlaceholderText('เช่น jun2026 หรือ may2026')).toBeNull();
+    expect(screen.queryByTestId('master-select-crop')).toBeNull();
+    expect(screen.queryByTestId('master-select-variety')).toBeNull();
+    expect(screen.getByLabelText('ชนิดพืช').textContent).toContain('พริก');
+    expect(screen.getByLabelText('พันธุ์/สายพันธุ์').textContent).toContain('พริกขี้หนู');
+    expect(screen.getByLabelText('P.Code').textContent).toContain('WM-141');
+    expect(screen.getAllByText('กำหนดครั้งเดียวตอนสร้างรอบปลูก — แก้ไขไม่ได้').length).toBe(4);
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-    expect(
-      await screen.findByText('กรุณาระบุชื่อรอบปลูก เนื่องจากใช้ระบุรอบและสร้าง Lot No อัตโนมัติ'),
-    ).toBeTruthy();
-    expect(updatePlotCycleMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(updatePlotCycleMock).toHaveBeenCalledTimes(1));
+    const payload = updatePlotCycleMock.mock.calls[0][2];
+    for (const key of ['crop', 'variety', 'cycleLabel', 'pCode']) {
+      expect(Object.prototype.hasOwnProperty.call(payload, key)).toBe(false);
+    }
   });
 });
 
@@ -993,28 +1007,25 @@ describe('CyclePlanFields — round 8-26C: P.Code derives from the พันธ�
     expect(screen.queryByText('พันธุ์/สายพันธุ์ *')).toBeNull();
   });
 
-  it('leaves a stored P.Code untouched on edit until the user actually picks a พันธุ์', async () => {
-    // The legacy case: the form opens with a free-text P.Code that is not in
-    // Master Data. Deriving on mount would silently rewrite it — and change
-    // the Lot No a regenerate produces — for data the user never touched.
+  it('never re-derives a stored P.Code on edit', async () => {
+    // The stored P.Code may be a legacy free-text value; deriving it again
+    // would rewrite data the lot was built from. Round V makes that
+    // impossible rather than merely avoided: the value is shown locked.
     renderPlan({ mode: 'edit' });
 
-    await waitFor(() =>
-      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe('WM-141'),
-    );
+    expect(screen.getByLabelText('P.Code').textContent).toContain('WM-141');
     expect(listMasterDataMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'p_code' }),
     );
   });
 
-  it('derives on edit once the user does pick a พันธุ์', async () => {
+  it('round V: on edit there is no พันธุ์ or crop to pick', () => {
+    // Was "derives on edit once the user does pick a พันธุ์" — the pickers are
+    // gone from the edit form, because the variety is fixed once the cycle
+    // exists.
     renderPlan({ mode: 'edit' });
-
-    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: 'พริกไม่มีรหัส' } });
-
-    await waitFor(() =>
-      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(''),
-    );
+    expect(screen.queryByTestId('master-select-variety')).toBeNull();
+    expect(screen.queryByTestId('master-select-crop')).toBeNull();
   });
 });
 

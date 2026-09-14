@@ -17,10 +17,10 @@ from uuid import uuid4
 from app.api.v1.plots import (
     _CURRENT_PLOT_STATUS_ACTIVE_LABEL,
     _CURRENT_PLOT_STATUS_INACTIVE_LABEL,
-    _EDITABLE_COLUMNS,
+    _KIND_CELL_STYLE,
+    _KIND_SYSTEM,
     _PLOT_TEMPLATE_HEADERS,
-    _STYLE_EDITABLE,
-    _STYLE_REFERENCE,
+    _TEMPLATE_COLUMN_KIND,
     _contextual_plot_template_workbook,
     _new_cycle_sheet,
     _reactivate_row_values,
@@ -182,7 +182,7 @@ def test_current_plot_status_is_in_import_columns_and_has_a_description():
 
 def test_current_plot_status_is_a_reference_not_editable_column():
     assert "currentPlotStatus" in _PLOT_TEMPLATE_HEADERS
-    assert "currentPlotStatus" not in _EDITABLE_COLUMNS
+    assert _TEMPLATE_COLUMN_KIND["currentPlotStatus"] == _KIND_SYSTEM
 
 
 def test_current_plot_status_cell_is_reference_style():
@@ -194,7 +194,7 @@ def test_current_plot_status_cell_is_reference_style():
     idx = _PLOT_TEMPLATE_HEADERS.index("currentPlotStatus")
     cell = data_row[idx]
     assert isinstance(cell, StyledCell)
-    assert cell.style == _STYLE_REFERENCE
+    assert cell.style == _KIND_CELL_STYLE[_KIND_SYSTEM]
     assert cell.value == _CURRENT_PLOT_STATUS_ACTIVE_LABEL
 
 
@@ -259,19 +259,16 @@ async def test_editing_current_plot_status_cell_never_changes_the_row_action():
 
 # --- item 17: blank cells in a reactivate row still carry their style ------
 
-def test_blank_editable_columns_still_carry_yellow_style():
-    """A cell being empty must not cost it its fill — the yellow is what tells
-    the user which columns they may edit. (Round E — an ACTIVE plot with no
+def test_blank_cells_still_carry_their_columns_colour():
+    """A cell being empty must not cost it its fill — the colour is what tells
+    the user what may go in it (round V: one of four kinds). (Round E — an ACTIVE plot with no
     cycle leaves every editable cycle column blank, which is the same shape the
     retired reactivate row used to provide.)"""
     rows = _new_cycle_sheet([_plot(is_active=True, active_cycle=None)])
     data_row = rows[2]
     for col, cell in zip(_PLOT_TEMPLATE_HEADERS, data_row, strict=True):
         assert isinstance(cell, StyledCell)
-        if col in _EDITABLE_COLUMNS:
-            assert cell.style == _STYLE_EDITABLE, col
-        else:
-            assert cell.style == _STYLE_REFERENCE, col
+        assert cell.style == _KIND_CELL_STYLE[_TEMPLATE_COLUMN_KIND[col]], col
 
 
 # Round 8-27E removed the "รายการที่ไม่รวม" sheet and the three

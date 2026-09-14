@@ -16,7 +16,7 @@ mocked, since constructing/mutating a Plot() instance doesn't touch the DB.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -25,7 +25,19 @@ from pydantic import ValidationError
 from app.repositories.plot_repository import create_plot
 from app.schemas.plot import PlotCreate, PlotRead, PlotSummary, PlotUpdate
 
-_BASE = dict(supplier_id=uuid4(), plot_code="P001", name="Plot One")
+_BASE = dict(supplier_id=uuid4(), name="Plot One")
+
+
+@pytest.fixture(autouse=True)
+def _generated_plot_code():
+    """Round V — create_plot always generates the code now, which reads the
+    supplier's code and the series' last running number. These tests are about
+    other columns, so both reads are stubbed rather than hitting a database."""
+    with patch("app.repositories.plot_repository._supplier_code_for_id",
+               AsyncMock(return_value="SUP001")), \
+         patch("app.repositories.plot_repository._next_plot_code_running_no",
+               AsyncMock(return_value=1)):
+        yield
 
 
 def _mock_db() -> MagicMock:
@@ -77,7 +89,6 @@ def test_plot_create_rejects_a_stray_planning_field_via_camelcase_alias() -> Non
     with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
         PlotCreate.model_validate({
             "supplierId": str(_BASE["supplier_id"]),
-            "plotCode": _BASE["plot_code"],
             "name": _BASE["name"],
             "currentCrop": "พริก",
             "expectedYieldFull": "1000.00",
@@ -103,12 +114,10 @@ def test_plot_create_still_accepts_physical_fields_via_camelcase_alias() -> None
     # a real request body with.
     plot = PlotCreate.model_validate({
         "supplierId": str(_BASE["supplier_id"]),
-        "plotCode": "P002",
         "name": "แปลง B",
         "village": "ต.ตัวอย่าง",
         "rai": "5.5",
     })
-    assert plot.plot_code == "P002"
     assert plot.village == "ต.ตัวอย่าง"
     assert plot.rai == Decimal("5.5")
 

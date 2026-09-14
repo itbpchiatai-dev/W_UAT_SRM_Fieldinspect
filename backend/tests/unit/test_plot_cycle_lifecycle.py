@@ -182,7 +182,7 @@ async def test_start_cycle_race_integrityerror_becomes_409() -> None:
 async def test_update_cycle_success_syncs_mirror_not_snapshot() -> None:
     plot = _plot()
     cycle = _cycle(plot_id=plot.id, status="active")
-    payload = PlotCycleUpdate(crop="ทุเรียน", expectedYieldFull=500)
+    payload = PlotCycleUpdate(plantCount=200, expectedYieldFull=500)
 
     with patch(f"{_P}.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
@@ -199,7 +199,7 @@ async def test_update_cycle_success_syncs_mirror_not_snapshot() -> None:
     # provided fields are passed (exclude_unset).
     assert mk_upd.call_args[0][1] is cycle
     passed = mk_upd.call_args[0][2]
-    assert passed == {"crop": "ทุเรียน", "expected_yield_full": 500}
+    assert passed == {"plant_count": 200, "expected_yield_full": 500}
     mk_sync.assert_awaited_once()
     # editing a plan must NOT wipe the plot's latest inspection status
     mk_clear.assert_not_awaited()
@@ -215,7 +215,7 @@ async def test_update_cycle_cannot_ask_for_a_lot_at_all() -> None:
 
     assert "lot_no" not in PlotCycleUpdate.model_fields
 
-    payload = PlotCycleUpdate(crop="ทุเรียน")
+    payload = PlotCycleUpdate(plantCount=200)
     with patch(f"{_P}.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.get_active_cycle_for_plot_for_update", AsyncMock(return_value=cycle)), \
@@ -234,7 +234,7 @@ async def test_update_cycle_rejects_non_active_409() -> None:
          patch(f"{_P}.plot_cycle_repo.update_cycle", AsyncMock()) as mk_upd:
         with pytest.raises(HTTPException) as exc:
             await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id,
-                                    payload=PlotCycleUpdate(crop="X"), db=_db())
+                                    payload=PlotCycleUpdate(plantCount=1), db=_db())
     assert exc.value.status_code == 409
     mk_upd.assert_not_awaited()
 
@@ -247,7 +247,7 @@ async def test_update_cycle_from_another_plot_404() -> None:
          patch(f"{_P}.plot_cycle_repo.get_cycle_for_plot", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc:
             await update_plot_cycle(plot_id=plot.id, cycle_id=uuid4(),
-                                    payload=PlotCycleUpdate(crop="X"), db=_db())
+                                    payload=PlotCycleUpdate(plantCount=1), db=_db())
     assert exc.value.status_code == 404
     assert exc.value.detail == "Plot cycle not found"
 
@@ -277,7 +277,7 @@ async def test_update_cycle_race_lock_lost_becomes_409() -> None:
              patch(f"{_P}.plot_cycle_repo.update_cycle", AsyncMock()) as mk_upd:
             with pytest.raises(HTTPException) as exc:
                 await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id,
-                                        payload=PlotCycleUpdate(crop="X"), db=_db())
+                                        payload=PlotCycleUpdate(plantCount=1), db=_db())
         assert exc.value.status_code == 409
         mk_upd.assert_not_awaited()
 
@@ -442,7 +442,7 @@ async def test_update_cycle_locks_plot_before_active_cycle_call_order() -> None:
          patch(f"{_P}.plot_cycle_repo.update_cycle", AsyncMock(return_value=cycle)), \
          patch(f"{_P}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()):
         await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id,
-                                payload=PlotCycleUpdate(crop="X"), db=_db())
+                                payload=PlotCycleUpdate(plantCount=1), db=_db())
 
     assert order == ["lock_plot", "lock_cycle"]
 
@@ -491,7 +491,7 @@ async def test_update_cycle_refreshes_cycle_before_serialise() -> None:
         await _assert_refreshes_cycle_before_serialise(
             lambda db: update_plot_cycle(
                 plot_id=plot.id, cycle_id=cycle.id,
-                payload=PlotCycleUpdate(crop="X"), db=db,
+                payload=PlotCycleUpdate(plantCount=1), db=db,
             ),
             cycle,
         )

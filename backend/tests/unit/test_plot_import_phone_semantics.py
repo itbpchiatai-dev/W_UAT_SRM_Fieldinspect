@@ -67,7 +67,7 @@ def _cycle(**kw) -> SimpleNamespace:
 def _create_row(**over) -> dict[str, str]:
     base = {
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         # cycleLabel + pCode are required whenever lotNo is blank (round
         # 8-12A.1: a blank lot REQUESTS an Auto Lot). These tests are about
         # phone semantics, so the row just needs to be valid for other reasons.
@@ -176,8 +176,9 @@ async def test_error_message_never_echoes_the_phone_value() -> None:
 async def test_same_phone_on_two_different_plots_is_valid() -> None:
     pv = await _preview(
         [
-            _create_row(plotCode="P101", primaryPhone="0845552162"),
-            _create_row(plotCode="P102", primaryPhone="0845552162"),
+            # Round V — two NEW plots (codes generated), one phone.
+            _create_row(primaryPhone="0845552162"),
+            _create_row(plotName="แปลงใหม่ 2", primaryPhone="0845552162"),
         ],
         plot=None,
     )
@@ -191,7 +192,7 @@ async def test_old_file_without_phone_columns_still_previews_fine() -> None:
     absent from each row's dict, never a KeyError."""
     legacy_columns = [c for c in IMPORT_COLUMNS if c not in ("primaryPhone", "additionalPhones")]
     data = [legacy_columns, [{"action": "create_plot_with_cycle", "supplierCode": "SUP001",
-                               "plotCode": "P999", "plotName": "แปลงเก่า",
+                               "plotCode": "", "plotName": "แปลงเก่า",
                                "cycleLabel": "2605",
                                "poNumber": "PO25001", "pCode": "Melon-A"}.get(c) for c in legacy_columns]]
     content = build_xlsx([("plots", data)])
@@ -362,7 +363,7 @@ async def test_existing_plot_uses_the_locked_plot_object_not_a_new_lookup() -> N
 
 async def test_file_with_one_error_row_never_calls_replace_for_the_valid_row() -> None:
     rows = [
-        _create_row(plotCode="P101", primaryPhone="0845552162"),
+        _create_row(primaryPhone="0845552162"),
         _create_row(action="frobnicate", plotCode="P102"),
     ]
     p_sup, p_plot, p_active = _patch_lookups(plot=None)

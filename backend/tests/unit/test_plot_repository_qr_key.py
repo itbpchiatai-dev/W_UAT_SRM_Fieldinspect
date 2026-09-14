@@ -7,11 +7,25 @@ tests/unit/test_plot_repository_inspection_code.py.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from uuid import uuid4
 
 from app.repositories.plot_repository import create_plot
 from app.schemas.plot import PlotCreate, PlotUpdate
+
+
+@pytest.fixture(autouse=True)
+def _generated_plot_code():
+    """Round V — create_plot always generates the code now, which reads the
+    supplier's code and the series' last running number. These tests are about
+    other columns, so both reads are stubbed rather than hitting a database."""
+    with patch("app.repositories.plot_repository._supplier_code_for_id",
+               AsyncMock(return_value="SUP001")), \
+         patch("app.repositories.plot_repository._next_plot_code_running_no",
+               AsyncMock(return_value=1)):
+        yield
 
 
 def _mock_db() -> MagicMock:
@@ -22,7 +36,7 @@ def _mock_db() -> MagicMock:
 
 
 async def test_create_plot_always_generates_a_qr_key() -> None:
-    payload = PlotCreate(supplier_id=uuid4(), plot_code="P001", name="Plot One")
+    payload = PlotCreate(supplier_id=uuid4(), name="Plot One")
     plot = await create_plot(_mock_db(), payload)
 
     assert plot.qr_key
@@ -32,10 +46,10 @@ async def test_create_plot_always_generates_a_qr_key() -> None:
 
 async def test_create_plot_generates_distinct_qr_keys_per_plot() -> None:
     plot1 = await create_plot(
-        _mock_db(), PlotCreate(supplier_id=uuid4(), plot_code="P002", name="Plot Two")
+        _mock_db(), PlotCreate(supplier_id=uuid4(), name="Plot Two")
     )
     plot2 = await create_plot(
-        _mock_db(), PlotCreate(supplier_id=uuid4(), plot_code="P003", name="Plot Three")
+        _mock_db(), PlotCreate(supplier_id=uuid4(), name="Plot Three")
     )
 
     assert plot1.qr_key != plot2.qr_key

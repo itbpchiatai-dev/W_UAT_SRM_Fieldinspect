@@ -87,7 +87,7 @@ def _xlsx(rows: list[dict[str, str]]) -> bytes:
 def _create_row(**over) -> dict[str, str]:
     base = {
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         "poNumber": "PO25001", "pCode": "Melon-A", "lotNo": "LOT-01",
         # Round 8-17A.1 — required on every new-cycle action now.
         "cycleLabel": "jun2026",
@@ -139,8 +139,10 @@ def test_both_columns_exist_and_are_documented() -> None:
     assert "inspectionPasswordStatus" in plot_import.IMPORT_COLUMNS
     assert "newInspectionPassword" in plot_import.IMPORT_COLUMNS
     desc = plot_import.TEMPLATE_COLUMN_DESCRIPTIONS
-    assert desc["inspectionPasswordStatus"] == "สถานะรหัสยืนยันแปลงปัจจุบัน ใช้ดูข้อมูลเท่านั้น"
+    # Round V — every description opens with the column's Thai name.
+    assert desc["inspectionPasswordStatus"] == "สถานะรหัสยืนยันแปลง — ใช้ดูข้อมูลเท่านั้น"
     assert desc["newInspectionPassword"] == (
+        "รหัสยืนยันแปลงใหม่ — "
         "กรอกตัวเลข 4 ถึง 20 หลักเมื่อต้องการตั้งหรือเปลี่ยนรหัส เว้นว่างเพื่อคงรหัสเดิม"
     )
 

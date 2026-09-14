@@ -99,7 +99,7 @@ def _rejecting():
 
 async def test_create_with_cycle_rejects_inactive_crop_no_mutation() -> None:
     payload = PlotWithCycleCreate(
-        plot=PlotCreate(supplierId=uuid4(), plotCode="P101", name="แปลง A"),
+        plot=PlotCreate(supplierId=uuid4(), name="แปลง A"),
         cycle=_ccreate(),
     )
     with patch(f"{_P}.repo.get_plot_by_code", AsyncMock(return_value=None)), \
@@ -117,7 +117,7 @@ async def test_create_with_cycle_passes_when_master_data_valid() -> None:
     plot = _plot()
     cycle = _cycle(plot_id=plot.id)
     payload = PlotWithCycleCreate(
-        plot=PlotCreate(supplierId=plot.supplier_id, plotCode="P101", name="แปลง A"),
+        plot=PlotCreate(supplierId=plot.supplier_id, name="แปลง A"),
         cycle=_ccreate(),
     )
     with patch(f"{_P}.repo.get_plot_by_code", AsyncMock(return_value=None)), \
@@ -162,12 +162,11 @@ async def test_start_cycle_checked_before_active_cycle_conflict_still_422() -> N
 
 # --- update_plot_cycle -------------------------------------------------------
 
-async def test_update_cycle_unchanged_pair_passes_field_only_edit() -> None:
-    """Editing plant_count only (crop/variety absent from the PATCH body)
-    must pass the cycle's OWN current crop/variety through as BOTH the
-    effective and current value — even if that legacy value is, in reality,
-    inactive; the real business rule is exercised in
-    test_master_data_validation.py, this test only locks in the WIRING."""
+async def test_update_cycle_field_only_edit_runs_no_master_data_check() -> None:
+    """Round V — an edit can no longer change crop/variety, so it no longer
+    checks them against Master Data (round 8-15D did, passing the cycle's own
+    pair through as "unchanged"). A legacy pair that has since been
+    deactivated can therefore never block an unrelated edit."""
     plot = _plot()
     cycle = _cycle(plot_id=plot.id, crop="เมล่อน", variety="ญี่ปุ่น")
     payload = PlotCycleUpdate(plantCount=200)
@@ -178,18 +177,15 @@ async def test_update_cycle_unchanged_pair_passes_field_only_edit() -> None:
          patch(f"{_P}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()), \
          _permissive() as mk_assert:
         result = await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
-    mk_assert.assert_awaited_once()
-    kw = mk_assert.call_args
-    # effective crop/variety fall back to the cycle's own (absent from payload)
-    assert kw.args[1] == "เมล่อน"
-    assert kw.args[2] == "ญี่ปุ่น"
-    assert kw.kwargs["current_crop"] == "เมล่อน"
-    assert kw.kwargs["current_variety"] == "ญี่ปุ่น"
+    mk_assert.assert_not_awaited()
     mk_update.assert_awaited_once()
     assert result.id == cycle.id
 
 
 async def test_update_cycle_changed_crop_rejected_no_mutation() -> None:
+    """Round V — refused because crop is fixed once the cycle exists, before
+    Master Data is even consulted (it used to be refused only when the new
+    value was not an active Master Data crop)."""
     plot = _plot()
     cycle = _cycle(plot_id=plot.id, crop="เมล่อน", variety="ญี่ปุ่น")
     payload = PlotCycleUpdate(crop="ทุเรียน")
@@ -201,9 +197,8 @@ async def test_update_cycle_changed_crop_rejected_no_mutation() -> None:
         with pytest.raises(HTTPException) as exc:
             await update_plot_cycle(plot_id=plot.id, cycle_id=cycle.id, payload=payload, db=_db())
     assert exc.value.status_code == 422
-    mk_assert.assert_awaited_once()
-    assert mk_assert.call_args.args[1] == "ทุเรียน"      # effective (changed)
-    assert mk_assert.call_args.kwargs["current_crop"] == "เมล่อน"  # cycle's own
+    assert "ชนิดพืช" in exc.value.detail and "ครั้งเดียว" in exc.value.detail
+    mk_assert.assert_not_awaited()
     mk_update.assert_not_awaited()
 
 

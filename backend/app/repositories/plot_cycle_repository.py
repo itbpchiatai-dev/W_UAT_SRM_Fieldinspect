@@ -16,6 +16,7 @@ Mirror vs snapshot (see app/db/models/plot_cycle.py's docstring):
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
@@ -375,13 +376,50 @@ async def create_cycle(
 
 # Plain plan/planting fields an edit may set as-is — never status/cycle_no/
 # started_at/closed_*, so a caller can't smuggle a lifecycle change through the
-# edit path (round 7.2B PATCH). po_number / p_code are handled specially below
-# (normalization), so they are NOT in this set; the lot columns are not
-# editable at all (round A).
+# edit path (round 7.2B PATCH). po_number is handled specially below
+# (normalization), so it is NOT in this set; the lot columns are not editable
+# at all (round A), and neither are the one-time fields below (round V).
 _EDITABLE_PLAN_FIELDS = frozenset(
-    {"crop", "variety", "cycle_label", "planting_date",
-     "plant_count", "expected_yield_full", "expected_yield_unit"}
+    {"planting_date", "plant_count", "expected_yield_full", "expected_yield_unit"}
 )
+
+# Round V — what a cycle is given ONCE, when it is created, and never again.
+# The Auto Lot is built from cycle_label and p_code, p_code follows the
+# variety, and the variety belongs to the crop: changing any of them afterwards
+# would leave the lot describing a cycle that no longer exists. update_cycle
+# ignores them even when a caller passes them; every caller first refuses a
+# CHANGE out loud (changed_one_time_fields), so nothing is dropped silently.
+ONE_TIME_CYCLE_FIELDS: tuple[str, ...] = ("crop", "variety", "cycle_label", "p_code")
+ONE_TIME_FIELD_LABELS: dict[str, str] = {
+    "crop": "ชนิดพืช",
+    "variety": "พันธุ์",
+    "cycle_label": "ชื่อรอบปลูก",
+    "p_code": "P.Code",
+}
+
+
+def _one_time_value(field: str, value: object) -> str | None:
+    """A one-time field as it would be STORED, so a re-sent value that only
+    differs by surrounding spaces is not mistaken for a change."""
+    if field == "cycle_label":
+        return normalize_cycle_label(value if isinstance(value, str) else None)
+    if field == "p_code":
+        return normalize_p_code(value if isinstance(value, str) else None)
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
+def changed_one_time_fields(cycle: PlotCycle, provided: Mapping[str, object]) -> list[str]:
+    """The one-time fields in `provided` that would CHANGE `cycle` (round V).
+
+    `provided` must hold only what the caller was actually given — the API's
+    exclude_unset body, or the Excel cells that are filled in — so an absent
+    field is never read as "clear it". Re-sending the stored value is fine;
+    only a different one is reported."""
+    return [
+        field for field in ONE_TIME_CYCLE_FIELDS
+        if field in provided
+        and _one_time_value(field, provided[field]) != _one_time_value(field, getattr(cycle, field))
+    ]
 
 
 async def update_cycle(
@@ -422,11 +460,13 @@ async def update_cycle(
     Round A — the `plot` argument is gone: it existed only to resolve the
     supplier code for a lot regeneration, which no edit performs any more.
     Callers still load and lock the plot themselves (Plot → PlotCycle lock
-    order) before calling here; this function simply no longer needs it."""
+    order) before calling here; this function simply no longer needs it.
+
+    Round V — crop / variety / cycle_label / p_code are never written here
+    (ONE_TIME_CYCLE_FIELDS): they are set when the cycle is created and the
+    lot is built from them. Callers refuse a change before calling."""
     if "po_number" in fields:
         cycle.po_number = normalize_po_number(fields["po_number"])
-    if "p_code" in fields:
-        cycle.p_code = normalize_p_code(fields["p_code"])
     if "supplier_lot_no" in fields:
         cycle.supplier_lot_no = normalize_supplier_lot_no(fields["supplier_lot_no"])
     if "oracle_supplier_code" in fields:
@@ -437,8 +477,7 @@ async def update_cycle(
         cycle.ref_account = normalize_cycle_reference_text(fields["ref_account"])
     for key in _EDITABLE_PLAN_FIELDS:
         if key in fields:
-            setattr(cycle, key, normalize_cycle_label(fields[key])
-                    if key == "cycle_label" else fields[key])
+            setattr(cycle, key, fields[key])
     await db.flush()
     return cycle
 

@@ -114,7 +114,7 @@ async def _preview_one(row: dict[str, str], **lookups):
 
 def _row_create(**over) -> dict[str, str]:
     base = {
-        "action": ACTION_CREATE, "supplierCode": "SUP001", "plotCode": "P101",
+        "action": ACTION_CREATE, "supplierCode": "SUP001", "plotCode": "",  # round V
         "plotName": "แปลงใหม่", "province": "เชียงใหม่",
         "poNumber": "PO25001", "pCode": "Melon-A",
         # Round 8-17A.1 — required on every new-cycle action; matches
@@ -147,7 +147,9 @@ _NON_FINAL_FIXTURES = {
         dict(plot=None, active=None),
     ),
     ACTION_UPDATE: (
-        _row_create(action=ACTION_UPDATE, plotCode="P002"),
+        # Round V — an update leaves the one-time columns blank (= keep).
+        _row_create(action=ACTION_UPDATE, plotCode="P002",
+                    crop="", variety="", pCode="", cycleLabel=""),
         dict(plot=_plot(), active=_cycle()),
     ),
     # Round K — the fixtures for start_new_cycle, close_and_start_new_cycle,
@@ -234,7 +236,7 @@ def test_result_workbook_still_has_neither_retired_column():
 
     row_view = {
         "rowNumber": 2, "action": ACTION_CREATE, "supplierCode": "SUP001",
-        "plotCode": "P101", "status": "valid", "message": "",
+        "plotCode": "", "status": "valid", "message": "",
         "raw": {"action": ACTION_CREATE, "supplierCode": "SUP001", "plotCode": "P101"},
     }
     content = report.build_plot_import_result_workbook(

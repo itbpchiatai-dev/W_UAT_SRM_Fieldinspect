@@ -346,11 +346,9 @@ export interface PlotCycleLabelListParams {
  */
 export interface PlotCreatePayload {
   supplierId: string;
-  // Round B — OPTIONAL. Send null (or omit) to have the backend generate the
-  // code as {supplierCode}-{YYMM}-{running}, e.g. "JPS-2605-001"; send a value
-  // to keep using one that already exists on paper, which is stored verbatim
-  // (trimmed + upper-cased) and tagged plotCodeSource: 'manual'.
-  plotCode?: string | null;
+  // Round V — no plotCode: the backend always generates it as
+  // {supplierCode}-{YYMM}-{running}, e.g. "JPS-2605-001", the same rule the
+  // Auto Lot follows, and refuses a supplied one.
   name: string;
   village?: string | null;
   district?: string | null;
@@ -1464,8 +1462,15 @@ export interface PlotCycleCreatePayload {
  * value to replace. It never touches the system lot.
  *
  * status, cycleNo, the closed-fields, lotNo, lotNoSource and lotRunningNo are
- * deliberately absent, as is the server's internal auto-lot series key. */
-export type PlotCycleUpdatePayload = Partial<PlotCycleCreatePayload>;
+ * deliberately absent, as is the server's internal auto-lot series key.
+ *
+ * Round V — so are crop, variety, cycleLabel and pCode: they are set once,
+ * when the cycle is created, because the lot is built from them. The backend
+ * still accepts the stored value re-sent but refuses a different one (422);
+ * leaving them out of the type means this client can't even try. */
+export type PlotCycleUpdatePayload = Partial<
+  Omit<PlotCycleCreatePayload, 'crop' | 'variety' | 'cycleLabel' | 'pCode'>
+>;
 
 export interface PlotCycleClosePayload {
   /** Round S — HARVESTED only. Cancelling is its own call (cancelPlotCycle),

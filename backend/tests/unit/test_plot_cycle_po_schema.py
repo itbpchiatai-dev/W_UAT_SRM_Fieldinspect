@@ -154,7 +154,7 @@ def test_rollover_new_cycle_without_po_is_valid() -> None:
 
 def test_create_plot_with_cycle_without_po_is_valid() -> None:
     payload = PlotWithCycleCreate(
-        plot=PlotCreate(supplierId=uuid4(), plotCode="P900", name="แปลงทดสอบ"),
+        plot=PlotCreate(supplierId=uuid4(), name="แปลงทดสอบ"),
         cycle=PlotCycleCreate(pCode="X", cycleLabel="jun2026"),
     )
     assert payload.cycle.po_number is None

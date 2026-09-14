@@ -360,7 +360,9 @@ describe('plot cycle API', () => {
 
   it('updatePlotCycle patches PATCH /api/v1/plots/{plotId}/cycles/{cycleId}', async () => {
     const patchSpy = vi.spyOn(apiClient, 'patch').mockResolvedValue({ data: {} });
-    const payload = { crop: 'ทุเรียน' };
+    // Round V — crop/variety/cycleLabel/pCode can no longer be edited, so the
+    // sample edit is a plan field.
+    const payload = { plantCount: 1200 };
 
     await updatePlotCycle('plot-1', 'cycle-1', payload);
 
@@ -604,13 +606,13 @@ describe('plot access-phone API (round 8-3C)', () => {
     const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: {} });
 
     await createPlotWithCycle({
-      plot: { supplierId: 'sup-1', plotCode: 'P001', name: 'แปลง A' },
+      plot: { supplierId: 'sup-1', name: 'แปลง A' },
       cycle: { poNumber: 'PO', pCode: 'PC', cycleLabel: 'jun2026' },
       accessPhones: { primaryPhone: '0845552162', additionalPhones: [] },
     });
 
     expect(postSpy).toHaveBeenCalledWith('/api/v1/plots/with-cycle', {
-      plot: { supplierId: 'sup-1', plotCode: 'P001', name: 'แปลง A' },
+      plot: { supplierId: 'sup-1', name: 'แปลง A' },
       cycle: { poNumber: 'PO', pCode: 'PC', cycleLabel: 'jun2026' },
       accessPhones: { primaryPhone: '0845552162', additionalPhones: [] },
     });
@@ -622,7 +624,7 @@ describe('plot access-phone API (round 8-3C)', () => {
     const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValue({ data: {} });
 
     await createPlotWithCycle({
-      plot: { supplierId: 'sup-1', plotCode: 'P001', name: 'แปลง A' },
+      plot: { supplierId: 'sup-1', name: 'แปลง A' },
       cycle: { poNumber: 'PO', pCode: 'PC', cycleLabel: 'jun2026' },
     });
 

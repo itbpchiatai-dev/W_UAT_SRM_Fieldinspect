@@ -86,7 +86,7 @@ def _row(preview, index: int = 0):
 def _base_row(**over) -> dict[str, str]:
     base = {
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงใหม่",
+        "plotCode": "", "plotName": "แปลงใหม่",
         "poNumber": "PO25001", "pCode": "Melon-A",
         "cycleLabel": "jun2026", "lotNo": "LOT-01",
     }
@@ -138,17 +138,19 @@ async def test_new_cycle_action_passes_with_a_real_label() -> None:
 
 # --- update_current_cycle: effective-value semantics, never clear ----------
 
-async def test_update_current_cycle_rejects_clearing_an_existing_label() -> None:
+async def test_update_current_cycle_blank_label_keeps_the_existing_one() -> None:
+    """Round V — was "rejects clearing an existing label". An update never
+    writes the label any more (it is fixed once the cycle exists), so a blank
+    cell cannot clear it: it keeps the stored value, like every orange cell."""
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(cycle_label="jun2026")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    row = _base_row(action="update_current_cycle", cycleLabel=None, plotName=None,
+    row = _base_row(action="update_current_cycle", plotCode="P101", cycleLabel=None, plotName=None,
                      poNumber=None, pCode=None, lotNo=None)
     with p_sup, p_plot, p_active:
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
     result = _row(preview)
-    assert result.status == "error"
-    assert _REQUIRED_LABEL_MSG in result.message
+    assert result.status != "error"
 
 
 async def test_update_current_cycle_blank_label_on_legacy_unlabeled_cycle_is_a_no_op() -> None:
@@ -158,7 +160,7 @@ async def test_update_current_cycle_blank_label_on_legacy_unlabeled_cycle_is_a_n
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(cycle_label=None)
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    row = _base_row(action="update_current_cycle", cycleLabel=None, plotName=None,
+    row = _base_row(action="update_current_cycle", plotCode="P101", cycleLabel=None, plotName=None,
                      poNumber=None, pCode=None, lotNo=None)
     with p_sup, p_plot, p_active:
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
@@ -166,16 +168,19 @@ async def test_update_current_cycle_blank_label_on_legacy_unlabeled_cycle_is_a_n
     assert result.status != "error"
 
 
-async def test_update_current_cycle_changing_to_a_new_label_is_allowed() -> None:
+async def test_update_current_cycle_changing_the_label_is_refused() -> None:
+    """Round V — was "changing to a new label is allowed". The Auto Lot is
+    built from the label, so it is fixed once the cycle exists."""
     plot = SimpleNamespace(id=uuid4(), is_active=True)
     active = _cycle(cycle_label="jun2026")
     p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=active)
-    row = _base_row(action="update_current_cycle", cycleLabel="jul2026", plotName=None,
+    row = _base_row(action="update_current_cycle", plotCode="P101", cycleLabel="jul2026", plotName=None,
                      poNumber=None, pCode=None, lotNo=None)
     with p_sup, p_plot, p_active:
         preview = await build_preview(object(), _xlsx([row]), ctx=_ctx())
     result = _row(preview)
-    assert result.status != "error"
+    assert result.status == "error"
+    assert "cycleLabel" in result.message and "jun2026" in result.message
 
 
 # --- final_plot: untouched by this round ------------------------------------
@@ -221,7 +226,8 @@ async def test_commit_blocked_when_any_row_is_missing_cycle_label() -> None:
 def test_template_description_documents_the_requirement() -> None:
     from app.services.plot_import import TEMPLATE_COLUMN_DESCRIPTIONS
     desc = TEMPLATE_COLUMN_DESCRIPTIONS["cycleLabel"]
-    assert "เริ่มรอบปลูกใหม่ทุกกรณี" in desc
+    # Round V — required when the cycle is created, fixed afterwards.
+    assert "จำเป็นตอนสร้าง" in desc and "แก้ภายหลังไม่ได้" in desc
     # Round A — the Auto/Manual pair is gone; the label is required because it
     # BUILDS the Lot No the server always generates.
     assert "Lot No" in desc

@@ -1004,14 +1004,9 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'แก้รอบปลูก' }));
-    // Round 8-17A.1 — oneCycle()'s default cycleLabel is null (a legacy
-    // cycle), and cycleLabel is now required on every edit submit — the
-    // user must fill it in before saving, even when editing an unrelated
-    // field. Without this the modal blocks submit and updatePlotCycle is
-    // never called.
-    fireEvent.change(
-      await screen.findByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jun2026' } },
-    );
+    // Round V — the cycle label is fixed once the cycle exists, so the edit
+    // form shows it locked and saving no longer waits on it (round 8-17A.1
+    // made a legacy unlabelled cycle fill one in first).
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(updatePlotCycleMock).toHaveBeenCalledWith(

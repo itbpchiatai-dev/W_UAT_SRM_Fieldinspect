@@ -82,6 +82,7 @@ from app.services.lot_number import AutoLotMissingComponentError, LotNumberTooLo
 from app.services.plot_code import (
     PlotCodeSupplierCodeUnusableError,
     PlotCodeTooLongError,
+    supplier_code_unusable_detail,
 )
 from app.services.loggers.activity_logger import ActivityLogger
 
@@ -99,16 +100,18 @@ _AUTO_LOT_FIELD_LABELS = {
 
 
 def _plot_code_supplier_detail(supplier_code: str | None) -> str:
-    """Thai 422 detail for PlotCodeSupplierCodeUnusableError (round B).
+    """Thai 422 detail for PlotCodeSupplierCodeUnusableError (round B). The
+    wording lives in services/plot_code.py since round V, so the Excel import
+    says exactly the same thing."""
+    return supplier_code_unusable_detail(supplier_code)
 
-    Says which supplier to fix and what the rule is. The supplier code is
-    stored master data, not user-submitted input, so naming it is safe and is
-    the only way the message is actionable."""
-    shown = supplier_code.strip() if supplier_code and supplier_code.strip() else "(ว่าง)"
+
+# Round V — the Thai 422 for an edit that tries to change a one-time field.
+def _one_time_fields_detail(changed: list[str]) -> str:
+    names = ", ".join(plot_cycle_repo.ONE_TIME_FIELD_LABELS[f] for f in changed)
     return (
-        f"รหัส Supplier \"{shown}\" ใช้สร้างรหัสแปลงอัตโนมัติไม่ได้ "
-        "ต้องเป็น A-Z, 0-9, '-' หรือ '_' เท่านั้น และขึ้นต้นด้วยตัวอักษรหรือตัวเลข "
-        "กรุณาแก้รหัส Supplier ที่เมนู Supplier ก่อน หรือกรอกรหัสแปลงเอง"
+        f"แก้ไขไม่ได้: {names} กำหนดได้ครั้งเดียวตอนสร้างรอบปลูก "
+        "(ผูกกับ Lot No ที่ระบบสร้างแล้ว) — ถ้าข้อมูลผิด ให้ยกเลิกรอบปลูกแล้วสร้างแปลงใหม่"
     )
 
 
@@ -359,8 +362,10 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
     already out (see test_legacy_rollover_actions_are_not_default_example_rows)."""
     return [
         {
+            # Round V — no plotCode: it is generated, and a typed one is
+            # refused. The example shows the blank cell a real row needs.
             "action": "create_plot_with_cycle",
-            "supplierCode": supplier_code, "plotCode": "P101",
+            "supplierCode": supplier_code,
             "plotName": "แปลงตัวอย่าง (สร้างใหม่)",
             "primaryPhone": "0845552162", "additionalPhones": "0855551234",
             "village": "ต.ตัวอย่าง", "district": "อ.ตัวอย่าง", "province": "เชียงใหม่",
@@ -387,11 +392,15 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "newInspectionPassword": "1357",
         },
         {
+            # Round V — an update edits GREEN cells only. The orange ones
+            # (crop / variety / cycleLabel / pCode) are left blank, which keeps
+            # the stored values; a different value there would be refused.
             "action": "update_current_cycle",
-            "supplierCode": supplier_code, "plotCode": "P002",
+            "supplierCode": supplier_code, "plotCode": f"{supplier_code}-2605-002",
+            "plotName": "แปลงตัวอย่าง (เปลี่ยนชื่อ)",
             "primaryPhone": "0899991234",
-            "crop": "พริก", "variety": "พริกหยวก", "cycleLabel": "may2026",
-            "poNumber": "PO25002", "pCode": "Chili-B",
+            "village": "บ้านใหม่", "rai": "6.5",
+            "poNumber": "PO25002",
             "supplierLotNo": "SUP-LOT-2026-02",
             # Round 8-21A — example shows a genuine edit: nonblank text is
             # trimmed and saved. Leaving a cell like this blank on an
@@ -407,12 +416,13 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "newInspectionPassword": "135790",
         },
         {
-            # Round 8-7A — final_plot: closes the active cycle as harvested
-            # (Plot stays is_active=true). Round 8-10B: the numbers are always
-            # kilograms and the inspection record is resolved server-side, so
-            # neither has a column here any more.
+            # Round 8-7A — final_plot: closes the active cycle as harvested.
+            # Round P — and retires the plot with it (for a caller who holds
+            # plots.delete). Round 8-10B: the numbers are always kilograms and
+            # the inspection record is resolved server-side, so neither has a
+            # column here any more.
             "action": "final_plot",
-            "supplierCode": supplier_code, "plotCode": "P001",
+            "supplierCode": supplier_code, "plotCode": f"{supplier_code}-2605-001",
             "cycleLabel": "jul2026",
             "harvestYield": "1250", "finalYieldAfterClean": "1180",
             "harvestDate": "2026-07-28",
@@ -441,10 +451,7 @@ def _plot_template_workbook(suppliers: list[Supplier]) -> bytes:
          never reads.
     """
     supplier_code = suppliers[0].code if suppliers else "SUP001"
-    return build_xlsx([
-        (_SHEET_NEW_CYCLE, [_header_row(), _description_row()]),
-        (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
-    ])
+    return _template_workbook([_header_row(), _description_row()], supplier_code)
 
 
 # --- Round 8-6A: filter-aware contextual template (Backend foundation) -----
@@ -459,51 +466,101 @@ def _plot_template_workbook(suppliers: list[Supplier]) -> bytes:
 _SHEET_NEW_CYCLE = "นำเข้ารอบใหม่"
 _SHEET_EXAMPLES = "ตัวอย่าง"
 
-# Column → style classification for Sheet 1 (Part C "Style"). Every
-# IMPORT_COLUMNS entry is in exactly one of these two sets — asserted once at
-# import time below so the split can never silently drift from IMPORT_COLUMNS.
-_REFERENCE_COLUMNS: frozenset[str] = frozenset({
-    "action", "supplierCode", "plotCode", "plotName", "primaryPhone", "additionalPhones",
-    "village", "district", "province", "latitude", "longitude", "rai",
-    # Round 8-6J — informational only; never read by the importer (see
-    # plot_import.IMPORT_COLUMNS's own comment), so it's a reference column
-    # like the others: styled gray, never yellow/editable.
-    "currentPlotStatus",
-    # Round 8-9B.1 — same deal: exported so the user can SEE which plots
-    # already have an inspection password, never read back by the importer.
-    # Gray/reference, so it never invites editing.
-    "inspectionPasswordStatus",
-})
-_EDITABLE_COLUMNS: frozenset[str] = frozenset({
-    # Round A — lotNo is gone from this set with the column itself: the system
-    # Lot No is generated at cycle creation and is not editable by anyone.
-    # supplierLotNo (the supplier's own) remains normal, editable input.
-    "crop", "variety", "cycleLabel", "poNumber", "pCode", "supplierLotNo",
-    # Round 8-21A — same category as supplierLotNo above: genuine, optional
-    # user input, never plot/supplier identity.
-    "oracleSupplierCode", "oracleInvoice", "refAccount",
-    "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit",
-    # Round 8-7A — final_plot's actual-harvest columns; all genuine user
-    # input (none are plot/supplier identity columns), so every one of them is
-    # editable/yellow, none reference/gray. Round 8-10B dropped two of the
-    # original six: the figures are always kg and the server picks the
-    # inspection record itself, so neither was ever a real user decision.
-    "harvestYield", "finalYieldAfterClean", "harvestDate", "finalNote",
-    # Round 8-9B.1 — the ONE password input column: genuine user input, so
-    # editable/yellow. Always exported BLANK (see _update_cycle_row_values) — a
-    # downloaded template never carries an existing password back out.
-    "newInspectionPassword",
-})
-assert _REFERENCE_COLUMNS | _EDITABLE_COLUMNS == set(plot_import.IMPORT_COLUMNS)
-assert not (_REFERENCE_COLUMNS & _EDITABLE_COLUMNS)
+_SHEET_LEGEND = "วิธีกรอก"
 
-# Style constants (Part C/E) — a solid background (+ bold/font color where
-# specified), always legible text-on-fill. Colors are 8-digit ARGB hex.
-_STYLE_HEADER = CellStyle(bg="FFDCE6F1", bold=True)          # header row
-_STYLE_DESCRIPTION = CellStyle(bg="FFD9D9D9")                # description row
-_STYLE_REFERENCE = CellStyle(bg="FFF2F2F2")                  # identity/reference cols
-_STYLE_EDITABLE = CellStyle(bg="FFFFF9C4")                   # new-cycle editable cols
-_STYLE_EXAMPLE = CellStyle(bg="FFFFCDD2", font_color="FFB71C1C")  # example rows (Sheet 2)
+# Round V — every Sheet 1 column is one of FOUR kinds, and the kind is its
+# colour: header, description row, data rows and the pre-painted blank rows
+# alike. This replaces round 8-6A's two-way gray/yellow split, which told the
+# user the wrong thing twice — the `action` cell was gray although it is the
+# cell a user changes to close a season, and crop / variety / P.Code / cycle
+# label were yellow ("edit me") although the Auto Lot is built from them.
+_KIND_SYSTEM = "system"      # gray   — the system decides; never typed or changed
+_KIND_ONE_TIME = "one_time"  # orange — typed once, on create; fixed afterwards
+_KIND_EDITABLE = "editable"  # green  — may change on any update_current_cycle row
+_KIND_FINAL = "final"        # blue   — read only by final_plot
+
+_TEMPLATE_COLUMN_KIND: dict[str, str] = {
+    "action": _KIND_EDITABLE,
+    # Chosen on create; on an existing row it addresses the plot, so it can't
+    # change there either.
+    "supplierCode": _KIND_ONE_TIME,
+    # Informational only — exported, never read back (plot_import).
+    "supplierName": _KIND_SYSTEM,
+    "plotCode": _KIND_SYSTEM,
+    "plotName": _KIND_EDITABLE,
+    "primaryPhone": _KIND_EDITABLE,
+    "additionalPhones": _KIND_EDITABLE,
+    "village": _KIND_EDITABLE,
+    "district": _KIND_EDITABLE,
+    "province": _KIND_EDITABLE,
+    "latitude": _KIND_EDITABLE,
+    "longitude": _KIND_EDITABLE,
+    "rai": _KIND_EDITABLE,
+    # The Auto Lot is built from these (plot_cycle_repository.
+    # ONE_TIME_CYCLE_FIELDS) — the importer refuses a change on an update row.
+    "crop": _KIND_ONE_TIME,
+    "variety": _KIND_ONE_TIME,
+    "cycleLabel": _KIND_ONE_TIME,
+    "pCode": _KIND_ONE_TIME,
+    "poNumber": _KIND_EDITABLE,
+    "systemLotNo": _KIND_SYSTEM,
+    "supplierLotNo": _KIND_EDITABLE,
+    "oracleSupplierCode": _KIND_EDITABLE,
+    "oracleInvoice": _KIND_EDITABLE,
+    "refAccount": _KIND_EDITABLE,
+    "plantingDate": _KIND_EDITABLE,
+    "plantCount": _KIND_EDITABLE,
+    "expectedYieldFull": _KIND_EDITABLE,
+    "expectedYieldUnit": _KIND_EDITABLE,
+    "currentPlotStatus": _KIND_SYSTEM,
+    "harvestYield": _KIND_FINAL,
+    "finalYieldAfterClean": _KIND_FINAL,
+    "harvestDate": _KIND_FINAL,
+    "finalNote": _KIND_FINAL,
+    "inspectionPasswordStatus": _KIND_SYSTEM,
+    # Always exported BLANK (see _update_cycle_row_values) — a downloaded
+    # template never carries an existing password back out.
+    "newInspectionPassword": _KIND_EDITABLE,
+}
+assert set(_TEMPLATE_COLUMN_KIND) == set(plot_import.IMPORT_COLUMNS)
+
+# A strong tone for the header, a light tone of the same hue for every cell
+# under it, always legible text-on-fill. Colors are 8-digit ARGB hex.
+_KIND_HEADER_STYLE: dict[str, CellStyle] = {
+    _KIND_SYSTEM: CellStyle(bg="FFBFBFBF", bold=True),
+    _KIND_ONE_TIME: CellStyle(bg="FFF4B183", bold=True),
+    _KIND_EDITABLE: CellStyle(bg="FFA9D08E", bold=True),
+    _KIND_FINAL: CellStyle(bg="FF9BC2E6", bold=True),
+}
+_KIND_CELL_STYLE: dict[str, CellStyle] = {
+    # Muted text too, so a system cell reads as "not yours" at a glance.
+    _KIND_SYSTEM: CellStyle(bg="FFEDEDED", font_color="FF595959"),
+    _KIND_ONE_TIME: CellStyle(bg="FFFCE4D6"),
+    _KIND_EDITABLE: CellStyle(bg="FFE2EFDA"),
+    _KIND_FINAL: CellStyle(bg="FFDDEBF7"),
+}
+# (colour name, what it means) — the legend sheet's first table.
+_KIND_LEGEND: dict[str, tuple[str, str]] = {
+    _KIND_SYSTEM: ("เทา", "ระบบกำหนด — ห้ามกรอก ห้ามแก้"),
+    _KIND_ONE_TIME: (
+        "ส้ม",
+        "กรอกครั้งเดียวตอนสร้าง — แก้ภายหลังไม่ได้ (แถว update_current_cycle "
+        "เว้นว่างหรือใส่ค่าเดิม)",
+    ),
+    _KIND_EDITABLE: (
+        "เขียว",
+        "แก้ไขได้ทุกครั้งที่ update_current_cycle — เว้นว่าง = คงค่าเดิม "
+        "(ยกเว้น Oracle 3 ช่อง ที่เว้นว่าง = ล้างค่า)",
+    ),
+    _KIND_FINAL: ("ฟ้า", "ใช้ตอนปิดรอบปลูก (final_plot) เท่านั้น"),
+}
+# Pre-painted empty rows under the data, so a row typed there shows at once
+# what may go in each cell. The reader skips a row with no values, so they
+# cost an import nothing.
+_BLANK_INPUT_ROWS = 200
+
+_STYLE_EXAMPLE = CellStyle(bg="FFFFCDD2", font_color="FFB71C1C")  # example rows
+_STYLE_BOLD = CellStyle(bold=True)
 
 _EXAMPLE_ONLY_NOTICE = "ข้อมูลตัวอย่างเท่านั้น — ระบบจะไม่นำเข้าชีตนี้"
 
@@ -516,15 +573,94 @@ _CURRENT_PLOT_STATUS_INACTIVE_LABEL = "ปิดใช้งาน"
 # read-only "why was this left out" sheet never looks like an editable or
 # importable one at a glance.
 
+def _cell_style(col: str) -> CellStyle:
+    return _KIND_CELL_STYLE[_TEMPLATE_COLUMN_KIND[col]]
+
+
 def _header_row() -> list[StyledCell]:
-    return [StyledCell(col, _STYLE_HEADER) for col in _PLOT_TEMPLATE_HEADERS]
+    return [
+        StyledCell(col, _KIND_HEADER_STYLE[_TEMPLATE_COLUMN_KIND[col]])
+        for col in _PLOT_TEMPLATE_HEADERS
+    ]
 
 
 def _description_row() -> list[StyledCell]:
     return [
-        StyledCell(plot_import.TEMPLATE_COLUMN_DESCRIPTIONS[col], _STYLE_DESCRIPTION)
+        StyledCell(plot_import.TEMPLATE_COLUMN_DESCRIPTIONS[col], _cell_style(col))
         for col in _PLOT_TEMPLATE_HEADERS
     ]
+
+
+def _blank_input_rows() -> list[list[StyledCell]]:
+    row = [StyledCell(None, _cell_style(col)) for col in _PLOT_TEMPLATE_HEADERS]
+    return [list(row) for _ in range(_BLANK_INPUT_ROWS)]
+
+
+def _column_title(col: str) -> str:
+    """A column's Thai name — the part of its description before " — "
+    (round V). `action` has no Thai name: its cell is the skip marker."""
+    if col == "action":
+        return "action"
+    return plot_import.TEMPLATE_COLUMN_DESCRIPTIONS[col].split(" — ", 1)[0]
+
+
+def _legend_sheet() -> list[list[Cell]]:
+    """Sheet "วิธีกรอก" (round V): what each colour means, which columns carry
+    it, and what each action expects. Never read by the importer — it reads
+    only the first sheet — and built from _TEMPLATE_COLUMN_KIND, so it can't
+    disagree with the colours it explains."""
+    rows: list[list[Cell]] = [
+        [StyledCell("วิธีกรอกไฟล์นำเข้าแปลงปลูก", _STYLE_BOLD)],
+        [],
+        [StyledCell(h, _STYLE_BOLD) for h in ("สีของช่อง", "ความหมาย", "คอลัมน์")],
+    ]
+    for kind, (colour, meaning) in _KIND_LEGEND.items():
+        columns = ", ".join(
+            _column_title(col) for col in _PLOT_TEMPLATE_HEADERS
+            if _TEMPLATE_COLUMN_KIND[col] == kind
+        )
+        rows.append([StyledCell(colour, _KIND_HEADER_STYLE[kind]), meaning, columns])
+    rows += [
+        [],
+        [StyledCell(h, _STYLE_BOLD) for h in ("action", "ใช้เมื่อ", "กรอกอะไร")],
+        [
+            plot_import.ACTION_CREATE, "สร้างแปลงใหม่พร้อมรอบปลูก",
+            "เว้นรหัสแปลงว่างไว้ · กรอกช่องส้มและช่องเขียว · "
+            "ระบบสร้างรหัสแปลงและ Lot No ให้",
+        ],
+        [
+            plot_import.ACTION_UPDATE, "แก้ข้อมูลแปลงที่มีอยู่",
+            "แก้ช่องเขียว · ช่องส้มเว้นว่างหรือใส่ค่าเดิม · ห้ามแก้ช่องเทา",
+        ],
+        [
+            plot_import.ACTION_FINAL, "ปิดรอบปลูก (ยืนยันหลังเก็บเกี่ยว) และปิดแปลง",
+            "กรอกช่องฟ้า หรือเว้นว่างให้ระบบใช้ผลจากหน้าตรวจแปลง · "
+            "ชื่อรอบปลูกต้องตรงกับรอบที่เปิดอยู่",
+        ],
+        [],
+        [StyledCell("ข้อควรรู้", _STYLE_BOLD)],
+        ["แถวที่ 1 คือชื่อคอลัมน์ที่ระบบอ่าน ห้ามแก้ · แถวที่ 2 คือคำอธิบาย ระบบข้ามแถวนี้"],
+        [
+            f"ระบบอ่านเฉพาะชีตแรก ({_SHEET_NEW_CYCLE}) · "
+            f"สูงสุด {plot_import.MAX_IMPORT_ROWS:,} แถวต่อไฟล์"
+        ],
+        ["ถ้ามีแถวใดผิด ระบบจะไม่บันทึกอะไรเลยทั้งไฟล์ — แก้ตามที่ Preview แจ้ง แล้วอัปโหลดใหม่"],
+    ]
+    return rows
+
+
+def _template_workbook(sheet1: list[list[Cell]], supplier_code: str) -> bytes:
+    """The one template shape (round 8-27E), with the legend sheet round V
+    added. Sheet order is load-bearing: excel_reader.read_first_sheet reads
+    only the FIRST sheet, so the import sheet must stay first."""
+    return build_xlsx(
+        [
+            (_SHEET_NEW_CYCLE, sheet1 + _blank_input_rows()),
+            (_SHEET_LEGEND, _legend_sheet()),
+            (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
+        ],
+        column_widths={_SHEET_LEGEND: [22, 70, 110]},
+    )
 
 
 def _plot_access_phone_fields(plot: Plot) -> tuple[str | None, str | None]:
@@ -583,6 +719,8 @@ def _update_cycle_row_values(
     return {
         "action": plot_import.ACTION_UPDATE,
         "supplierCode": plot.supplier.code if plot.supplier is not None else None,
+        # Round V — read-only, so a row says whose plot it is in words.
+        "supplierName": plot.supplier.name if plot.supplier is not None else None,
         "plotCode": plot.plot_code,
         "plotName": plot.name,
         "primaryPhone": primary_phone,
@@ -598,6 +736,8 @@ def _update_cycle_row_values(
         "cycleLabel": cycle.cycle_label if cycle is not None else None,
         "poNumber": cycle.po_number if cycle is not None else None,
         "pCode": cycle.p_code if cycle is not None else None,
+        # Round V — the system lot, back in the file as a read-only column.
+        "systemLotNo": cycle.lot_no if cycle is not None else None,
         # Round 8-12A — prefill the active cycle's CURRENT supplier lot number
         # so an edit round-trips it unchanged; blank when the cycle has none.
         "supplierLotNo": cycle.supplier_lot_no if cycle is not None else None,
@@ -721,13 +861,7 @@ def _new_cycle_sheet(
         if not plot.is_active:
             continue
         values = _update_cycle_row_values(plot, password_configured=configured)
-        rows.append([
-            StyledCell(
-                values.get(col),
-                _STYLE_EDITABLE if col in _EDITABLE_COLUMNS else _STYLE_REFERENCE,
-            )
-            for col in _PLOT_TEMPLATE_HEADERS
-        ])
+        rows.append([StyledCell(values.get(col), _cell_style(col)) for col in _PLOT_TEMPLATE_HEADERS])
     return rows
 
 
@@ -780,13 +914,9 @@ def _contextual_plot_template_workbook(
         who just clicked Download is actually looking.
     """
     supplier_code = plots[0].supplier.code if plots and plots[0].supplier is not None else "SUP001"
-    return build_xlsx([
-        (
-            _SHEET_NEW_CYCLE,
-            _new_cycle_sheet(plots, latest_cycles, credential_status),
-        ),
-        (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
-    ])
+    return _template_workbook(
+        _new_cycle_sheet(plots, latest_cycles, credential_status), supplier_code,
+    )
 
 
 PlotStatusFilter = Literal["all", "active", "inactive"]
@@ -1606,14 +1736,10 @@ async def create_plot(
     if scope == "supplier" and str(payload.supplier_id) != scope_supplier_id:
         raise HTTPException(status_code=403, detail="Cannot create a plot for another supplier")
 
-    # Round B — only a SUPPLIED code can collide here. A blank one is about to
-    # be generated, and the generator draws the next free running number in the
+    # Round V — the code is always generated (PlotCreate refuses a supplied
+    # one), and the generator draws the next free running number in the
     # supplier's month series, so there is nothing to pre-check; the partial
     # unique index is what settles a race (mapped to 409 below).
-    if payload.plot_code and payload.plot_code.strip():
-        existing = await repo.get_plot_by_code(db, payload.supplier_id, payload.plot_code)
-        if existing is not None:
-            raise HTTPException(status_code=409, detail="Plot code already exists for this supplier")
     try:
         plot = await repo.create_plot(db, payload)
     except PlotCodeSupplierCodeUnusableError as exc:
@@ -1676,13 +1802,8 @@ async def create_plot_with_cycle(
     if scope == "supplier" and str(payload.plot.supplier_id) != scope_supplier_id:
         raise HTTPException(status_code=403, detail="Cannot create a plot for another supplier")
 
-    # Round B — see POST /plots: a blank code is generated, so only a supplied
-    # one can be pre-checked for a duplicate.
-    if payload.plot.plot_code and payload.plot.plot_code.strip():
-        existing = await repo.get_plot_by_code(db, payload.plot.supplier_id, payload.plot.plot_code)
-        if existing is not None:
-            raise HTTPException(status_code=409, detail="Plot code already exists for this supplier")
-
+    # Round V — no duplicate pre-check: the code is always generated (see
+    # POST /plots), so there is no supplied code to look up.
     nc = payload.cycle
     # Round 8-15D — a brand-new cycle's crop/variety (if given) must exist and
     # be active in Master Data; a variety must belong to the chosen crop.
@@ -2275,35 +2396,15 @@ async def update_plot_cycle(
         )
 
     fields = payload.model_dump(exclude_unset=True)
-    # Round 8-17A.1 — an edit must never CLEAR an existing cycle label via an
-    # explicit blank/whitespace submission (cycle_label absent from the PATCH
-    # body still means "keep the current value" — exclude_unset semantics,
-    # unchanged). A currently-blank (legacy, pre-8-17A.1) label may stay
-    # blank when the row doesn't touch it — read-back compatibility, no
-    # forced backfill. Only a REAL attempt to blank out an existing label is
-    # rejected, using the same Thai message the create-time requirement uses.
-    effective_cycle_label = fields.get("cycle_label", cycle.cycle_label)
-    if cycle.cycle_label and not effective_cycle_label:
-        raise HTTPException(
-            status_code=422,
-            detail="กรุณาระบุชื่อรอบปลูก เนื่องจากใช้ระบุรอบและสร้าง Lot No อัตโนมัติ",
-        )
-    # Round 8-15D — an edit that changes crop/variety must land on an
-    # active, existing Master Data pair; a field absent from the PATCH body
-    # (exclude_unset) leaves the cycle's own current value as "effective",
-    # so an unchanged legacy pair that's since been deactivated still passes.
-    await master_data_validation.assert_crop_variety_valid(
-        db,
-        fields.get("crop", cycle.crop),
-        fields.get("variety", cycle.variety),
-        current_crop=cycle.crop,
-        current_variety=cycle.variety,
-        # Round 8-26C — same effective-value shape. p_code has its OWN
-        # unchanged-is-allowed check inside, so editing a legacy cycle that
-        # carries a free-text P.Code never demands the user fix it.
-        p_code=fields.get("p_code", cycle.p_code),
-        current_p_code=cycle.p_code,
-    )
+    # Round V — crop / variety / cycle label / P.Code are set once, when the
+    # cycle is created: the Auto Lot is built from them. Re-sending the stored
+    # value is harmless; any other value — including a blank one, which used to
+    # be refused only for the label (round 8-17A.1) — is refused here rather
+    # than dropped. With nothing changeable left, the Master Data check an
+    # edit used to run (round 8-15D) has nothing to check.
+    changed = plot_cycle_repo.changed_one_time_fields(cycle, fields)
+    if changed:
+        raise HTTPException(status_code=422, detail=_one_time_fields_detail(changed))
     # Round A — no lot-related failure mode is reachable here any more: an edit
     # never resolves, regenerates or renumbers a lot (see update_cycle), so the
     # AutoLotMissingComponentError / LotNumberTooLongError / running-number

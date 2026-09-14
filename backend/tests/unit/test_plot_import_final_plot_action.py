@@ -311,7 +311,7 @@ async def test_expected_yield_unit_validation_is_unaffected_by_final_yield_unit_
         patch(f"{_M}.plot_cycle_repo.get_active_cycle_for_plot", AsyncMock(return_value=None)),
     )
     row = {
-        "action": "create_plot_with_cycle", "supplierCode": "SUP001", "plotCode": "P101",
+        "action": "create_plot_with_cycle", "supplierCode": "SUP001", "plotCode": "",  # round V
         "plotName": "แปลงใหม่", "province": "เชียงใหม่", "poNumber": "PO25001", "pCode": "Melon-A",
         # cycleLabel required with a blank lotNo (round 8-12A.1).
         "cycleLabel": "2605",

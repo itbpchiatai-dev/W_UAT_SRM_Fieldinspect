@@ -93,6 +93,30 @@ class PlotCodeSupplierCodeUnusableError(ValueError):
         )
 
 
+# Round V — plot codes are generated only, like the Auto Lot. One wording for
+# the API (PlotCreate) and the Excel import's create rows.
+PLOT_CODE_IS_GENERATED_MESSAGE = (
+    "รหัสแปลงระบบสร้างให้อัตโนมัติ ({รหัส Supplier}-{ปีเดือน}-{เลขรัน}) "
+    "กำหนดเองไม่ได้ — กรุณาเว้นว่างไว้"
+)
+
+
+def supplier_code_unusable_detail(supplier_code: str | None) -> str:
+    """The Thai message for PlotCodeSupplierCodeUnusableError — one wording for
+    the plot endpoints and the Excel import alike.
+
+    Names the supplier and the rule: the code is stored master data, not
+    something the user typed, so naming it is safe and is the only way the
+    message is actionable. Round V dropped "or type the plot code yourself":
+    plot codes are generated only, so fixing the supplier is the one way out."""
+    shown = supplier_code.strip() if supplier_code and supplier_code.strip() else "(ว่าง)"
+    return (
+        f"รหัส Supplier \"{shown}\" ใช้สร้างรหัสแปลงอัตโนมัติไม่ได้ "
+        "ต้องเป็น A-Z, 0-9, '-' หรือ '_' เท่านั้น และขึ้นต้นด้วยตัวอักษรหรือตัวเลข "
+        "กรุณาแก้รหัส Supplier ที่เมนู Supplier ก่อน"
+    )
+
+
 def normalize_supplier_code_for_plot_code(value: str | None) -> str:
     """Trim + upper-case a supplier code for embedding in a plot code.
 

@@ -392,10 +392,11 @@ def _active_cycle(**over):
 
 async def test_update_never_touches_an_auto_lot() -> None:
     """The core round-A guarantee: an edit leaves lot_no / lot_no_source /
-    lot_running_no / auto_lot_series_key exactly as the cycle was created with,
-    even when the very fields the lot was BUILT from change in the same
-    request. A lot number may already be printed on shipped goods — nothing an
-    admin edits afterwards may move it."""
+    lot_running_no / auto_lot_series_key exactly as the cycle was created with.
+    A lot number may already be printed on shipped goods — nothing an admin
+    edits afterwards may move it. Round V went further: the fields the lot was
+    BUILT from are now fixed too, so update_cycle ignores them even when a
+    caller hands them over (the endpoints refuse such a request first)."""
     db = _mock_db()
     cycle = _active_cycle(
         lot_no="2605-SUP010-WM-141-001", lot_no_source="auto", lot_running_no=1,
@@ -407,11 +408,11 @@ async def test_update_never_touches_an_auto_lot() -> None:
             {"cycle_label": "26-may", "p_code": "WM-999", "crop": "พริก"},
         )
 
-    # The plan fields DID change...
-    assert cycle.cycle_label == "26-may"
-    assert cycle.p_code == "WM-999"
-    assert cycle.crop == "พริก"
-    # ...and the lot did not, in any of its four columns.
+    # Round V — the fields the lot was built from did NOT change...
+    assert cycle.cycle_label == "2605"
+    assert cycle.p_code == "WM-141"
+    assert cycle.crop != "พริก"
+    # ...and neither did the lot, in any of its four columns.
     assert cycle.lot_no == "2605-SUP010-WM-141-001"
     assert cycle.lot_no_source == "auto"
     assert cycle.lot_running_no == 1

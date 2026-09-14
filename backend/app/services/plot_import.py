@@ -110,8 +110,14 @@ from app.services.lot_number import (
 from app.services.loggers.activity_logger import ActivityLogger
 from app.services import master_data_validation
 from app.services.plot_code import (
+    PLOT_CODE_IS_GENERATED_MESSAGE,
+    PlotCodeSupplierCodeUnusableError,
+    PlotCodeTooLongError,
+    format_auto_plot_code,
     month_stamp,
+    normalize_supplier_code_for_plot_code,
     preview_auto_plot_code,
+    supplier_code_unusable_detail,
     today_in_bangkok,
 )
 
@@ -171,6 +177,27 @@ _MSG_RETIRED_ACTION = (
     "ฤดูถัดไปให้สร้างแปลงใหม่แทนการเปิดรอบใหม่ในแปลงเดิม "
     "กรุณาดาวน์โหลดเทมเพลตใหม่แล้วกรอกข้อมูลลงในไฟล์นั้น"
 )
+
+# Round V — the Excel column behind each one-time cycle field.
+_ONE_TIME_FIELD_COLUMNS: dict[str, str] = {
+    "crop": "crop", "variety": "variety", "cycle_label": "cycleLabel", "p_code": "pCode",
+}
+
+
+def _one_time_column_error(field: str, stored: str | None) -> str:
+    """An update row changed an orange (one-time) column. Says what the cell
+    has to be, because the fix is to put the stored value back — or, when the
+    stored value is itself wrong, to cancel the season and register the plot
+    again. The value is business data already shown in the downloaded file,
+    not anything secret."""
+    column = _ONE_TIME_FIELD_COLUMNS[field]
+    label = plot_cycle_repo.ONE_TIME_FIELD_LABELS[field]
+    shown = f"'{stored}'" if stored else "ว่าง"
+    return (
+        f"{column} ({label}) แก้ไม่ได้ — กำหนดครั้งเดียวตอนสร้างรอบปลูก (ช่องสีส้ม) "
+        f"ค่าที่บันทึกไว้คือ {shown}: ใส่ค่าเดิมหรือเว้นว่าง "
+        "ถ้าข้อมูลเดิมผิด ให้ยกเลิกรอบปลูกแล้วสร้างแปลงใหม่"
+    )
 
 # New-cycle actions that require pCode nonblank (round 8-13A: poNumber is no
 # longer required here — see the check below) and are subject to the Auto Lot
@@ -252,7 +279,10 @@ FINAL_PLOT_FIXED_YIELD_UNIT = ACTUAL_HARVEST_YIELD_UNIT
 # value, but a PRESENT-and-blank cell clears it (poNumber/pCode/
 # supplierLotNo never clear via a blank Excel cell at all).
 IMPORT_COLUMNS: list[str] = [
-    "action", "supplierCode", "plotCode", "plotName", "primaryPhone", "additionalPhones",
+    # Round V — supplierName is INFORMATIONAL ONLY, like currentPlotStatus:
+    # exported so a row says whose plot it is in words, never read back.
+    "action", "supplierCode", "supplierName", "plotCode", "plotName",
+    "primaryPhone", "additionalPhones",
     "village", "district",
     "province", "latitude", "longitude", "rai", "crop", "variety", "cycleLabel",
     # Round A — lotNo was REMOVED from the input contract, the same way round
@@ -262,7 +292,10 @@ IMPORT_COLUMNS: list[str] = [
     # number) is untouched and stays the one lot column anyone fills in. A
     # legacy workbook that still carries a lotNo header is accepted while the
     # cell is blank and REJECTED when it is not (_removed_input_column_errors).
-    "poNumber", "pCode", "supplierLotNo",
+    # Round V — systemLotNo shows that lot again, read-only, beside the
+    # supplier's own. A NEW name on purpose: a filled "lotNo" cell is still
+    # refused, and a display column must never trip that rule. Never parsed.
+    "poNumber", "pCode", "systemLotNo", "supplierLotNo",
     "oracleSupplierCode", "oracleInvoice", "refAccount",
     "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit",
     "currentPlotStatus",
@@ -322,11 +355,11 @@ TEMPLATE_DESCRIPTION_MARKER = "คำอธิบาย (ระบบไม่�
 # and matched by prefix, so this text can keep changing across rounds without
 # breaking the skip detection of any file (old or new) that starts with it.
 TEMPLATE_DESCRIPTION_ACTION = (
-    TEMPLATE_DESCRIPTION_MARKER + " — action มี 3 แบบ (ดูตัวอย่างแถวถัดไป): "
+    TEMPLATE_DESCRIPTION_MARKER + " — action มี 3 แบบ (ดูชีต วิธีกรอก และ ตัวอย่าง): "
     "create_plot_with_cycle = สร้างแปลงใหม่พร้อมรอบปลูก "
-    "(เว้น plotCode ว่างได้ ระบบจะสร้างรหัสให้), "
-    "update_current_cycle = แก้ข้อมูลรอบปลูกของแปลงที่มีอยู่แล้ว, "
-    "final_plot = ปิดรอบปลูกเป็นเก็บเกี่ยวแล้ว และบันทึกผลผลิตจริง "
+    "(เว้น plotCode ว่างไว้ ระบบสร้างรหัสให้), "
+    "update_current_cycle = แก้ข้อมูลแปลงและรอบปลูกของแปลงที่มีอยู่ (ช่องสีเขียว), "
+    "final_plot = ปิดรอบปลูก (ยืนยันหลังเก็บเกี่ยว) บันทึกผลผลิตจริง และปิดแปลง "
     "(เว้นช่องผลผลิตว่างได้ ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้). "
     "1 แปลง = 1 รอบปลูก — แปลงที่ปิดรอบแล้วไม่เปิดรอบใหม่ ให้สร้างแปลงใหม่แทน"
 )
@@ -339,73 +372,89 @@ TEMPLATE_DESCRIPTION_ACTION = (
 # app offers — three of them since round E (OFFERED_ACTIONS).
 TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     "action": TEMPLATE_DESCRIPTION_ACTION,
-    "supplierCode": "รหัส Supplier ที่มีอยู่ในระบบ เช่น SUP001 (จำเป็นทุก action)",
-    "plotCode": "รหัสแปลง เช่น JPS-2605-001: create_plot_with_cycle เว้นว่างได้ (ระบบสร้างให้ {รหัส Supplier}-{ปีเดือน}-{เลขรัน}) หรือกรอกเองก็ได้แต่ต้องไม่ซ้ำ; action อื่นต้องเป็นรหัสของแปลงที่มีอยู่แล้ว",
-    "plotName": "ชื่อแปลง (จำเป็นเฉพาะ create_plot_with_cycle)",
-    "primaryPhone": "เบอร์หลักสำหรับเข้าตรวจแปลง เช่น 0845552162; "
+    # Round V — every other cell opens with the column's Thai name, because row
+    # 1 has to stay the technical header the parser matches on ("supplierLotNo"
+    # is not a name anyone recognises). Each also states the rule its colour
+    # stands for (see plots.py _TEMPLATE_COLUMN_KIND and the "วิธีกรอก" sheet).
+    "supplierCode": "รหัส Supplier — รหัสที่มีอยู่ในระบบ เช่น SUP001 จำเป็นทุก action; "
+                    "กำหนดตอนสร้างแปลง แก้ภายหลังไม่ได้ (แถวที่มีอยู่ใช้ระบุแปลง)",
+    "supplierName": "ชื่อ Supplier — ใช้ดูอย่างเดียว ระบบไม่อ่านช่องนี้",
+    "plotCode": "รหัสแปลง — ระบบสร้างให้อัตโนมัติ {รหัส Supplier}-{ปีเดือน}-{เลขรัน} "
+                "เช่น JPS-2605-001: create_plot_with_cycle เว้นว่างไว้ ห้ามกรอก; "
+                "update_current_cycle / final_plot ใช้ระบุแปลง ห้ามแก้",
+    "plotName": "ชื่อแปลง — จำเป็นสำหรับ create_plot_with_cycle; "
+                "update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    "primaryPhone": "เบอร์หลัก — เบอร์สำหรับเข้าตรวจแปลง เช่น 0845552162; "
                     "เว้นว่างทั้งเบอร์หลักและเบอร์เสริมเพื่อคงค่าเดิมในแปลงที่มีอยู่",
-    "additionalPhones": "เบอร์เสริมสำหรับเข้าตรวจแปลง คั่นหลายเบอร์ด้วย comma "
+    "additionalPhones": "เบอร์เสริม — คั่นหลายเบอร์ด้วย comma "
                          "เช่น 0855551234,0866661234; ต้องมีเบอร์หลักเมื่อระบุเบอร์เสริม",
-    "village": "หมู่บ้าน/ตำบลของแปลง (ใช้ตอนสร้างแปลงใหม่, ไม่บังคับ)",
-    "district": "อำเภอของแปลง (ใช้ตอนสร้างแปลงใหม่, ไม่บังคับ)",
-    "province": "จังหวัดของแปลง (ใช้ตอนสร้างแปลงใหม่, ไม่บังคับ)",
-    "latitude": "ละติจูด เช่น 18.7883 ค่าระหว่าง -90 ถึง 90 (ใช้ตอนสร้างใหม่, ไม่บังคับ)",
-    "longitude": "ลองจิจูด เช่น 98.9853 ค่าระหว่าง -180 ถึง 180 (ใช้ตอนสร้างใหม่, ไม่บังคับ)",
-    "rai": "พื้นที่แปลง หน่วยไร่ เป็นตัวเลข 0 ขึ้นไป (ใช้ตอนสร้างใหม่, ไม่บังคับ)",
-    "crop": "ชนิดพืชของรอบปลูก เช่น พริก หรือ เมล่อน (ไม่บังคับ)",
-    "variety": "พันธุ์/สายพันธุ์ของรอบปลูก เช่น พริกขี้หนู (ไม่บังคับ)",
-    # Round 8-17A.1 — required (nonblank) for every action that opens a NEW
-    # cycle (create_plot_with_cycle/start_new_cycle/close_and_start_new_cycle/
-    # start_next_cycle/reactivate_plot_with_cycle) — it is a component of the
-    # Auto Lot the server generates there. update_current_cycle also requires
-    # it UNLESS the row leaves the cell blank on a cycle that is already
-    # unlabeled (legacy data — no forced backfill). final_plot never uses it.
-    "cycleLabel": "ชื่อรอบปลูกที่ผู้ใช้เข้าใจ เช่น jun2026 หรือ รอบ มิ.ย. 2026 "
-                  "(จำเป็นสำหรับ action ที่เริ่มรอบปลูกใหม่ทุกกรณี เพราะใช้สร้าง Lot No; "
-                  "update_current_cycle บังคับเช่นกันหากรอบปัจจุบันมีชื่อรอบอยู่แล้ว; "
-                  "final_plot ไม่ใช้คอลัมน์นี้)",
-    "poNumber": "เลข PO ของรอบปลูก (ไม่บังคับ) เว้นว่างได้ เช่น PO25001 "
-                "(ระบบแปลงเป็นตัวพิมพ์ใหญ่เมื่อกรอก); "
-                "update_current_cycle เว้นว่างเพื่อคงค่าเดิม",
-    "pCode": "รหัสสินค้า (P.Code) ของรอบปลูก เช่น Melon-A; "
-             "จำเป็นสำหรับ create_plot_with_cycle และ start_next_cycle; "
-             "update_current_cycle เว้นว่างเพื่อคงค่าเดิม",
-    "supplierLotNo": "เลข Lot ที่ Supplier กำหนดสำหรับรอบปลูกนี้ ไม่เกี่ยวกับ Lot No "
-                     "ที่ระบบสร้างให้ (ระบบสร้าง Lot No เอง "
-                     "{ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน} ตอนเปิดรอบปลูก และแก้ไขไม่ได้)",
+    "village": "หมู่บ้าน/ตำบล — ไม่บังคับ; update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    "district": "อำเภอ — ไม่บังคับ; update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    "province": "จังหวัด — ไม่บังคับ; update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    "latitude": "ละติจูด — เช่น 18.7883 ค่าระหว่าง -90 ถึง 90 ไม่บังคับ; "
+                "update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    "longitude": "ลองจิจูด — เช่น 98.9853 ค่าระหว่าง -180 ถึง 180 ไม่บังคับ; "
+                 "update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    "rai": "พื้นที่ (ไร่) — ตัวเลข 0 ขึ้นไป ไม่บังคับ; "
+           "update_current_cycle แก้ได้ (เว้นว่าง = คงค่าเดิม)",
+    # Round V — crop / variety / cycleLabel / pCode are the ONE-TIME columns:
+    # set by create_plot_with_cycle, then fixed, because the Auto Lot is built
+    # from them. An update row may leave them blank or repeat the stored value.
+    "crop": "ชนิดพืช — เช่น พริก กรอกครั้งเดียวตอนสร้างรอบปลูก แก้ภายหลังไม่ได้ "
+            "(update_current_cycle: เว้นว่างหรือใส่ค่าเดิม)",
+    "variety": "พันธุ์ — เช่น พริกขี้หนู จำเป็นตอนสร้าง กรอกครั้งเดียว แก้ภายหลังไม่ได้ "
+               "(update_current_cycle: เว้นว่างหรือใส่ค่าเดิม)",
+    "cycleLabel": "ชื่อรอบปลูก — เช่น jun2026 จำเป็นตอนสร้าง ใช้สร้าง Lot No "
+                  "กรอกครั้งเดียว แก้ภายหลังไม่ได้ (update_current_cycle: เว้นว่างหรือใส่ค่าเดิม; "
+                  "final_plot: ต้องตรงกับรอบที่เปิดอยู่)",
+    "poNumber": "PO Number — เลข PO ของรอบปลูก ไม่บังคับ เช่น PO25001 "
+                "(ระบบแปลงเป็นตัวพิมพ์ใหญ่); update_current_cycle เว้นว่างเพื่อคงค่าเดิม",
+    "pCode": "P.Code — รหัสสินค้าของพันธุ์ เช่น WM-141 จำเป็นตอนสร้าง ใช้สร้าง Lot No "
+             "กรอกครั้งเดียว แก้ภายหลังไม่ได้ (update_current_cycle: เว้นว่างหรือใส่ค่าเดิม)",
+    "systemLotNo": "Lot No ระบบ — ระบบสร้างให้ตอนเปิดรอบปลูก "
+                   "{ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน} "
+                   "ใช้ดูอย่างเดียว ระบบไม่อ่านช่องนี้ แก้ไขไม่ได้",
+    "supplierLotNo": "Lot No Supplier — เลข Lot ที่ Supplier กำหนดเอง ไม่บังคับ "
+                     "ไม่เกี่ยวกับ Lot No ระบบ; update_current_cycle เว้นว่างเพื่อคงค่าเดิม",
     # Round 8-21A — three independent, OPTIONAL reference columns. The
     # update_current_cycle note is deliberately different from poNumber/
-    # pCode/supplierLotNo above: those three only ever PRESERVE on a blank
-    # cell (clearing needs the admin UI). These three CLEAR on a blank cell
-    # when the column is present in the file at all — only a file with the
-    # column entirely absent (e.g. an older download) preserves the
-    # existing value.
-    "oracleSupplierCode": "รหัส Supplier ฝั่ง Oracle สำหรับรอบปลูกนี้ (ไม่บังคับ); "
+    # supplierLotNo above: those only ever PRESERVE on a blank cell (clearing
+    # needs the admin UI). These three CLEAR on a blank cell when the column is
+    # present in the file at all — only a file with the column entirely absent
+    # (e.g. an older download) preserves the existing value.
+    "oracleSupplierCode": "Oracle Supplier Code — รหัส Supplier ฝั่ง Oracle ไม่บังคับ; "
                            "update_current_cycle: เว้นว่างเซลล์นี้ (แต่คอลัมน์ยังอยู่ในไฟล์) "
                            "= ล้างค่า, ไม่มีคอลัมน์นี้ในไฟล์เลย = คงค่าเดิม",
-    "oracleInvoice": "เลขที่ใบแจ้งหนี้ (Invoice) ฝั่ง Oracle สำหรับรอบปลูกนี้ (ไม่บังคับ); "
+    "oracleInvoice": "Oracle Invoice — เลขที่ใบแจ้งหนี้ฝั่ง Oracle ไม่บังคับ; "
                       "update_current_cycle: เว้นว่างเซลล์นี้ (แต่คอลัมน์ยังอยู่ในไฟล์) "
                       "= ล้างค่า, ไม่มีคอลัมน์นี้ในไฟล์เลย = คงค่าเดิม",
-    "refAccount": "รหัสบัญชีอ้างอิง (Ref Account) สำหรับรอบปลูกนี้ (ไม่บังคับ); "
+    "refAccount": "Ref Account — รหัสบัญชีอ้างอิง ไม่บังคับ; "
                   "update_current_cycle: เว้นว่างเซลล์นี้ (แต่คอลัมน์ยังอยู่ในไฟล์) "
                   "= ล้างค่า, ไม่มีคอลัมน์นี้ในไฟล์เลย = คงค่าเดิม",
-    "plantingDate": "วันที่ปลูก รูปแบบ YYYY-MM-DD เช่น 2026-06-01 (ไม่บังคับ)",
-    "plantCount": "จำนวนต้น/จำนวนปลูก ต้องเป็นจำนวนเต็ม 0 ขึ้นไป (ไม่บังคับ)",
-    "expectedYieldFull": "ผลผลิตที่คาดเมื่อได้ 100% เป็นตัวเลข 0 ขึ้นไป เช่น 800 (ไม่บังคับ)",
-    "expectedYieldUnit": "หน่วยผลผลิต เช่น kg, g, ตัน, ผล หรือ ลัง; ต้องกรอกเมื่อมี expectedYieldFull",
+    "plantingDate": "วันที่ปลูก — รูปแบบ YYYY-MM-DD เช่น 2026-06-01 ไม่บังคับ "
+                    "(ตอนสร้าง ใช้เป็นปีเดือนในรหัสแปลง)",
+    "plantCount": "จำนวนต้น — จำนวนเต็ม 0 ขึ้นไป ไม่บังคับ",
+    "expectedYieldFull": "เป้าผลผลิต (100%) — ผลผลิตที่คาดเมื่อได้ 100% "
+                         "ตัวเลข 0 ขึ้นไป เช่น 800 ไม่บังคับ",
+    "expectedYieldUnit": "หน่วยผลผลิต — เช่น kg, g, ตัน, ผล หรือ ลัง; "
+                         "ต้องกรอกเมื่อมีเป้าผลผลิต",
     "currentPlotStatus": (
-        "สถานะแปลงปัจจุบันเพื่อใช้อ้างอิงเท่านั้น การเปลี่ยนค่าในช่องนี้ไม่ทำให้สถานะแปลงเปลี่ยน "
+        "สถานะแปลง — ใช้อ้างอิงเท่านั้น การเปลี่ยนค่าในช่องนี้ไม่ทำให้สถานะแปลงเปลี่ยน "
         "กรุณาใช้ action ที่ถูกต้อง"
     ),
     # Round 8-10B — the unit is stated in the description because the column
     # that used to carry it is gone; these two numbers are ALWAYS kilograms.
-    "harvestYield": "ผลผลิตตอนเก็บเกี่ยว หน่วยกิโลกรัม (kg) สำหรับ final_plot — เว้นว่างได้ ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้",
-    "finalYieldAfterClean": "ผลผลิตจริงหลังทำความสะอาด หน่วยกิโลกรัม (kg) สำหรับ final_plot — เว้นว่างได้ ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้",
-    "harvestDate": "วันที่เก็บเกี่ยว รูปแบบ YYYY-MM-DD — เว้นว่างได้ ระบบจะใช้วันที่ของบันทึกการตรวจที่รายงานผลผลิตให้",
-    "finalNote": "หมายเหตุผลการเก็บเกี่ยว ไม่บังคับ",
-    "inspectionPasswordStatus": "สถานะรหัสยืนยันแปลงปัจจุบัน ใช้ดูข้อมูลเท่านั้น",
+    "harvestYield": "ผลผลิตเก็บเกี่ยว — หน่วยกิโลกรัม (kg) สำหรับ final_plot เว้นว่างได้ "
+                    "ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้",
+    "finalYieldAfterClean": "ผลผลิตหลังทำความสะอาด — หน่วยกิโลกรัม (kg) สำหรับ final_plot เว้นว่างได้ "
+                            "ระบบจะใช้ค่าที่บันทึกจากหน้าตรวจแปลงให้",
+    "harvestDate": "วันที่เก็บเกี่ยว — รูปแบบ YYYY-MM-DD สำหรับ final_plot เว้นว่างได้ "
+                   "ระบบจะใช้วันที่ของบันทึกการตรวจที่รายงานผลผลิตให้",
+    "finalNote": "หมายเหตุการเก็บเกี่ยว — สำหรับ final_plot ไม่บังคับ",
+    "inspectionPasswordStatus": "สถานะรหัสยืนยันแปลง — ใช้ดูข้อมูลเท่านั้น",
     "newInspectionPassword": (
-        "กรอกตัวเลข 4 ถึง 20 หลักเมื่อต้องการตั้งหรือเปลี่ยนรหัส เว้นว่างเพื่อคงรหัสเดิม"
+        "รหัสยืนยันแปลงใหม่ — กรอกตัวเลข 4 ถึง 20 หลักเมื่อต้องการตั้งหรือเปลี่ยนรหัส "
+        "เว้นว่างเพื่อคงรหัสเดิม"
     ),
 }
 
@@ -630,23 +679,11 @@ class _RowState:
     # lot → preserve). None when there's no active cycle.
     active_cycle_lot_no: str | None = None
     active_cycle_po_number: str | None = None
-    # Round 8-12A — the active cycle's cycleLabel/pCode, captured in the SAME
-    # lookup, so update_current_cycle's Auto Lot preview can regenerate from
-    # the EFFECTIVE values (row value if given, else the cycle's own) exactly
-    # as the repository will at commit.
+    # Round 8-12A — the active cycle's cycleLabel, captured in the SAME lookup.
     active_cycle_label: str | None = None
-    active_cycle_p_code: str | None = None
-    # Round 8-15D — the active cycle's own crop/variety, captured in the SAME
-    # lookup as the lot/PO/label fields above, so update_current_cycle's
-    # batched Master Data check (_apply_master_data_crop_variety_checks) can
-    # tell "unchanged legacy value" (exempt, even if since deactivated) from
-    # a genuine change (must be active + correctly parented) with no extra
-    # query. None when there's no active cycle (new-cycle actions).
-    active_cycle_crop: str | None = None
-    active_cycle_variety: str | None = None
     # Round 8-15D — True when this row needs the batched crop/variety-vs-
-    # Master-Data check (every action except final_plot, which never touches
-    # crop/variety). Set by _validate_row; the actual DB lookup + error
+    # Master-Data check (round V: create rows only — nothing else can set
+    # crop/variety any more). Set by _validate_row; the actual DB lookup + error
     # assignment happens in _validate_all's second pass
     # (_apply_master_data_crop_variety_checks), never here — same
     # cross-boundary-flag pattern as needs_cycle_label_history_check.
@@ -1196,7 +1233,16 @@ async def _validate_row(
     # Stop before DB lookups if the row is already unusable (no action/codes).
     # A retired action fails this too — its error is already recorded above,
     # and there is nothing to look up for a row that will never execute.
-    if not p.action or p.action not in OFFERED_ACTIONS or not p.supplier_code or not p.plot_code:
+    # Round V — a blank plotCode is only "unusable" for the actions that look an
+    # EXISTING plot up by it. On a create row blank is the one valid value:
+    # round B made it mean "generate the code", but this line kept returning
+    # here for it, before the supplier was resolved — so such a row previewed
+    # as valid with no supplier, no scope check and no Master Data check, and
+    # then crashed at commit on `assert state.supplier is not None`.
+    if (
+        not p.action or p.action not in OFFERED_ACTIONS or not p.supplier_code
+        or (not p.plot_code and p.action != ACTION_CREATE)
+    ):
         return state
 
     supplier = await supplier_repo.get_supplier_by_code(db, p.supplier_code)
@@ -1253,34 +1299,36 @@ async def _validate_row(
         elif not supplier_code_for_lot:
             errors.append("ไม่พบ Supplier ของแปลง กรุณาตรวจสอบข้อมูลแปลง")
 
-    # Round B — a create row with a blank plotCode has nothing to look up: its
-    # code does not exist yet. Skipping the lookup (rather than passing "") is
-    # what makes "several new plots for one supplier in one file" work, since
-    # every such row would otherwise resolve to the same empty code.
-    plot = (
-        await plot_repo.get_plot_by_code(db, supplier.id, p.plot_code)
-        if p.plot_code
-        else None
-    )
-    if plot is not None:
-        state.plot = plot
-        state.existing_plot_id = plot.id
-
     if p.action == ACTION_CREATE:
         if not p.plot_name:
             errors.append("ต้องระบุ plotName สำหรับ create_plot_with_cycle")
-        if plot is not None:
-            errors.append("plotCode นี้มีอยู่แล้วสำหรับ Supplier นี้")
-        # Round B — preview what the server WILL generate for a blank-code row,
-        # so the user approves a real format rather than an empty cell. "###"
-        # stands for the running number, allocated only at commit under the
-        # series — preview never reserves one (same contract as the Auto Lot
-        # preview above).
-        if not p.plot_code:
-            state.proposed_plot_code = preview_auto_plot_code(
-                ctx_supplier_code(state),
-                month_stamp(p.planting_date or today_in_bangkok()),
+        # Round V — the code is generated, never typed (same rule as the Auto
+        # Lot, and as PlotCreate on the API). A create row has no existing plot
+        # to look up, so nothing is looked up: several new plots for one
+        # supplier in one file all arrive with the same blank cell.
+        if p.plot_code:
+            errors.append(PLOT_CODE_IS_GENERATED_MESSAGE)
+        month = month_stamp(p.planting_date or today_in_bangkok())
+        # Round V — generating can still fail on the supplier's own code. Find
+        # that out here, at running 1000 (the 3→4-digit growth), rather than as
+        # an unhandled error at commit.
+        try:
+            format_auto_plot_code(
+                supplier_code=normalize_supplier_code_for_plot_code(ctx_supplier_code(state)),
+                month=month, running=1000,
             )
+        except PlotCodeSupplierCodeUnusableError:
+            errors.append(supplier_code_unusable_detail(ctx_supplier_code(state)))
+        except PlotCodeTooLongError:
+            errors.append(
+                "รหัสแปลงที่ระบบจะสร้าง ({รหัส Supplier}-{ปีเดือน}-{เลขรัน}) ยาวเกิน "
+                "50 ตัวอักษร กรุณาย่อรหัส Supplier ที่เมนู Supplier"
+            )
+        # Round B — preview what the server WILL generate, so the user approves
+        # a real format rather than an empty cell. "###" stands for the running
+        # number, allocated only at commit under the series — preview never
+        # reserves one (same contract as the Auto Lot preview above).
+        state.proposed_plot_code = preview_auto_plot_code(ctx_supplier_code(state), month)
         # Round 8-15D — a brand-new plot's first cycle has no "current" pair,
         # so this is always a full new-cycle crop/variety check.
         state.needs_master_data_check = True
@@ -1288,6 +1336,10 @@ async def _validate_row(
 
     # update_current_cycle and final_plot both address an EXISTING, ACTIVE
     # plot. (create_plot_with_cycle returned above — it has no plot to find.)
+    plot = await plot_repo.get_plot_by_code(db, supplier.id, p.plot_code)
+    if plot is not None:
+        state.plot = plot
+        state.existing_plot_id = plot.id
     if plot is None:
         errors.append(
             "ไม่พบแปลง (plotCode) สำหรับ Supplier นี้ — หากต้องการสร้างแปลงใหม่ "
@@ -1306,36 +1358,32 @@ async def _validate_row(
         state.active_cycle_lot_no = active.lot_no
         state.active_cycle_po_number = active.po_number
         state.active_cycle_label = active.cycle_label
-        state.active_cycle_p_code = active.p_code
         state.active_cycle_no = active.cycle_no
         state.active_cycle_updated_at = active.updated_at
-        # Round 8-15D — the active cycle's own crop/variety, for
-        # update_current_cycle's "unchanged legacy value" exemption.
-        state.active_cycle_crop = active.crop
-        state.active_cycle_variety = active.variety
-    # Round 8-15D — every action reaching this point except final_plot
-    # touches crop/variety (start/rollover/start_next open a NEW cycle;
-    # update_current_cycle replaces the plan; reactivate opens a first new
-    # cycle on a reopened plot) — flag for the batched Master Data check.
-    if p.action != ACTION_FINAL:
-        state.needs_master_data_check = True
+    # Round V — nothing reaching this point sets crop/variety any more:
+    # update_current_cycle cannot change them and final_plot never could, so
+    # neither is flagged for the batched Master Data check (round 8-15D). Only
+    # create rows are, above.
     if p.action == ACTION_UPDATE and active is None:
         errors.append(
             "แปลงนี้ยังไม่มีรอบปลูกที่เปิดอยู่ — ไม่มีรอบให้แก้ไข "
             "(1 แปลง = 1 รอบปลูก: ฤดูถัดไปให้สร้างแปลงใหม่)"
         )
     elif p.action == ACTION_UPDATE and active is not None:
-        # Round 8-17A.1 — update_current_cycle replaces cycle_label in full
-        # (see the fields dict built in _execute_row: unlike poNumber/pCode,
-        # cycle_label has no "blank cell = preserve" carve-out). A
-        # blank cell would therefore CLEAR an existing label; block that
-        # specific case only — a row that leaves a legacy (already-None)
-        # label blank is a no-op, not a clear, and must keep reading back
-        # fine (no forced backfill for old cycles).
-        if not p.cycle_label and active.cycle_label:
-            errors.append(
-                "กรุณาระบุชื่อรอบปลูก เนื่องจากใช้ระบุรอบและสร้าง Lot No อัตโนมัติ"
-            )
+        # Round V — the orange columns were set when the cycle was created,
+        # and the Auto Lot is built from them. An update row may leave them
+        # blank or repeat the stored value; a different value is refused here,
+        # naming the value it has to be, rather than dropped. (Round 8-17A.1's
+        # "a blank label would clear it" check went with the write it guarded:
+        # an update no longer writes the label at all.)
+        filled = {
+            field: value for field, value in (
+                ("crop", p.crop), ("variety", p.variety),
+                ("cycle_label", p.cycle_label), ("p_code", p.p_code),
+            ) if value
+        }
+        for field in plot_cycle_repo.changed_one_time_fields(active, filled):
+            errors.append(_one_time_column_error(field, getattr(active, field)))
     if p.action == ACTION_FINAL:
         if active is None:
             errors.append("แปลงนี้ไม่มีรอบปลูกที่เปิดอยู่ จึงไม่สามารถลงผลผลิตสุดท้ายได้")
@@ -1614,15 +1662,13 @@ async def _apply_credential_status(db: AsyncSession, states: list["_RowState"]) 
 
 async def _apply_master_data_crop_variety_checks(db: AsyncSession, states: list["_RowState"]) -> None:
     """Round 8-15D — the batched second pass enforcing that a NEW cycle's
-    crop/variety (create_plot_with_cycle, start_new_cycle,
-    close_and_start_new_cycle, start_next_cycle, reactivate_plot_with_cycle)
-    and any CHANGED crop/variety on update_current_cycle reference an
-    existing, ACTIVE Master Data value — and that a variety belongs to the
-    chosen crop. An update_current_cycle row whose effective crop/variety is
-    IDENTICAL to the plot's current active cycle is exempt even if that
-    legacy value has since been deactivated (history is never invalidated
-    retroactively); final_plot never reaches this pass at all
-    (needs_master_data_check is never set for it).
+    crop/variety reference an existing, ACTIVE Master Data value — and that a
+    variety belongs to the chosen crop.
+
+    Round V — create_plot_with_cycle is the only action that still sets them:
+    update_current_cycle refuses a change outright (changed_one_time_fields),
+    so the "an unchanged legacy value on an update is exempt" carve-out this
+    pass used to carry has nothing left to exempt. final_plot never reached it.
 
     Batched exactly like _apply_cycle_label_history_checks: ONE query for
     every crop value + ONE for every variety value across the WHOLE file,
@@ -1633,26 +1679,16 @@ async def _apply_master_data_crop_variety_checks(db: AsyncSession, states: list[
     crop_values = {s.parsed.crop for s in relevant if s.parsed.crop}
     variety_values = {s.parsed.variety for s in relevant if s.parsed.variety}
     # Round 8-26C — pCode joins the same batch (one more query for the whole
-    # file, never one per row). An update_current_cycle row with a BLANK
-    # pCode cell preserves the cycle's existing value (see _execute_row), so
-    # the value actually validated is the effective one, not the raw cell —
-    # otherwise a blank cell would read as "clearing to None" and a legacy
-    # P.Code would look changed on every untouched row.
+    # file, never one per row).
     p_code_values = {s.parsed.p_code for s in relevant if s.parsed.p_code}
     lookup = await master_data_validation.load_crop_variety_lookup(
         db, crop_values, variety_values, p_code_values,
     )
     for s in relevant:
         p = s.parsed
-        is_update = p.action == ACTION_UPDATE
-        effective_p_code = p.p_code or (s.active_cycle_p_code if is_update else None)
         s.errors.extend(
             master_data_validation.crop_variety_errors(
-                lookup, p.crop, p.variety,
-                current_crop=s.active_cycle_crop if is_update else None,
-                current_variety=s.active_cycle_variety if is_update else None,
-                p_code=effective_p_code,
-                current_p_code=s.active_cycle_p_code if is_update else None,
+                lookup, p.crop, p.variety, p_code=p.p_code,
             )
         )
 
@@ -1914,10 +1950,8 @@ async def _execute_row(
             db,
             PlotCreate(
                 supplier_id=state.supplier.id,
-                # Round B — None (not "") when the cell is blank: that is what
-                # asks the repository to generate the code. An empty string
-                # would be a "supplied" code and fail the length rule.
-                plot_code=p.plot_code or None,
+                # Round V — no plot_code: it is always generated (a typed one
+                # was refused in _validate_row, and PlotCreate refuses it too).
                 name=p.plot_name or "",
                 village=p.village, district=p.district, province=p.province,
                 latitude=p.latitude, longitude=p.longitude, rai=p.rai,
@@ -2070,9 +2104,12 @@ async def _execute_row(
         # commit — fail the whole transaction rather than silently skip.
         raise ImportFileError("รอบปลูกที่เปิดอยู่หายไประหว่างนำเข้า")
     # Round 8-5B — update_current_cycle preserve semantics (exclude_unset):
-    #   - crop/variety/cycleLabel/plantingDate/plantCount/expectedYield* are
-    #     replaced as before (Excel edits the whole plan).
-    #   - poNumber/pCode: sent only when nonblank (blank = preserve existing).
+    #   - plantingDate/plantCount/expectedYield* are replaced as before (Excel
+    #     edits the whole plan).
+    #   - crop/variety/cycleLabel/pCode (round V): NEVER written. They are set
+    #     when the cycle is created and the Auto Lot is built from them;
+    #     _validate_row already refused any row that tried to change one.
+    #   - poNumber: sent only when nonblank (blank = preserve existing).
     #   - supplierLotNo (round 8-12A): sent only when nonblank, same preserve
     #     rule — so an older workbook with no such column, or a row that leaves
     #     the cell empty, never wipes a supplier lot number that is already
@@ -2092,15 +2129,12 @@ async def _execute_row(
     #     anyway. An edit therefore always leaves the cycle's existing lot
     #     exactly as it is (including a legacy cycle that has none).
     fields: dict[str, Any] = {
-        "crop": p.crop, "variety": p.variety, "cycle_label": p.cycle_label,
         "planting_date": p.planting_date, "plant_count": p.plant_count,
         "expected_yield_full": p.expected_yield_full,
         "expected_yield_unit": p.expected_yield_unit,
     }
     if p.po_number:
         fields["po_number"] = p.po_number
-    if p.p_code:
-        fields["p_code"] = p.p_code
     if p.supplier_lot_no:
         fields["supplier_lot_no"] = p.supplier_lot_no
     if p.oracle_supplier_code_given:
@@ -2111,6 +2145,21 @@ async def _execute_row(
         fields["ref_account"] = p.ref_account
     await plot_cycle_repo.update_cycle(db, cycle, fields)
     await plot_cycle_repo.sync_plot_mirror_from_cycle(db, plot, cycle)
+    # Round V — the plot's own details. Until now an update row validated
+    # plotName / village / district / province / latitude / longitude / rai
+    # and then wrote none of them, while reporting success; the web form has
+    # always been able to edit them. A blank cell keeps the stored value, the
+    # same rule poNumber and supplierLotNo follow — a spreadsheet cannot tell
+    # "not given" from "clear it", so blank is never read as a delete.
+    plot_changes = {
+        key: value for key, value in (
+            ("name", p.plot_name), ("village", p.village), ("district", p.district),
+            ("province", p.province), ("latitude", p.latitude),
+            ("longitude", p.longitude), ("rai", p.rai),
+        ) if value not in (None, "")
+    }
+    if plot_changes:
+        await plot_repo.update_plot(db, plot, PlotUpdate(**plot_changes))
     _capture_lot_result(state, cycle)
     await _apply_phone_config(db, plot, p)
     state.result_cycle_no = cycle.cycle_no

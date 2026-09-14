@@ -71,7 +71,7 @@ def _user(**o):
 
 def _payload(**o) -> PlotWithCycleCreate:
     d = dict(
-        plot=PlotCreate(supplierId=uuid4(), plotCode="P101", name="แปลง A"),
+        plot=PlotCreate(supplierId=uuid4(), name="แปลง A"),
         cycle=PlotCycleCreate(
             cycleLabel="jun2026", crop="พริก", variety="พริกขี้หนู", lotNo="LOT-01",
             poNumber="PO25001", pCode="Melon-A",
@@ -88,7 +88,7 @@ def _payload(**o) -> PlotWithCycleCreate:
 def test_with_cycle_create_rejects_extra_top_level_fields() -> None:
     with pytest.raises(ValidationError):
         PlotWithCycleCreate(
-            plot=PlotCreate(supplierId=uuid4(), plotCode="P1", name="A"),
+            plot=PlotCreate(supplierId=uuid4(), name="A"),
             cycle=PlotCycleCreate(),
             qrKey="sneaky",
         )
@@ -97,7 +97,7 @@ def test_with_cycle_create_rejects_extra_top_level_fields() -> None:
 def test_with_cycle_create_nested_camelcase_round_trips() -> None:
     sid = uuid4()
     p = PlotWithCycleCreate.model_validate({
-        "plot": {"supplierId": str(sid), "plotCode": "P1", "name": "A"},
+        "plot": {"supplierId": str(sid), "name": "A"},
         "cycle": {"cycleLabel": "aug2026", "poNumber": "po25001", "pCode": "Melon-A", "expectedYieldFull": "500", "expectedYieldUnit": "kg"},
     })
     assert p.plot.supplier_id == sid
@@ -110,7 +110,7 @@ async def test_with_cycle_create_success_returns_201_shape() -> None:
     sid = uuid4()
     plot = _plot(supplier_id=sid)
     cycle = _cycle(plot_id=plot.id, cycle_no=1, status="active")
-    payload = _payload(plot=PlotCreate(supplierId=sid, plotCode="P101", name="แปลง A"))
+    payload = _payload(plot=PlotCreate(supplierId=sid, name="แปลง A"))
 
     with patch(f"{_P}.repo.get_plot_by_code", AsyncMock(return_value=None)), \
          patch(f"{_P}.repo.create_plot", AsyncMock(return_value=plot)) as mk_create_plot, \
@@ -258,13 +258,16 @@ async def test_with_cycle_create_would_fail_without_the_scalar_refresh() -> None
 
 # --- guards -------------------------------------------------------------
 
-async def test_with_cycle_create_duplicate_plot_code_409() -> None:
-    with patch(f"{_P}.repo.get_plot_by_code", AsyncMock(return_value=_plot())), \
-         patch(f"{_P}.repo.create_plot", AsyncMock()) as mk_create_plot:
-        with pytest.raises(HTTPException) as exc:
-            await create_plot_with_cycle(payload=_payload(), current_user=_user(), db=_db())
-    assert exc.value.status_code == 409
-    mk_create_plot.assert_not_awaited()
+def test_with_cycle_create_refuses_a_supplied_plot_code() -> None:
+    """Round V — was "a duplicate supplied code is a 409". Codes are generated
+    only now, so a supplied one never reaches the endpoint: the request body
+    itself is refused, with the reason in Thai."""
+    with pytest.raises(ValidationError) as exc:
+        PlotWithCycleCreate.model_validate({
+            "plot": {"supplierId": str(uuid4()), "plotCode": "P101", "name": "A"},
+            "cycle": {"cycleLabel": "aug2026", "pCode": "Melon-A"},
+        })
+    assert "ระบบสร้างให้อัตโนมัติ" in str(exc.value)
 
 
 async def test_with_cycle_create_supplier_scoped_user_cannot_target_foreign_supplier_403() -> None:
@@ -274,7 +277,7 @@ async def test_with_cycle_create_supplier_scoped_user_cannot_target_foreign_supp
         roles=[SimpleNamespace(name="supplier:owner")],
         supplier_id=own_supplier,
     )
-    payload = _payload(plot=PlotCreate(supplierId=other_supplier, plotCode="P1", name="A"))
+    payload = _payload(plot=PlotCreate(supplierId=other_supplier, name="A"))
     with patch(f"{_P}.repo.create_plot", AsyncMock()) as mk_create_plot:
         with pytest.raises(HTTPException) as exc:
             await create_plot_with_cycle(payload=payload, current_user=user, db=_db())

@@ -22,8 +22,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.repositories import plot_repository as repo
+from app.schemas.plot import PlotCreate
 from app.services.plot_code import (
     PlotCodeSupplierCodeUnusableError,
     PlotCodeTooLongError,
@@ -225,7 +227,7 @@ async def test_blank_code_generates_and_records_the_series() -> None:
     with _patch_supplier("JPS"), \
          patch(f"{_MOD}._next_plot_code_running_no", AsyncMock(return_value=7)):
         code, source, key, running = await repo._resolve_plot_code(
-            db, supplier_id=uuid4(), plot_code=None,
+            db, supplier_id=uuid4(),
             month_source=datetime.date(2026, 5, 20),
         )
     assert code == "JPS-2605-007"
@@ -235,34 +237,27 @@ async def test_blank_code_generates_and_records_the_series() -> None:
 
 
 @pytest.mark.parametrize("blank", [None, "", "   "])
-async def test_every_blank_form_means_generate(blank) -> None:
-    """None, "" and "   " must all mean the same thing — a user cannot end up
-    with a whitespace plot code by typing spaces."""
-    db = _mock_db()
-    with _patch_supplier("JPS"), \
-         patch(f"{_MOD}._next_plot_code_running_no", AsyncMock(return_value=1)):
-        code, source, _key, _running = await repo._resolve_plot_code(
-            db, supplier_id=uuid4(), plot_code=blank,
-            month_source=datetime.date(2026, 5, 1),
-        )
-    assert code == "JPS-2605-001"
-    assert source == "auto"
+def test_every_blank_form_means_generate(blank) -> None:
+    """None, "" and "   " must all mean the same thing — and since round V
+    that thing is the ONLY option. An older browser build still sends one of
+    them for "generate it", so all three must keep being accepted."""
+    payload = PlotCreate(supplier_id=uuid4(), plot_code=blank, name="แปลง")
+    assert payload.plot_code is None
 
 
-async def test_a_supplied_code_is_kept_verbatim_and_joins_no_series() -> None:
-    """Round B generates, it does not forbid: an admin mirroring a code that
-    already exists on paper still can, and that code takes no running number
-    so it can never disturb the generated sequence."""
-    db = _mock_db()
-    with _patch_supplier("JPS"), \
-         patch(f"{_MOD}._next_plot_code_running_no", AsyncMock()) as mk_running:
-        code, source, key, running = await repo._resolve_plot_code(
-            db, supplier_id=uuid4(), plot_code="  p001  ", month_source=None,
-        )
-    assert code == "P001"          # trimmed + upper-cased, exactly as before
-    assert source == "manual"
-    assert key is None and running is None
-    mk_running.assert_not_awaited()
+def test_a_supplied_code_is_refused() -> None:
+    """Round V — was "a supplied code is kept verbatim and joins no series".
+    Plot codes are generated only now, the same rule as the Auto Lot, so a
+    typed one is a 422 that says why rather than a code nobody numbered."""
+    with pytest.raises(ValidationError) as exc:
+        PlotCreate(supplier_id=uuid4(), plot_code="  p001  ", name="แปลง")
+    assert "ระบบสร้างให้อัตโนมัติ" in str(exc.value)
+
+
+def test_the_resolver_has_no_way_to_take_a_supplied_code() -> None:
+    """Round B's MANUAL branch went with its `plot_code` parameter — the same
+    shape round A gave the Auto Lot's resolver."""
+    assert "plot_code" not in inspect.signature(repo._resolve_plot_code).parameters
 
 
 async def test_the_month_comes_from_the_planting_date_not_today() -> None:
@@ -273,7 +268,7 @@ async def test_the_month_comes_from_the_planting_date_not_today() -> None:
          patch(f"{_MOD}._next_plot_code_running_no", AsyncMock(return_value=1)), \
          patch(f"{_MOD}.today_in_bangkok", MagicMock(return_value=datetime.date(2026, 4, 28))):
         code, _s, _k, _r = await repo._resolve_plot_code(
-            db, supplier_id=uuid4(), plot_code=None,
+            db, supplier_id=uuid4(),
             month_source=datetime.date(2026, 5, 3),
         )
     assert code == "JPS-2605-001"
@@ -285,7 +280,7 @@ async def test_with_no_planting_date_the_month_falls_back_to_today_in_bangkok() 
          patch(f"{_MOD}._next_plot_code_running_no", AsyncMock(return_value=1)), \
          patch(f"{_MOD}.today_in_bangkok", MagicMock(return_value=datetime.date(2026, 4, 28))):
         code, _s, _k, _r = await repo._resolve_plot_code(
-            db, supplier_id=uuid4(), plot_code=None, month_source=None,
+            db, supplier_id=uuid4(), month_source=None,
         )
     assert code == "JPS-2604-001"
 
@@ -298,7 +293,7 @@ async def test_an_unusable_supplier_code_stops_the_insert() -> None:
          patch(f"{_MOD}._next_plot_code_running_no", AsyncMock()) as mk_running:
         with pytest.raises(PlotCodeSupplierCodeUnusableError):
             await repo._resolve_plot_code(
-                db, supplier_id=uuid4(), plot_code=None, month_source=None,
+                db, supplier_id=uuid4(), month_source=None,
             )
     mk_running.assert_not_awaited()      # no running number was burned
 
@@ -310,7 +305,7 @@ async def test_a_missing_supplier_row_is_a_clean_domain_error() -> None:
     with _patch_supplier(None):
         with pytest.raises(PlotCodeSupplierCodeUnusableError):
             await repo._resolve_plot_code(
-                db, supplier_id=uuid4(), plot_code=None, month_source=None,
+                db, supplier_id=uuid4(), month_source=None,
             )
 
 
@@ -339,12 +334,17 @@ async def test_create_plot_stores_the_generated_code_and_its_bookkeeping() -> No
     db.add.assert_called_once()
 
 
-async def test_create_plot_with_a_supplied_code_leaves_the_bookkeeping_null() -> None:
+async def test_create_plot_never_reads_a_code_off_the_payload() -> None:
+    """Round V — was "a supplied code leaves the bookkeeping null". Even a
+    payload that got past the schema carrying a code (this one is not a
+    PlotCreate at all) is given a generated one: the repository no longer
+    looks at payload.plot_code."""
     db = _mock_db()
     with _patch_supplier("JPS"), \
+         patch(f"{_MOD}._next_plot_code_running_no", AsyncMock(return_value=4)), \
          patch(f"{_MOD}.generate_qr_key", MagicMock(return_value="QR")):
-        plot = await repo.create_plot(db, _payload(plot_code="p001"))
-    assert plot.plot_code == "P001"
-    assert plot.plot_code_source == "manual"
-    assert plot.plot_code_series_key is None
-    assert plot.plot_code_running_no is None
+        plot = await repo.create_plot(
+            db, _payload(plot_code="p001"), month_source=datetime.date(2026, 5, 2),
+        )
+    assert plot.plot_code == "JPS-2605-004"
+    assert plot.plot_code_source == "auto"

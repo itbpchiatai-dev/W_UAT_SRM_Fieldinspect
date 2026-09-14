@@ -114,14 +114,11 @@ export function requireUnitWithYield(
 }
 
 /**
- * Round 8-17A.1 — cycleLabel is required on EVERY cycle form submit,
+ * Round 8-17A.1 — cycleLabel is required whenever a cycle is CREATED,
  * independent of Auto vs Manual lot (mirrors the backend's
- * PlotCycleCreate._require_cycle_label / update_plot_cycle's clear-block —
- * see app/schemas/plot.py and app/api/v1/plots.py). Shared by both
- * refineCyclePlan (create/start/rollover) and refineEditCyclePlan (edit,
- * where it also covers "legacy null must be filled in before saving" since
- * a blank field fails this the same way a never-set one does) so the rule
- * lives in exactly one place.
+ * PlotCycleCreate._require_cycle_label — see app/schemas/plot.py). Used by
+ * refineCyclePlan (create/start/rollover). Round V took it out of the edit
+ * refine: an edit can no longer set the label at all.
  */
 export function requireCycleLabel(
   values: { cycleLabel?: string },
@@ -186,23 +183,16 @@ export function refineCyclePlan(
  * round 8-12A dropped the PO from the formula entirely, and round A dropped
  * regeneration altogether — an edit never touches the lot.
  *
- * That is why this is no longer just refineCyclePlan: with no lot to mint, the
- * Auto components stop being an edit-time requirement. cycleLabel is still
- * required (it identifies the cycle — round 8-17A.1), but a blank P.Code goes
- * back to meaning "preserve whatever is stored", which is what keeps a legacy
- * cycle that never had one editable at all. */
+ * Round V — nor does it touch what the lot was built from: crop, variety,
+ * cycleLabel and pCode are shown read-only and never sent, so there is nothing
+ * of theirs to validate. Round 8-17A.1's "the label must be filled in before
+ * any edit" went with them — it would block every edit of a legacy unlabelled
+ * cycle over a field the user can no longer type into. */
 export function refineEditCyclePlan(
-  values: {
-    expectedYieldFull?: number; expectedYieldUnit?: string; poNumber?: string;
-    cycleLabel?: string; pCode?: string;
-  },
+  values: { expectedYieldFull?: number; expectedYieldUnit?: string },
   ctx: z.RefinementCtx,
 ) {
   requireUnitWithYield(values, ctx);
-  requireCycleLabel(values, ctx);
-  // Deliberately NOT requireAutoLotComponents: an edit generates no lot, so a
-  // blank P.Code here means "preserve the stored one" (a legacy cycle may not
-  // even have one), never "you are about to mint a lot without it".
 }
 
 export const cycleFormSchema = z.object(cyclePlanFields).superRefine(refineCyclePlan);
@@ -267,23 +257,14 @@ export function toPayload(values: CycleFormValues): PlotCycleCreatePayload {
 // preserve → key omitted), but poNumber is the exception (round 8-13B): it is
 // ALWAYS sent, same pattern as supplierLotNo below, because an optional field
 // where blank could mean either "leave it" or "clear it" is ambiguous — this
-// form resolves that by making blank always mean "clear". pCode keeps the
-// OLD omit-when-blank/preserve behavior (round 8-13A did not touch it: P.Code
-// stays required on create, and editing it blank is still just "don't touch
-// it", never "clear a required field"). Round A — the system lot is never
-// sent in any form: it is immutable once the cycle exists, so an edit simply
-// has nothing to say about it. Never sends lotNoSource/lotRunningNo either.
+// form resolves that by making blank always mean "clear". Round A — the system
+// lot is never sent in any form: it is immutable once the cycle exists, so an
+// edit simply has nothing to say about it. Never sends lotNoSource/
+// lotRunningNo either. Round V — nor crop, variety, cycleLabel or pCode: they
+// are set once, when the cycle is created (the lot is built from them), and
+// the form shows them read-only.
 export function toEditPayload(values: CycleEditFormValues): PlotCycleUpdatePayload {
-  const payload: PlotCycleUpdatePayload = {
-    crop: values.crop || null,
-    variety: values.variety || null,
-    // Round 8-17A.1 — requireCycleLabel (via refineEditCyclePlan) already
-    // blocked submit on blank, including for a legacy null cycle (the user
-    // must type a value before saving ANY edit) — so this is always sent
-    // nonblank, never a clearing null. Matches the backend's own refusal to
-    // clear an existing label (update_plot_cycle's effective_cycle_label
-    // check) — the two can never disagree about what "cleared" means.
-    cycleLabel: values.cycleLabel!.trim(),
+  return {
     // Round 8-13B — always sent: blank means "clear the PO Number", never
     // "leave it as is" (re-sending the SAME trimmed value when the user never
     // touched the field is harmless — the backend normalizes idempotently).
@@ -303,9 +284,6 @@ export function toEditPayload(values: CycleEditFormValues): PlotCycleUpdatePaylo
     expectedYieldFull: numberOrNull(values.expectedYieldFull),
     expectedYieldUnit: values.expectedYieldUnit?.trim() || null,
   };
-  const pc = values.pCode?.trim();
-  if (pc) payload.pCode = pc;
-  return payload;
 }
 
 /** Preview string for the Auto Lot the backend WILL generate (round 8-12A V2):
@@ -433,6 +411,26 @@ export function deactivateErrorMessage(error: unknown): string {
   return cycleMutationErrorMessage(error);
 }
 
+// Round V — the edit form's read-only rendering of a field fixed at creation
+// (crop / variety / cycleLabel / P.Code): the stored value with a lock, the
+// same look as the "Lot No ระบบ" panel, because the lot is built from them.
+const ONE_TIME_HINT = 'กำหนดครั้งเดียวตอนสร้างรอบปลูก — แก้ไขไม่ได้';
+
+function LockedValue({ value, label }: { value?: string | null; label: string }) {
+  return (
+    <>
+      <div
+        aria-label={label}
+        className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground"
+      >
+        <Lock className="h-3.5 w-3.5 shrink-0" />
+        <span className="break-all">{value || '—'}</span>
+      </div>
+      <p className="text-xs text-muted-foreground">{ONE_TIME_HINT}</p>
+    </>
+  );
+}
+
 function Field({
   label, error, children, className,
 }: {
@@ -469,6 +467,10 @@ export function CyclePlanFields<T extends CyclePlanShape>({
 }) {
   const hasExistingLot = mode === 'edit' && !!existingLot?.lotNo;
   const pCodeRequired = mode === 'create';
+  // Round V — crop / variety / cycleLabel / P.Code are set when the cycle is
+  // created and never change afterwards (the Auto Lot is built from them), so
+  // an edit shows them locked rather than as inputs the backend would refuse.
+  const oneTimeLocked = mode === 'edit';
 
   // --- Round 8-26C: P.Code is DERIVED from the variety, not typed ---------
   // A variety owns exactly one active P.Code (services/p_code_master.py), so
@@ -533,71 +535,97 @@ export function CyclePlanFields<T extends CyclePlanShape>({
           label={`P.Code${pCodeRequired ? ' *' : ''}`}
           error={errors.pCode?.message as string | undefined}
         >
-          <input
-            {...register('pCode' as Path<T>)}
-            readOnly
-            aria-readonly="true"
-            // Field's <label> has no htmlFor, so without this the input has
-            // no accessible name at all — and a read-only field the user
-            // cannot click into needs one more than most.
-            aria-label="P.Code"
-            className="field-input bg-muted text-muted-foreground"
-            placeholder={variety ? '—' : 'เลือกพันธุ์ก่อน'}
-          />
-          {varietyHasNoPCode ? (
-            <p className="text-xs text-destructive">
-              พันธุ์นี้ยังไม่ได้กำหนด P.Code — กรุณาเพิ่มที่เมนู Master Data ก่อน
-            </p>
+          {oneTimeLocked ? (
+            <LockedValue label="P.Code" value={pCodeValue} />
           ) : (
-            <p className="text-xs text-muted-foreground">
-              {pCodeValue ? 'มาจากพันธุ์ที่เลือก' : 'ระบบจะเติมให้อัตโนมัติเมื่อเลือกพันธุ์'}
-            </p>
+            <>
+              <input
+                {...register('pCode' as Path<T>)}
+                readOnly
+                aria-readonly="true"
+                // Field's <label> has no htmlFor, so without this the input has
+                // no accessible name at all — and a read-only field the user
+                // cannot click into needs one more than most.
+                aria-label="P.Code"
+                className="field-input bg-muted text-muted-foreground"
+                placeholder={variety ? '—' : 'เลือกพันธุ์ก่อน'}
+              />
+              {varietyHasNoPCode ? (
+                <p className="text-xs text-destructive">
+                  พันธุ์นี้ยังไม่ได้กำหนด P.Code — กรุณาเพิ่มที่เมนู Master Data ก่อน
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {pCodeValue ? 'มาจากพันธุ์ที่เลือก' : 'ระบบจะเติมให้อัตโนมัติเมื่อเลือกพันธุ์'}
+                </p>
+              )}
+            </>
           )}
         </Field>
       </div>
 
-      {/* Round 8-17A.1 — required in every mode (create AND edit), not just
-          when generating an Auto Lot: see requireCycleLabel. */}
-      <Field label="ชื่อรอบปลูก *" error={errors.cycleLabel?.message as string | undefined}>
-        <input
-          {...register('cycleLabel' as Path<T>)}
-          className="field-input"
-          placeholder="เช่น jun2026 หรือ may2026"
-        />
-        <p className="text-xs text-muted-foreground">ใช้ระบุรอบปลูกและสร้าง Lot No อัตโนมัติ เช่น jun2026, may2026</p>
+      {/* Round 8-17A.1 — required whenever a cycle is created: see
+          requireCycleLabel. Round V — fixed from then on. */}
+      <Field
+        label={`ชื่อรอบปลูก${oneTimeLocked ? '' : ' *'}`}
+        error={errors.cycleLabel?.message as string | undefined}
+      >
+        {oneTimeLocked ? (
+          <LockedValue
+            label="ชื่อรอบปลูก"
+            value={watch('cycleLabel' as Path<T>) as string | undefined}
+          />
+        ) : (
+          <>
+            <input
+              {...register('cycleLabel' as Path<T>)}
+              className="field-input"
+              placeholder="เช่น jun2026 หรือ may2026"
+            />
+            <p className="text-xs text-muted-foreground">ใช้ระบุรอบปลูกและสร้าง Lot No อัตโนมัติ เช่น jun2026, may2026</p>
+          </>
+        )}
       </Field>
 
       <div className="grid grid-cols-2 gap-4">
         <Field label="ชนิดพืช" error={errors.crop?.message as string | undefined}>
-          <MasterDataSelect
-            type="crop"
-            placeholder="— เลือกชนิดพืช —"
-            value={(watch('crop' as Path<T>) as string | undefined) || null}
-            onChange={(v) => {
-              // Changing the crop clears the variety, which clears the
-              // derived P.Code — so this counts as touching the variety.
-              setVarietyTouched(true);
-              setValue('crop' as Path<T>, (v ?? '') as never, { shouldDirty: true });
-              setValue('variety' as Path<T>, '' as never, { shouldDirty: true, shouldValidate: true });
-            }}
-          />
+          {oneTimeLocked ? (
+            <LockedValue label="ชนิดพืช" value={watch('crop' as Path<T>) as string | undefined} />
+          ) : (
+            <MasterDataSelect
+              type="crop"
+              placeholder="— เลือกชนิดพืช —"
+              value={(watch('crop' as Path<T>) as string | undefined) || null}
+              onChange={(v) => {
+                // Changing the crop clears the variety, which clears the
+                // derived P.Code — so this counts as touching the variety.
+                setVarietyTouched(true);
+                setValue('crop' as Path<T>, (v ?? '') as never, { shouldDirty: true });
+                setValue('variety' as Path<T>, '' as never, { shouldDirty: true, shouldValidate: true });
+              }}
+            />
+          )}
         </Field>
         <Field
           label={`พันธุ์/สายพันธุ์${mode === 'create' ? ' *' : ''}`}
           error={errors.variety?.message as string | undefined}
         >
-          <MasterDataSelect
-            type="variety"
-            placeholder="— เลือกพันธุ์ —"
-            parent={(watch('crop' as Path<T>) as string | undefined) || null}
-            value={(watch('variety' as Path<T>) as string | undefined) || null}
-            onChange={(v) => {
-              setVarietyTouched(true);
-              setValue('variety' as Path<T>, (v ?? '') as never, {
-                shouldDirty: true, shouldValidate: true,
-              });
-            }}
-          />
+          {oneTimeLocked ? (
+            <LockedValue label="พันธุ์/สายพันธุ์" value={watch('variety' as Path<T>) as string | undefined} />
+          ) : (
+            <MasterDataSelect
+              type="variety"
+              placeholder="— เลือกพันธุ์ —"
+              parent={(watch('crop' as Path<T>) as string | undefined) || null}
+              value={(watch('variety' as Path<T>) as string | undefined) || null}
+              onChange={(v) => {
+                setVarietyTouched(true);
+                setValue('variety' as Path<T>, (v ?? '') as never, {
+                  shouldDirty: true, shouldValidate: true,
+                });
+              }}
+            />
+          )}
         </Field>
       </div>
 

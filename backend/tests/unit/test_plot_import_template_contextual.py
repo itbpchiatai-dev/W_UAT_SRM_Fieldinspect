@@ -18,14 +18,15 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 from app.api.v1.plots import (
-    _EDITABLE_COLUMNS,
+    _KIND_CELL_STYLE,
+    _KIND_EDITABLE,
+    _KIND_ONE_TIME,
+    _KIND_SYSTEM,
     _PLOT_TEMPLATE_HEADERS,
-    _REFERENCE_COLUMNS,
     _SHEET_EXAMPLES,
     _SHEET_NEW_CYCLE,
-    _STYLE_EDITABLE,
     _STYLE_EXAMPLE,
-    _STYLE_REFERENCE,
+    _TEMPLATE_COLUMN_KIND,
     _contextual_plot_template_workbook,
     _update_cycle_row_values,
     _new_cycle_sheet,
@@ -91,16 +92,17 @@ def _rows_by_number(plots: list) -> tuple[list[str], dict[int, dict[str, str]]]:
 
 # --- item 12/13: 3 sheets, correct order, sheet1 headers --------------------
 
-def test_workbook_has_exactly_two_sheets_in_order() -> None:
-    """Round 8-27E — the import sheet and the examples sheet, nothing else.
-    Sheet 1 must stay first: excel_reader.read_first_sheet only ever reads
-    sheet1.xml."""
+def test_workbook_has_exactly_three_sheets_in_order() -> None:
+    """Round 8-27E — the import sheet and the examples sheet; round V put the
+    colour legend between them. Sheet 1 must stay first:
+    excel_reader.read_first_sheet only ever reads sheet1.xml."""
+    from app.api.v1.plots import _SHEET_LEGEND
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     workbook = parts["xl/workbook.xml"]
-    assert workbook.count("<sheet ") == 2
+    assert workbook.count("<sheet ") == 3
     # Sheet order in workbook.xml reflects the order build_xlsx was given.
     names_in_order = re.findall(r'<sheet name="([^"]+)"', workbook)
-    assert names_in_order == [_SHEET_NEW_CYCLE, _SHEET_EXAMPLES]
+    assert names_in_order == [_SHEET_NEW_CYCLE, _SHEET_LEGEND, _SHEET_EXAMPLES]
 
 
 def test_first_sheet_is_new_cycle_sheet_headers_match_import_columns() -> None:
@@ -247,8 +249,11 @@ def test_inactive_phones_excluded_from_new_cycle_row() -> None:
 def test_examples_sheet_has_the_three_common_actions() -> None:
     _headers, by_no = _rows_by_number([_plot()])
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
-    sheet2 = parts["xl/worksheets/sheet2.xml"]
-    for action in ("create_plot_with_cycle", "update_current_cycle", "start_next_cycle"):
+    sheet2 = parts["xl/worksheets/sheet3.xml"]
+    # Round V — the three offered actions. This used to list
+    # start_next_cycle, and passed only because a stale column description
+    # still mentioned that retired action.
+    for action in ("create_plot_with_cycle", "update_current_cycle", "final_plot"):
         assert action in sheet2
     assert "ข้อมูลตัวอย่างเท่านั้น" in sheet2
 
@@ -297,32 +302,29 @@ def _col_letter(n: int) -> str:
 def test_example_row_cells_reference_the_red_fill_in_styles_xml() -> None:
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
-    sheet2 = parts["xl/worksheets/sheet2.xml"]
+    sheet2 = parts["xl/worksheets/sheet3.xml"]
     # Row 4 = first example row (row1 header, row2 description, row3 notice).
     style_idx = _cell_style_index(sheet2, "A4")
     assert style_idx is not None
     assert fill_by_style[style_idx] == _STYLE_EXAMPLE.bg
 
 
-# --- item 25/26: editable cells yellow, reference/description cells gray ---
+# --- round V: every column carries the colour of its kind (was item 25/26) --
 
-def test_new_cycle_sheet_editable_columns_use_yellow_style_object_level() -> None:
+def test_new_cycle_sheet_each_column_uses_its_kind_style_object_level() -> None:
     rows = _new_cycle_sheet([_plot()])
     data_row = rows[2]
     for col, cell in zip(_PLOT_TEMPLATE_HEADERS, data_row, strict=True):
         assert isinstance(cell, StyledCell)
-        if col in _EDITABLE_COLUMNS:
-            assert cell.style == _STYLE_EDITABLE, col
-        else:
-            assert cell.style == _STYLE_REFERENCE, col
+        assert cell.style == _KIND_CELL_STYLE[_TEMPLATE_COLUMN_KIND[col]], col
 
 
-def test_sheet_one_data_row_cells_reference_yellow_and_gray_fills_in_styles_xml() -> None:
+def test_sheet_one_data_row_cells_reference_orange_and_gray_fills_in_styles_xml() -> None:
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
     sheet1 = parts["xl/worksheets/sheet1.xml"]
-    # Row 3, column order == IMPORT_COLUMNS: "crop" is column 13 (M), an
-    # editable column; "plotCode" is column 3 (C), a reference column.
+    # Row 3, column order == IMPORT_COLUMNS: "crop" is a one-time (orange)
+    # column; "plotCode" is a system (gray) column.
     crop_col_index = IMPORT_COLUMNS.index("crop") + 1
     plot_code_col_index = IMPORT_COLUMNS.index("plotCode") + 1
 
@@ -330,15 +332,15 @@ def test_sheet_one_data_row_cells_reference_yellow_and_gray_fills_in_styles_xml(
     plot_code_ref = f"{_col_letter(plot_code_col_index)}3"
     crop_style = _cell_style_index(sheet1, crop_ref)
     plot_code_style = _cell_style_index(sheet1, plot_code_ref)
-    assert fill_by_style[crop_style] == _STYLE_EDITABLE.bg
-    assert fill_by_style[plot_code_style] == _STYLE_REFERENCE.bg
+    assert fill_by_style[crop_style] == _KIND_CELL_STYLE[_KIND_ONE_TIME].bg
+    assert fill_by_style[plot_code_style] == _KIND_CELL_STYLE[_KIND_SYSTEM].bg
 
 
 # --- round 8-6A.1: blank editable/example cells still carry their style ----
 
-def test_sheet_one_blank_supplier_lot_no_cell_has_yellow_fill_in_styles_xml() -> None:
+def test_sheet_one_blank_supplier_lot_no_cell_has_green_fill_in_styles_xml() -> None:
     """supplierLotNo is blank in Sheet 1 whenever the cycle has none — it must
-    still render yellow, not lose its fill just because there's nothing typed
+    still render green (round V; yellow before), not lose its fill just because there's nothing typed
     in it. (Round A — probed here instead of the retired lotNo column.)"""
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
@@ -347,10 +349,10 @@ def test_sheet_one_blank_supplier_lot_no_cell_has_yellow_fill_in_styles_xml() ->
     ref = f"{_col_letter(lot_no_col)}3"
     style_idx = _cell_style_index(sheet1, ref)
     assert style_idx is not None
-    assert fill_by_style[style_idx] == _STYLE_EDITABLE.bg
+    assert fill_by_style[style_idx] == _KIND_CELL_STYLE[_KIND_EDITABLE].bg
 
 
-def test_sheet_one_blank_planting_date_cell_has_yellow_fill_in_styles_xml() -> None:
+def test_sheet_one_blank_planting_date_cell_has_green_fill_in_styles_xml() -> None:
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
     sheet1 = parts["xl/worksheets/sheet1.xml"]
@@ -358,21 +360,22 @@ def test_sheet_one_blank_planting_date_cell_has_yellow_fill_in_styles_xml() -> N
     ref = f"{_col_letter(col)}3"
     style_idx = _cell_style_index(sheet1, ref)
     assert style_idx is not None
-    assert fill_by_style[style_idx] == _STYLE_EDITABLE.bg
+    assert fill_by_style[style_idx] == _KIND_CELL_STYLE[_KIND_EDITABLE].bg
 
 
-def test_plot_without_active_cycle_all_editable_columns_still_yellow() -> None:
-    """Every editable column is blank when there's no active cycle (item 21) —
-    all 10 must still carry the yellow style (not just lotNo/plantingDate)."""
+def test_plot_without_active_cycle_every_column_still_carries_its_colour() -> None:
+    """Every cycle column is blank when there's no active cycle (item 21) —
+    each must still carry its kind's fill (round V: one of four colours),
+    not just the columns that happen to hold a value."""
     parts = _unzip(_contextual_plot_template_workbook([_plot(active_cycle=None)]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
     sheet1 = parts["xl/worksheets/sheet1.xml"]
-    for col in _EDITABLE_COLUMNS:
+    for col in IMPORT_COLUMNS:
         col_index = IMPORT_COLUMNS.index(col) + 1
         ref = f"{_col_letter(col_index)}3"
         style_idx = _cell_style_index(sheet1, ref)
         assert style_idx is not None, f"{col} cell missing entirely"
-        assert fill_by_style[style_idx] == _STYLE_EDITABLE.bg, col
+        assert fill_by_style[style_idx] == _KIND_CELL_STYLE[_TEMPLATE_COLUMN_KIND[col]].bg, col
 
 
 def test_examples_sheet_every_import_column_has_red_fill_including_blanks() -> None:
@@ -384,7 +387,7 @@ def test_examples_sheet_every_import_column_has_red_fill_including_blanks() -> N
     the reactivate example, so the range grew by one."""
     parts = _unzip(_contextual_plot_template_workbook([_plot()]))
     fill_by_style = _cellxfs_fill_colors(parts["xl/styles.xml"])
-    sheet2 = parts["xl/worksheets/sheet2.xml"]
+    sheet2 = parts["xl/worksheets/sheet3.xml"]
     for example_row in (4, 5, 6):
         for col_index in range(1, len(IMPORT_COLUMNS) + 1):
             ref = f"{_col_letter(col_index)}{example_row}"
@@ -423,15 +426,19 @@ async def test_contextual_workbook_with_blank_editable_cells_still_parses_via_im
     assert row.payload.planting_date == datetime.date(2026, 6, 1)
 
 
-def test_description_row_uses_gray_style() -> None:
-    from app.api.v1.plots import _STYLE_DESCRIPTION, _description_row
+def test_description_row_uses_each_columns_colour() -> None:
+    # Round V — row 2 is painted like the column under it (it was all gray),
+    # so even the blank template shows every column's kind.
+    from app.api.v1.plots import _description_row
     row = _description_row()
-    assert all(isinstance(c, StyledCell) and c.style == _STYLE_DESCRIPTION for c in row)
+    for col, cell in zip(_PLOT_TEMPLATE_HEADERS, row, strict=True):
+        assert isinstance(cell, StyledCell)
+        assert cell.style == _KIND_CELL_STYLE[_TEMPLATE_COLUMN_KIND[col]], col
 
 
-def test_header_description_and_editable_reference_columns_partition_import_columns() -> None:
-    assert _REFERENCE_COLUMNS | _EDITABLE_COLUMNS == set(IMPORT_COLUMNS)
-    assert not (_REFERENCE_COLUMNS & _EDITABLE_COLUMNS)
+def test_every_import_column_has_exactly_one_kind() -> None:
+    assert set(_TEMPLATE_COLUMN_KIND) == set(IMPORT_COLUMNS)
+    assert set(_TEMPLATE_COLUMN_KIND.values()) <= set(_KIND_CELL_STYLE)
 
 
 # --- item 27: read_first_sheet reads only Sheet 1, filtered rows parse -----
@@ -462,6 +469,6 @@ def test_generic_template_builder_is_untouched_by_this_module() -> None:
     for its full regression suite."""
     from app.api.v1.plots import _plot_template_workbook
     parts = _unzip(_plot_template_workbook([_supplier()]))
-    # Round 8-27E — the blank template now builds the SAME two sheets as the
-    # contextual one; that is the point of the round, not a leak from it.
-    assert parts["xl/workbook.xml"].count("<sheet ") == 2
+    # Round 8-27E — the blank template builds the SAME sheets as the
+    # contextual one (three since round V); that is the point, not a leak.
+    assert parts["xl/workbook.xml"].count("<sheet ") == 3

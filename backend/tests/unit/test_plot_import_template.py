@@ -29,6 +29,7 @@ from zipfile import ZipFile
 from app.api.v1.plots import (
     _PLOT_TEMPLATE_HEADERS,
     _SHEET_EXAMPLES,
+    _SHEET_LEGEND,
     _SHEET_NEW_CYCLE,
     _examples_sheet,
     _plot_template_workbook,
@@ -60,16 +61,16 @@ def test_headers_match_importer_columns_action_first() -> None:
         assert col in _PLOT_TEMPLATE_HEADERS
 
 
-def test_workbook_has_the_same_two_sheets_as_the_filtered_template() -> None:
+def test_workbook_has_the_same_three_sheets_as_the_filtered_template() -> None:
     """Round 8-27E — one template shape for the whole app. The names come
     from the same constants the contextual builder uses, so the two can only
-    ever drift together."""
+    ever drift together. Round V added the colour legend as sheet two."""
     parts = _unzip(_plot_template_workbook([_fake_supplier()]))
     workbook = parts["xl/workbook.xml"]
-    assert workbook.count("<sheet ") == 2
-    assert f'name="{_SHEET_NEW_CYCLE}"' in workbook
-    assert f'name="{_SHEET_EXAMPLES}"' in workbook
-    assert sum(1 for n in parts if n.startswith("xl/worksheets/sheet")) == 2
+    assert workbook.count("<sheet ") == 3
+    for name in (_SHEET_NEW_CYCLE, _SHEET_LEGEND, _SHEET_EXAMPLES):
+        assert f'name="{name}"' in workbook
+    assert sum(1 for n in parts if n.startswith("xl/worksheets/sheet")) == 3
 
 
 def test_sheet_one_carries_every_header_but_no_example_rows() -> None:
@@ -87,9 +88,10 @@ def test_sheet_one_carries_every_header_but_no_example_rows() -> None:
         assert f"<t>{action}</t>" not in sheet1
 
 
-def test_the_examples_live_on_sheet_two() -> None:
+def test_the_examples_live_on_the_examples_sheet() -> None:
+    # Round V — sheet three: the legend sheet sits between.
     parts = _unzip(_plot_template_workbook([_fake_supplier()]))
-    sheet2 = parts["xl/worksheets/sheet2.xml"]
+    sheet2 = parts["xl/worksheets/sheet3.xml"]
     from app.services.plot_import import OFFERED_ACTIONS
 
     for action in OFFERED_ACTIONS:
@@ -98,13 +100,13 @@ def test_the_examples_live_on_sheet_two() -> None:
 
 def test_example_rows_use_the_first_supplier_code() -> None:
     parts = _unzip(_plot_template_workbook([_fake_supplier("SUP042")]))
-    assert "SUP042" in parts["xl/worksheets/sheet2.xml"]
+    assert "SUP042" in parts["xl/worksheets/sheet3.xml"]
 
 
 def test_no_suppliers_still_produces_a_valid_workbook() -> None:
     parts = _unzip(_plot_template_workbook([]))
-    assert parts["xl/workbook.xml"].count("<sheet ") == 2
-    sheet2 = parts["xl/worksheets/sheet2.xml"]
+    assert parts["xl/workbook.xml"].count("<sheet ") == 3
+    sheet2 = parts["xl/worksheets/sheet3.xml"]
     assert "create_plot_with_cycle" in sheet2
     # Falls back to a placeholder supplier code rather than an empty cell.
     assert "SUP001" in sheet2
@@ -153,8 +155,8 @@ def test_row_one_is_import_columns_action_first() -> None:
 
 def test_description_mapping_keys_match_import_columns_exactly() -> None:
     assert set(TEMPLATE_COLUMN_DESCRIPTIONS) == set(IMPORT_COLUMNS)
-    # Round 8-21A added oracleSupplierCode/oracleInvoice/refAccount -> 33.
-    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 32
+    # Round V added the read-only supplierName and systemLotNo -> 34.
+    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 34
 
 
 def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
@@ -163,7 +165,7 @@ def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
     # A description in every one of the 33 columns (round 8-21A added
     # oracleSupplierCode/oracleInvoice/refAccount).
     assert set(desc) == set(IMPORT_COLUMNS)
-    assert len(desc) == 32
+    assert len(desc) == 34      # round V: + supplierName, systemLotNo
     # A2 is the exact skip marker (this is what the importer keys off).
     assert desc["action"] == TEMPLATE_DESCRIPTION_ACTION
     # Every other cell is exactly its mapped description.
@@ -287,8 +289,9 @@ def test_create_example_row_has_the_full_spec_values() -> None:
     _headers, by_no = _example_rows([_fake_supplier("SUP001")])
     create = by_no[4]
     assert create == {
+        # Round V — no plotCode: it is generated, so the cell stays blank.
         "action": "create_plot_with_cycle", "supplierCode": "SUP001",
-        "plotCode": "P101", "plotName": "แปลงตัวอย่าง (สร้างใหม่)",
+        "plotName": "แปลงตัวอย่าง (สร้างใหม่)",
         "primaryPhone": "0845552162", "additionalPhones": "0855551234",
         "village": "ต.ตัวอย่าง", "district": "อ.ตัวอย่าง", "province": "เชียงใหม่",
         "latitude": "18.7883", "longitude": "98.9853", "rai": "5",
@@ -307,14 +310,22 @@ def test_create_example_row_has_the_full_spec_values() -> None:
     }
 
 
-def test_update_example_cycle_values_match_spec() -> None:
+def test_update_example_edits_green_cells_and_leaves_orange_blank() -> None:
+    """Round V — the update example shows what an update may do: change the
+    plan and the plot's own details (green), while the one-time columns
+    (orange) stay blank, which keeps the stored values. Its plotCode is shaped
+    like a generated one."""
     _headers, by_no = _example_rows([_fake_supplier("SUP001")])
-    assert (by_no[5]["plotCode"], by_no[5]["crop"], by_no[5]["variety"],
-            by_no[5]["cycleLabel"], by_no[5]["plantingDate"],
-            by_no[5]["plantCount"], by_no[5]["expectedYieldFull"],
-            by_no[5]["expectedYieldUnit"]) == (
-        "P002", "พริก", "พริกหยวก", "may2026", "2026-05-15",
-        "800", "1000", "kg")
+    update = by_no[5]
+    assert update["action"] == "update_current_cycle"
+    assert update["plotCode"] == "SUP001-2605-002"
+    for one_time in ("crop", "variety", "cycleLabel", "pCode"):
+        assert one_time not in update          # blank cell => key omitted
+    assert (update["plotName"], update["village"], update["rai"]) == (
+        "แปลงตัวอย่าง (เปลี่ยนชื่อ)", "บ้านใหม่", "6.5")
+    assert (update["plantingDate"], update["plantCount"],
+            update["expectedYieldFull"], update["expectedYieldUnit"]) == (
+        "2026-05-15", "800", "1000", "kg")
     # Round E — row 6 is the final_plot example now; it closes a cycle rather
     # than describing a plan, so it carries no crop/variety/yield columns.
     assert by_no[6]["action"] == "final_plot"
@@ -322,16 +333,15 @@ def test_update_example_cycle_values_match_spec() -> None:
     assert "lotNo" not in by_no[5] and "lotNo" not in by_no[6]
 
 
-def test_non_create_examples_leave_physical_plot_fields_empty() -> None:
-    """Only create_plot_with_cycle (row 4) creates the physical Plot; every
-    other action acts on one that already exists, so the template must not
-    put village/province/GPS/rai in those rows (would mislead)."""
+def test_the_final_example_leaves_physical_plot_fields_empty() -> None:
+    """final_plot (row 6) closes a season; it writes no plot details, so the
+    example must not suggest it does. (Round V — the UPDATE example now does
+    show plot details on purpose: an update writes them since this round.)"""
     _headers, by_no = _example_rows([_fake_supplier()])
     physical = ("plotName", "village", "district", "province",
                 "latitude", "longitude", "rai")
-    for n in (5, 6):
-        # Blank cells are omitted by the reader, so absence == empty.
-        assert not any(f in by_no[n] for f in physical), by_no[n]
+    # Blank cells are omitted by the reader, so absence == empty.
+    assert not any(f in by_no[6] for f in physical), by_no[6]
 
 
 def test_examples_use_the_first_visible_supplier_code() -> None:

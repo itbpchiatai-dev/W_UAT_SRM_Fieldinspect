@@ -522,21 +522,43 @@ async def get_actual_harvest_source_record(
     Newest is by created_at — monotonic insert time, never record_date, which
     is field-reported and can be backdated. Same rule as
     get_latest_active_record_for_cycle above, so "latest" means one thing
-    throughout this module."""
-    base = (
+    throughout this module.
+
+    Round X — this is the batch lookup below, for one cycle, so the preference
+    is written in exactly one place. (Round D's two queries picked the same
+    record; the live check that retired them compared both on real data.)"""
+    return (await get_actual_harvest_source_records_for_cycles(db, [cycle_id])).get(cycle_id)
+
+
+async def get_actual_harvest_source_records_for_cycles(
+    db: AsyncSession, cycle_ids: list[UUID]
+) -> dict[UUID, Record]:
+    """The round-D harvest-source rule (get_actual_harvest_source_record) for
+    many cycles in ONE query (round X), so a report listing hundreds of plots
+    never asks per row. The preference is the DISTINCT ON order: among each
+    cycle's active records that carry any harvest figure, those WITH a
+    final_yield_after_clean come first, then newest by created_at — the newest
+    "ผลผลิตสุดท้าย" report when one exists, otherwise the newest harvest
+    report. Found by the data a record carries, never by matching a stage
+    name. A cycle with neither is simply absent from the dict."""
+    if not cycle_ids:
+        return {}
+    stmt = (
         select(Record)
-        .where(Record.plot_cycle_id == cycle_id, Record.is_active.is_(True))
-        .order_by(Record.created_at.desc())
-        .limit(1)
+        .where(
+            Record.plot_cycle_id.in_(cycle_ids),
+            Record.is_active.is_(True),
+            (Record.final_yield_after_clean.is_not(None)) | (Record.yield_quantity_kg.is_not(None)),
+        )
+        .distinct(Record.plot_cycle_id)
+        .order_by(
+            Record.plot_cycle_id,
+            Record.final_yield_after_clean.is_(None),   # False (has one) sorts first
+            Record.created_at.desc(),
+        )
     )
-    result = await db.execute(
-        base.where(Record.final_yield_after_clean.is_not(None))
-    )
-    record = result.scalar_one_or_none()
-    if record is not None:
-        return record
-    result = await db.execute(base.where(Record.yield_quantity_kg.is_not(None)))
-    return result.scalar_one_or_none()
+    result = await db.execute(stmt)
+    return {record.plot_cycle_id: record for record in result.scalars().all()}
 
 
 def actual_harvest_from_record(record: Record | None) -> dict:

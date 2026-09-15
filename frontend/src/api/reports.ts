@@ -38,6 +38,10 @@ export interface PlotStatusRow {
   lastInspectedAt: string | null;
   lastInspectedByCode: string | null;
   isInspected: boolean;
+  // Round X — the open cycle's Oracle invoice (the table's Invoice column).
+  // The response carries more (the cycle's references, the field-reported
+  // harvest) for the server-built Excel export; the page reads only this.
+  oracleInvoice?: string | null;
 }
 
 export interface PlotStatusParams {
@@ -49,6 +53,9 @@ export interface PlotStatusParams {
   /** ISO date YYYY-MM-DD — filters on last_inspected_at. */
   dateFrom?: string;
   dateTo?: string;
+  /** Round X — part of an Oracle invoice number; matched against the plot's
+   * OPEN cycle (substring, case-insensitive). Blank = no filter. */
+  invoice?: string;
   // Round 8-25D — the on-screen table used to have no ceiling at all (every
   // matching plot came back in one response). Omit both for the backend's
   // own default (100). Never sent by downloadPlotStatusReport below — an
@@ -66,6 +73,7 @@ function toSnake(params: PlotStatusParams): Record<string, unknown> {
     inspected: params.inspected || undefined,
     date_from: params.dateFrom || undefined,
     date_to: params.dateTo || undefined,
+    invoice: params.invoice?.trim() || undefined,
     limit: params.limit,
     offset: params.offset,
   };
@@ -140,6 +148,9 @@ export interface CycleYieldRow {
   finalYieldUnit: string | null;
   harvestDate: string | null;
   finalNote: string | null;
+  // Round X — the cycle's Oracle invoice (the table's Invoice column). The
+  // other new fields are for the server-built Excel export only.
+  oracleInvoice?: string | null;
 }
 
 export interface CycleYieldParams {
@@ -150,6 +161,9 @@ export interface CycleYieldParams {
   /** ISO date YYYY-MM-DD — filters on closedAt. */
   dateFrom?: string;
   dateTo?: string;
+  /** Round X — part of an Oracle invoice number; matched against the row's
+   * own cycle (substring, case-insensitive). Blank = no filter. */
+  invoice?: string;
   // Round 8-25D — see PlotStatusParams above for the same contract: omit
   // both for the backend's own default (100); never sent by
   // downloadCycleYieldReport below.
@@ -164,6 +178,7 @@ function cycleYieldToSnake(params: CycleYieldParams): Record<string, unknown> {
     status: params.status || undefined,
     date_from: params.dateFrom || undefined,
     date_to: params.dateTo || undefined,
+    invoice: params.invoice?.trim() || undefined,
     limit: params.limit,
     offset: params.offset,
   };

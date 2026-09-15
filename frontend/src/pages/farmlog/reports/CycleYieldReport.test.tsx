@@ -489,3 +489,48 @@ describe('CycleYieldReport — rows-per-page selector (100 / 200 / 500 / ทั�
     expect(exportParams.offset).toBeUndefined();
   });
 });
+
+// Round X — one "เลขที่ Invoice" box, shared by the table and the export.
+describe('CycleYieldReport — invoice search (round X)', () => {
+  function lastListParams(): Record<string, unknown> {
+    return listMock.mock.calls.at(-1)![0] as Record<string, unknown>;
+  }
+
+  it('sends the typed invoice to the table query, back on page 1', async () => {
+    // A full page, so there IS a page 2 to be on when the search changes.
+    listMock.mockResolvedValue(Array.from({ length: 100 }, (_, i) => row({
+      cycleId: `cycle-${i}`, plotCode: `SUP001-P${i}`,
+    })));
+    renderReport();
+    await screen.findByText('SUP001-P0');
+    fireEvent.click(screen.getByText('ถัดไป →'));
+    await waitFor(() => expect(lastListParams().offset).toBe(100));
+
+    fireEvent.change(screen.getByLabelText('เลขที่ Invoice'), { target: { value: 'INV-26' } });
+
+    await waitFor(() => expect(lastListParams().invoice).toBe('INV-26'));
+    expect(lastListParams().offset).toBe(0);
+  });
+
+  it('exports exactly what the invoice search shows', async () => {
+    listMock.mockResolvedValue([row()]);
+    downloadMock.mockResolvedValue(new Blob(['xlsx']));
+    renderReport();
+    await screen.findByText('SUP001-P001');
+    fireEvent.change(screen.getByLabelText('เลขที่ Invoice'), { target: { value: 'INV-26' } });
+    await waitFor(() => expect(lastListParams().invoice).toBe('INV-26'));
+    await screen.findByText('SUP001-P001');
+
+    fireEvent.click(screen.getByText('ดาวน์โหลด Excel'));
+
+    await waitFor(() => expect(downloadMock).toHaveBeenCalled());
+    expect((downloadMock.mock.calls.at(-1)![0] as Record<string, unknown>).invoice).toBe('INV-26');
+  });
+
+  it("shows the cycle's invoice in its own column", async () => {
+    listMock.mockResolvedValue([row({ oracleInvoice: 'INV-2026-0001' })]);
+    renderReport();
+    expect(await screen.findByText('INV-2026-0001')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Invoice' })).toBeTruthy();
+  });
+});

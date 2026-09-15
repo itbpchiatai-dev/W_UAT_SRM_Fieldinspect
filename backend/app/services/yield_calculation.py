@@ -222,3 +222,27 @@ def derive_yield(
         yield_quantity_kg=quantity,
         yield_target_kg_snapshot=target,
     )
+
+
+def actual_vs_target_pct(
+    actual: Decimal | None,
+    actual_unit: str | None,
+    target: Decimal | None,
+    target_unit: str | None,
+) -> Decimal | None:
+    """A closed cycle's ACTUAL yield as a percentage of its target, rounded to
+    one decimal (half up) — or None when that number cannot be said honestly.
+
+    Round X — the backend twin of the Plots list's round-R rule
+    (frontend Plots.tsx ClosedYieldCell): the two figures are divided ONLY when
+    their units are the same string. A ratio across units is wrong by
+    whatever the conversion is — 1,180 kg against a 5-ตัน target is 23.6%, not
+    23600% — so a different unit, a missing figure or a zero target gives
+    None (a blank cell), never a confident wrong number. Deliberately NOT the
+    kg conversion derive_yield uses above: the report must show the same
+    percentage the Plots list shows for the same cycle."""
+    if actual is None or target is None or actual_unit is None or target_unit is None:
+        return None
+    if actual_unit != target_unit or target <= 0:
+        return None
+    return (actual / target * Decimal("100")).quantize(_ONE_PLACE, rounding=ROUND_HALF_UP)

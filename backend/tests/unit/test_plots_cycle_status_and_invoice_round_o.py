@@ -199,7 +199,10 @@ def test_invoice_search_is_not_limited_to_the_active_cycle() -> None:
         "the invoice filter was scoped to the active cycle — it can no longer "
         "find the closed seasons it exists for"
     )
-    assert "ilike" in src, "invoice must be a partial match, not exact"
+    # Round X — the partial, case-insensitive match lives in
+    # text_filters.contains_text (shared with the reports; pinned in
+    # test_report_invoice_and_harvest_round_x).
+    assert "contains_text" in src, "invoice must be a partial match, not exact"
 
 
 @pytest.mark.parametrize("fn", [

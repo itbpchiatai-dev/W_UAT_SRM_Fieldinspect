@@ -22,6 +22,9 @@ def _cycle(**overrides) -> SimpleNamespace:
     defaults = dict(
         id=uuid4(), cycle_no=3, status="active",
         crop="พริก", variety="พริกขี้หนู", lot_no="LOT-03",
+        # Round X — the report now also carries the open cycle's identity.
+        cycle_label="jun2026", po_number=None, p_code="WM-141", supplier_lot_no=None,
+        oracle_supplier_code=None, oracle_invoice=None, ref_account=None,
         planting_date=datetime.date(2026, 6, 1), plant_count=500,
         expected_yield_full=Decimal("1000.00"), expected_yield_unit="kg",
     )

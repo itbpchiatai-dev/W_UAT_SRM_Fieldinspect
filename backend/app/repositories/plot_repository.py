@@ -17,6 +17,7 @@ from app.db.models.record import Record
 from app.db.models.supplier import Supplier
 from app.db.models.user import User
 from app.repositories import plot_cycle_repository as plot_cycle_repo
+from app.repositories.text_filters import contains_text
 from app.schemas.plot import PlotCreate, PlotUpdate
 from app.services.plot_code import (
     build_plot_code_series_key,
@@ -312,17 +313,15 @@ def _apply_invoice_filter(stmt, *, invoice: str | None):
     partial unique index to lean on here, so a JOIN really could return the
     same Plot once per matching cycle. EXISTS cannot.
     """
-    if not invoice:
-        return stmt
-    trimmed = invoice.strip()
-    if not trimmed:
+    # Round X — the match itself lives in text_filters.contains_text, shared
+    # with both reports' invoice filter; it also stopped treating a typed
+    # "%" or "_" as a wildcard.
+    match = contains_text(PlotCycle.oracle_invoice, invoice)
+    if match is None:
         return stmt
     exists_clause = (
         select(PlotCycle.id)
-        .where(
-            PlotCycle.plot_id == Plot.id,
-            PlotCycle.oracle_invoice.ilike(f"%{trimmed}%"),
-        )
+        .where(PlotCycle.plot_id == Plot.id, match)
         .exists()
     )
     return stmt.where(exists_clause)

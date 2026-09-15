@@ -50,6 +50,8 @@ async def plot_status_report(
     inspected: str | None = None,
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    # Round X — "เลขที่ Invoice", matched against the plot's open cycle.
+    invoice: str | None = None,
     # Round 8-25D — the on-screen table used to have no ceiling at all (every
     # matching plot came back in one response); the export endpoint below
     # still does, on purpose, since a downloaded workbook must always contain
@@ -65,6 +67,7 @@ async def plot_status_report(
         inspected=inspected,
         date_from=date_from,
         date_to=date_to,
+        invoice=invoice,
         limit=limit,
         offset=offset,
     )
@@ -77,13 +80,31 @@ _PLOT_STATUS_HEADERS: list[str] = [
     "ชื่อแปลง",
     "จังหวัด",
     "สถานะรอบปลูก",
+    # Round X — the open cycle's identity and references.
+    "ชื่อรอบปลูก",
+    "PO Number",
+    "P.Code",
+    "Lot No ระบบ",
+    "Supplier Lot No",
+    "Oracle Supplier Code",
+    "Oracle Invoice",
+    "Ref Account",
+    "วันที่ปลูก",
     "ชนิดพืช",
     "พันธุ์",
     "ระยะ",
     "เปอร์เซ็นต์เทียบเป้าผลิต",
+    # Round X — before the target, so "เป้าผลิต" keeps its "หน่วย" beside it.
+    "จำนวนต้น",
     "เป้าผลิต",
     "หน่วย",
     "ผลผลิตที่คาดว่าจะได้",
+    # Round X — what the field team has REPORTED, not yet confirmed: the
+    # confirmed figures appear in the cycle-yield report once the cycle is
+    # closed. The label says so, so the two are never mistaken for each other.
+    "ผลผลิตตอนเก็บเกี่ยว (kg) — ภาคสนามรายงาน",
+    "ผลผลิตหลังทำความสะอาด (kg) — ภาคสนามรายงาน",
+    "วันที่รายงานผลผลิต",
     "เตรียมแปลง",
     "สภาพอากาศ",
     "ดูแลรักษา",
@@ -105,6 +126,12 @@ def _current_expected_yield(
     return (expected_yield_full * current_yield_pct) / 100
 
 
+def _num(value: Decimal | None) -> float | None:
+    """A Decimal as a numeric Excel cell (not text); None stays a blank cell,
+    never 0."""
+    return float(value) if value is not None else None
+
+
 def _plot_status_workbook(rows: list[ReportPlotStatusRow]) -> bytes:
     data: list[list[CellValue]] = [_PLOT_STATUS_HEADERS]
     for r in rows:
@@ -116,17 +143,26 @@ def _plot_status_workbook(rows: list[ReportPlotStatusRow]) -> bytes:
                 r.plot_name,
                 r.province,
                 "รอเริ่มรอบปลูก" if r.active_cycle_id is None else "กำลังปลูก",
+                r.cycle_label,
+                r.po_number,
+                r.p_code,
+                r.lot_no,
+                r.supplier_lot_no,
+                r.oracle_supplier_code,
+                r.oracle_invoice,
+                r.ref_account,
+                r.planting_date.isoformat() if r.planting_date else None,
                 r.current_crop,
                 r.current_variety,
                 r.current_stage,
-                float(r.current_yield_pct) if r.current_yield_pct is not None else None,
-                float(r.expected_yield_full) if r.expected_yield_full is not None else None,
+                _num(r.current_yield_pct),
+                r.plant_count,
+                _num(r.expected_yield_full),
                 r.expected_yield_unit,
-                (
-                    float(_current_expected_yield(r.expected_yield_full, r.current_yield_pct))
-                    if _current_expected_yield(r.expected_yield_full, r.current_yield_pct) is not None
-                    else None
-                ),
+                _num(_current_expected_yield(r.expected_yield_full, r.current_yield_pct)),
+                _num(r.reported_harvest_yield),
+                _num(r.reported_final_yield_after_clean),
+                r.reported_harvest_date.isoformat() if r.reported_harvest_date else None,
                 r.current_field_prep_score,
                 r.current_weather_score,
                 r.current_care_score,
@@ -151,6 +187,7 @@ async def export_plot_status_report(
     inspected: str | None = None,
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    invoice: str | None = None,
 ) -> Response:
     rows = await repo.plot_status_rows(
         db,
@@ -160,6 +197,7 @@ async def export_plot_status_report(
         inspected=inspected,
         date_from=date_from,
         date_to=date_to,
+        invoice=invoice,
     )
     content = _plot_status_workbook(rows)
     return Response(
@@ -196,6 +234,8 @@ async def cycle_yield_report(
     status: str = "closed",
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    # Round X — "เลขที่ Invoice", matched against the row's own cycle.
+    invoice: str | None = None,
     # Round 8-25D — see plot_status_report's comment: the export endpoint
     # below deliberately never passes a limit.
     limit: int = 100,
@@ -210,6 +250,7 @@ async def cycle_yield_report(
         status=status,
         date_from=date_from,
         date_to=date_to,
+        invoice=invoice,
         limit=limit,
         offset=offset,
     )
@@ -231,6 +272,11 @@ _CYCLE_YIELD_HEADERS: list[str] = [
     "Lot No ระบบ",
     "Supplier Lot No",
     "ที่มา Lot",
+    # Round X — the cycle's Oracle references, for reconciliation. After the
+    # lot source, so the three lot columns stay together (round 8-12C.1).
+    "Oracle Supplier Code",
+    "Oracle Invoice",
+    "Ref Account",
     "วันที่ปลูก",
     "จำนวนต้น/จำนวนปลูก",
     "เป้าผลิต",
@@ -244,6 +290,9 @@ _CYCLE_YIELD_HEADERS: list[str] = [
     "ผลผลิตตอนเก็บเกี่ยว",
     "ผลผลิตจริงหลังทำความสะอาด",
     "หน่วยผลผลิตจริง",
+    # Round X — actual after-clean yield vs the target, same-unit only
+    # (yield_calculation.actual_vs_target_pct); blank across units.
+    "ผลผลิตจริงเทียบเป้า (%)",
     "วันที่เก็บเกี่ยว",
     "หมายเหตุผลผลิตสุดท้าย",
     "วันที่เริ่มรอบ",
@@ -270,6 +319,24 @@ _LOT_SOURCE_LABELS: dict[str, str] = {
 }
 
 
+# Round X — shown instead of a percentage when both figures exist but in
+# different units; the Plots list says the same thing (round R).
+_DIFFERENT_UNITS = "คนละหน่วย"
+
+
+def _actual_vs_target_cell(r: ReportCycleYieldRow) -> CellValue:
+    """The percentage when it can be said; the reason when it cannot because
+    the units differ; blank when a figure is missing (nothing to compare)."""
+    if r.actual_yield_pct is not None:
+        return float(r.actual_yield_pct)
+    if (
+        r.final_yield_after_clean is not None and r.expected_yield_full is not None
+        and r.final_yield_unit != r.expected_yield_unit
+    ):
+        return _DIFFERENT_UNITS
+    return None
+
+
 def _cycle_yield_workbook(rows: list[ReportCycleYieldRow]) -> bytes:
     data: list[list[CellValue]] = [_CYCLE_YIELD_HEADERS]
     for r in rows:
@@ -290,17 +357,21 @@ def _cycle_yield_workbook(rows: list[ReportCycleYieldRow]) -> bytes:
                 r.lot_no,
                 r.supplier_lot_no,
                 _LOT_SOURCE_LABELS.get(r.lot_no_source) if r.lot_no_source else None,
+                r.oracle_supplier_code,
+                r.oracle_invoice,
+                r.ref_account,
                 r.planting_date.isoformat() if r.planting_date else None,
                 r.plant_count,
                 # Decimals as numeric cells (not text).
-                float(r.expected_yield_full) if r.expected_yield_full is not None else None,
+                _num(r.expected_yield_full),
                 r.expected_yield_unit,
-                float(r.final_yield_pct) if r.final_yield_pct is not None else None,
-                float(r.final_estimated_yield) if r.final_estimated_yield is not None else None,
+                _num(r.final_yield_pct),
+                _num(r.final_estimated_yield),
                 # Round 8-7C.1 — ACTUAL harvest figures, verbatim; None → blank cell.
-                float(r.harvest_yield) if r.harvest_yield is not None else None,
-                float(r.final_yield_after_clean) if r.final_yield_after_clean is not None else None,
+                _num(r.harvest_yield),
+                _num(r.final_yield_after_clean),
                 r.final_yield_unit,
+                _actual_vs_target_cell(r),
                 r.harvest_date.isoformat() if r.harvest_date else None,
                 r.final_note,
                 r.started_at.date().isoformat() if r.started_at else None,
@@ -323,6 +394,7 @@ async def export_cycle_yield_report(
     status: str = "closed",
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    invoice: str | None = None,
 ) -> Response:
     _validate_cycle_yield_status(status)
     _validate_date_range(date_from, date_to)
@@ -333,6 +405,7 @@ async def export_cycle_yield_report(
         status=status,
         date_from=date_from,
         date_to=date_to,
+        invoice=invoice,
     )
     content = _cycle_yield_workbook(rows)
     return Response(

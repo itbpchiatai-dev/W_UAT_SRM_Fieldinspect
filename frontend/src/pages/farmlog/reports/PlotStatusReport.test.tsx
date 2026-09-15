@@ -158,3 +158,44 @@ describe('PlotStatusReport — rows-per-page selector (100 / 200 / 500 / ทั�
     expect(exportParams.offset).toBeUndefined();
   });
 });
+
+// Round X — one "เลขที่ Invoice" box, shared by the table and the export.
+describe('PlotStatusReport — invoice search (round X)', () => {
+  it('sends the typed invoice to the table query, back on page 1', async () => {
+    // A full page, so there IS a page 2 to be on when the search changes.
+    listPlotStatusMock.mockResolvedValue(Array.from({ length: 100 }, (_, i) => row({
+      plotId: `plot-${i}`, plotCode: `SUP001-P${i}`,
+    })));
+    renderReport();
+    await screen.findByText('SUP001-P0');
+    fireEvent.click(screen.getByText('ถัดไป →'));
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ offset: 100 })).toBe(true));
+
+    fireEvent.change(screen.getByLabelText('เลขที่ Invoice'), { target: { value: 'INV-26' } });
+
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ invoice: 'INV-26', offset: 0 })).toBe(true));
+  });
+
+  it('exports exactly what the invoice search shows', async () => {
+    listPlotStatusMock.mockResolvedValue([row()]);
+    const downloadMock = (await import('../../../api/reports')).downloadPlotStatusReport as unknown as ReturnType<typeof vi.fn>;
+    downloadMock.mockResolvedValue(new Blob(['xlsx']));
+    renderReport();
+    await screen.findByText('SUP001-P001');
+    fireEvent.change(screen.getByLabelText('เลขที่ Invoice'), { target: { value: 'INV-26' } });
+    await waitFor(() => expect(hasListPlotStatusCallContaining({ invoice: 'INV-26' })).toBe(true));
+    await screen.findByText('SUP001-P001');
+
+    fireEvent.click(screen.getByText('ดาวน์โหลด Excel'));
+
+    await waitFor(() => expect(downloadMock).toHaveBeenCalled());
+    expect((downloadMock.mock.calls.at(-1)![0] as Record<string, unknown>).invoice).toBe('INV-26');
+  });
+
+  it("shows the open cycle's invoice in its own column", async () => {
+    listPlotStatusMock.mockResolvedValue([row({ oracleInvoice: 'INV-2026-0001' })]);
+    renderReport();
+    expect(await screen.findByText('INV-2026-0001')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Invoice' })).toBeTruthy();
+  });
+});

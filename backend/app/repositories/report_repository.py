@@ -23,7 +23,10 @@ from app.db.models.plot_cycle import (
     PlotCycle,
 )
 from app.db.models.supplier import Supplier
+from app.repositories import plot_cycle_repository as plot_cycle_repo
+from app.repositories.text_filters import contains_text
 from app.schemas.report import ReportCycleYieldRow, ReportPlotStatusRow
+from app.services.yield_calculation import actual_vs_target_pct
 
 # Cycle-yield status filter values (Report #2). "closed" = the two terminal
 # states; "all" = no status filter. Anything else is rejected by the endpoint.
@@ -41,6 +44,7 @@ async def plot_status_rows(
     inspected: str | None = None,
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    invoice: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> list[ReportPlotStatusRow]:
@@ -77,6 +81,21 @@ async def plot_status_rows(
         stmt = stmt.where(Plot.last_inspection_record_id.isnot(None))
     elif inspected == "not_inspected":
         stmt = stmt.where(Plot.last_inspection_record_id.is_(None))
+    # Round X — "เลขที่ Invoice": the ACTIVE cycle's invoice only. Every other
+    # column of this report describes the open cycle, so a match must too; a
+    # plot between cycles has no invoice to match. (The Plots list matches a
+    # cycle of any status on purpose — it answers a different question.)
+    invoice_match = contains_text(PlotCycle.oracle_invoice, invoice)
+    if invoice_match is not None:
+        stmt = stmt.where(
+            select(PlotCycle.id)
+            .where(
+                PlotCycle.plot_id == Plot.id,
+                PlotCycle.status == CYCLE_STATUS_ACTIVE,
+                invoice_match,
+            )
+            .exists()
+        )
     # A date range filters on last_inspected_at — never-inspected plots
     # (NULL) drop out naturally, matching "ช่วงวันที่ตรวจล่าสุด".
     if date_from is not None:
@@ -87,9 +106,18 @@ async def plot_status_rows(
         stmt = stmt.limit(limit).offset(offset)
 
     result = await db.execute(stmt)
+    listed = result.all()
+    # Round X — the harvest the field team has REPORTED, for every open cycle
+    # on this page in ONE query (never per plot), chosen by the round-D rule.
+    reported = await plot_cycle_repo.get_actual_harvest_source_records_for_cycles(
+        db, [plot.active_cycle.id for plot, _c, _n in listed if plot.active_cycle is not None],
+    )
     rows: list[ReportPlotStatusRow] = []
-    for plot, supplier_code, supplier_name in result.all():
+    for plot, supplier_code, supplier_name in listed:
         cycle = plot.active_cycle
+        harvest = plot_cycle_repo.actual_harvest_from_record(
+            reported.get(cycle.id) if cycle is not None else None
+        )
         rows.append(
             ReportPlotStatusRow(
                 plot_id=plot.id,
@@ -119,6 +147,19 @@ async def plot_status_rows(
                 last_inspected_at=plot.last_inspected_at,
                 last_inspected_by_code=plot.last_inspected_by_code,
                 is_inspected=plot.last_inspection_record_id is not None,
+                # Round X — the open cycle's identity and references.
+                cycle_label=cycle.cycle_label if cycle is not None else None,
+                po_number=cycle.po_number if cycle is not None else None,
+                p_code=cycle.p_code if cycle is not None else None,
+                lot_no=cycle.lot_no if cycle is not None else None,
+                supplier_lot_no=cycle.supplier_lot_no if cycle is not None else None,
+                oracle_supplier_code=cycle.oracle_supplier_code if cycle is not None else None,
+                oracle_invoice=cycle.oracle_invoice if cycle is not None else None,
+                ref_account=cycle.ref_account if cycle is not None else None,
+                planting_date=cycle.planting_date if cycle is not None else None,
+                reported_harvest_yield=harvest["harvest_yield"],
+                reported_final_yield_after_clean=harvest["final_yield_after_clean"],
+                reported_harvest_date=harvest["harvest_date"],
             )
         )
     return rows
@@ -132,6 +173,7 @@ async def cycle_yield_rows(
     status: str = "closed",
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
+    invoice: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> list[ReportCycleYieldRow]:
@@ -177,6 +219,10 @@ async def cycle_yield_rows(
     else:  # a single explicit status (harvested / cancelled / active)
         stmt = stmt.where(PlotCycle.status == status)
 
+    # Round X — "เลขที่ Invoice": the row's own cycle.
+    invoice_match = contains_text(PlotCycle.oracle_invoice, invoice)
+    if invoice_match is not None:
+        stmt = stmt.where(invoice_match)
     # closed_at date range — active cycles (closed_at NULL) never satisfy a
     # bounded comparison, so they drop out of any date-filtered query.
     if date_from is not None:
@@ -229,6 +275,14 @@ async def cycle_yield_rows(
                 final_yield_unit=cycle.final_yield_unit,
                 harvest_date=cycle.harvest_date,
                 final_note=cycle.final_note,
+                # Round X — Oracle references + actual vs target (round-R rule).
+                oracle_supplier_code=cycle.oracle_supplier_code,
+                oracle_invoice=cycle.oracle_invoice,
+                ref_account=cycle.ref_account,
+                actual_yield_pct=actual_vs_target_pct(
+                    cycle.final_yield_after_clean, cycle.final_yield_unit,
+                    cycle.expected_yield_full, cycle.expected_yield_unit,
+                ),
             )
         )
     return rows

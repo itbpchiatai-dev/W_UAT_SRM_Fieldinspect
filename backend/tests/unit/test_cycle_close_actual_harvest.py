@@ -108,8 +108,14 @@ def test_a_plain_harvest_report_leaves_the_after_cleaning_gap_visible() -> None:
 def test_the_source_query_prefers_a_final_yield_report_without_matching_stage_names() -> None:
     """Source-level guard. The backend must find the ผลผลิตสุดท้าย report by
     the DATA it carries (a non-null final_yield_after_clean), never by matching
-    a Thai stage name — stage names are admin-editable Master Data."""
-    src = inspect.getsource(repo.get_actual_harvest_source_record)
+    a Thai stage name — stage names are admin-editable Master Data.
+
+    Round X — the rule now lives in the batch lookup the single-cycle function
+    delegates to, so that is the source inspected."""
+    assert "get_actual_harvest_source_records_for_cycles" in inspect.getsource(
+        repo.get_actual_harvest_source_record
+    )
+    src = inspect.getsource(repo.get_actual_harvest_source_records_for_cycles)
     assert "final_yield_after_clean.is_not(None)" in src
     assert "yield_quantity_kg.is_not(None)" in src
     # Assert on the CODE, not the docstring — which legitimately names the

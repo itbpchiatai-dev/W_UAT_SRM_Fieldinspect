@@ -43,6 +43,8 @@ export function PlotStatusReport() {
   const [filterInspected, setFilterInspected] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  // Round X — part of an Oracle invoice number (the open cycle's).
+  const [filterInvoice, setFilterInvoice] = useState('');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
 
@@ -55,6 +57,7 @@ export function PlotStatusReport() {
     inspected: filterInspected || undefined,
     dateFrom: filterDateFrom || undefined,
     dateTo: filterDateTo || undefined,
+    invoice: filterInvoice || undefined,
   };
 
   const { data: suppliers = [] } = useQuery({
@@ -169,6 +172,16 @@ export function PlotStatusReport() {
           title="ตรวจล่าสุด ถึงวันที่"
           className={selectClass}
         />
+        {/* Round X — matched against the plot's OPEN cycle; part of the number
+            is enough. Shared with the export through filterParams. */}
+        <input
+          type="search"
+          value={filterInvoice}
+          onChange={(e) => { setPage(0); setFilterInvoice(e.target.value); }}
+          placeholder="เลขที่ Invoice"
+          aria-label="เลขที่ Invoice"
+          className={selectClass}
+        />
       </div>
 
       {/* Table */}
@@ -191,7 +204,7 @@ export function PlotStatusReport() {
                     still carries the old per-slot headers (server-generated,
                     downloadPlotStatusReport) — a backend change tracked
                     separately. */}
-                {['Supplier / แปลง', 'จังหวัด', 'พืช/พันธุ์/ระยะ', 'ผลผลิตที่คาดว่าจะได้', 'คะแนนตรวจ (4 หัวข้อ)', 'ตรวจล่าสุด', 'สถานะ'].map((h) => (
+                {['Supplier / แปลง', 'จังหวัด', 'Invoice', 'พืช/พันธุ์/ระยะ', 'ผลผลิตที่คาดว่าจะได้', 'คะแนนตรวจ (4 หัวข้อ)', 'ตรวจล่าสุด', 'สถานะ'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>
@@ -218,6 +231,7 @@ export function PlotStatusReport() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">{r.province ?? '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-700">{r.oracleInvoice || '—'}</td>
                     <td className="px-4 py-3 text-sm text-gray-700">
                       {hasActiveCycle ? (
                         <>

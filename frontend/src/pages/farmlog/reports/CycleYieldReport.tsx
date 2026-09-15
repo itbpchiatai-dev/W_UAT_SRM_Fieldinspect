@@ -72,6 +72,8 @@ export function CycleYieldReport() {
   const [filterStatus, setFilterStatus] = useState('closed');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  // Round X — part of an Oracle invoice number (the row's own cycle).
+  const [filterInvoice, setFilterInvoice] = useState('');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
 
@@ -85,6 +87,7 @@ export function CycleYieldReport() {
     status: filterStatus || undefined,
     dateFrom: filterDateFrom || undefined,
     dateTo: filterDateTo || undefined,
+    invoice: filterInvoice || undefined,
   };
 
   const { data: suppliers = [] } = useQuery({
@@ -188,6 +191,16 @@ export function CycleYieldReport() {
           aria-label="วันที่ปิดรอบ ถึง"
           className={selectClass}
         />
+        {/* Round X — matched against the row's own cycle; part of the number
+            is enough. Shared with the export through filterParams. */}
+        <input
+          type="search"
+          value={filterInvoice}
+          onChange={(e) => { setPage(0); setFilterInvoice(e.target.value); }}
+          placeholder="เลขที่ Invoice"
+          aria-label="เลขที่ Invoice"
+          className={selectClass}
+        />
       </div>
 
       {/* Table */}
@@ -207,7 +220,7 @@ export function CycleYieldReport() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                {['Supplier / แปลง', 'รอบปลูก', 'พืช/พันธุ์/Lot', 'เป้าผลิต', 'สถานะ / ปิดรอบ', 'สรุปผลผลิต'].map((h) => (
+                {['Supplier / แปลง', 'รอบปลูก', 'Invoice', 'พืช/พันธุ์/Lot', 'เป้าผลิต', 'สถานะ / ปิดรอบ', 'สรุปผลผลิต'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>
@@ -240,6 +253,7 @@ export function CycleYieldReport() {
                       <div className="font-medium">{cycleTitle(r)}</div>
                       {r.province && <div className="text-xs text-gray-400">{r.province}</div>}
                     </td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-700">{r.oracleInvoice || '—'}</td>
                     <td className="px-4 py-3 text-sm text-gray-700">
                       <div>{r.crop ?? '—'}</div>
                       {r.variety && <div className="text-xs text-gray-400">{r.variety}</div>}

@@ -60,6 +60,27 @@ class ReportPlotStatusRow(CamelBaseModel):
     # ยังไม่ตรวจ" badge and the inspected/not_inspected filter.
     is_inspected: bool
 
+    # Round X — the ACTIVE cycle's identity and references, for the export
+    # (null when the plot is between cycles, like the plan fields above).
+    cycle_label: str | None = None
+    po_number: str | None = None
+    p_code: str | None = None
+    lot_no: str | None = None
+    supplier_lot_no: str | None = None
+    oracle_supplier_code: str | None = None
+    oracle_invoice: str | None = None
+    ref_account: str | None = None
+    planting_date: datetime.date | None = None
+    # Round X — the harvest the field team has REPORTED on the active cycle's
+    # inspections, chosen by the round-D rule the close screen uses
+    # (plot_cycle_repository.get_actual_harvest_source_record). Unconfirmed
+    # until the cycle is closed — the confirmed figures then appear in the
+    # cycle-yield report instead; the two are never relabelled into each other.
+    # Always kilograms.
+    reported_harvest_yield: Decimal | None = None
+    reported_final_yield_after_clean: Decimal | None = None
+    reported_harvest_date: datetime.date | None = None
+
 
 class ReportCycleYieldRow(CamelBaseModel):
     """Report #2 "ผลผลิตตามรอบปลูก" (Cycle Yield): one row per PlotCycle, read
@@ -129,3 +150,14 @@ class ReportCycleYieldRow(CamelBaseModel):
     final_yield_unit: str | None
     harvest_date: datetime.date | None
     final_note: str | None
+
+    # Round X — the cycle's Oracle references (round 8-21A), read verbatim, so
+    # the export can be reconciled against Oracle; oracle_invoice is also what
+    # the report's invoice filter searches.
+    oracle_supplier_code: str | None = None
+    oracle_invoice: str | None = None
+    ref_account: str | None = None
+    # Round X — final_yield_after_clean as a percentage of the target, only
+    # when both are in the same unit (yield_calculation.actual_vs_target_pct:
+    # the Plots list's round-R rule). None otherwise — never a cross-unit %.
+    actual_yield_pct: Decimal | None = None

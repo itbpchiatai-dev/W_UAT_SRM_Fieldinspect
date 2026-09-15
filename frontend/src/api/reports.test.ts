@@ -104,3 +104,25 @@ describe('downloadCycleYieldReport', () => {
     expect(config.params.offset).toBeUndefined();
   });
 });
+
+// Round X — "เลขที่ Invoice" reaches FastAPI as snake_case `invoice` (it
+// silently ignores an unknown camelCase param), trimmed, and not at all when
+// blank — on both reports, for the table AND the export.
+describe('round X — invoice param', () => {
+  it.each([
+    ['listPlotStatus', () => listPlotStatus({ invoice: '  INV-26 ' })],
+    ['downloadPlotStatusReport', () => downloadPlotStatusReport({ invoice: '  INV-26 ' })],
+    ['listCycleYieldReport', () => listCycleYieldReport({ invoice: '  INV-26 ' })],
+    ['downloadCycleYieldReport', () => downloadCycleYieldReport({ invoice: '  INV-26 ' })],
+  ])('%s sends invoice trimmed', async (_name, call) => {
+    getMock.mockResolvedValue({ data: [] });
+    await call();
+    expect(getMock.mock.calls[0][1].params.invoice).toBe('INV-26');
+  });
+
+  it('a blank invoice is not sent at all', async () => {
+    getMock.mockResolvedValue({ data: [] });
+    await listCycleYieldReport({ invoice: '   ' });
+    expect(getMock.mock.calls[0][1].params.invoice).toBeUndefined();
+  });
+});

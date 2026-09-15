@@ -107,6 +107,8 @@ def _fake_cycle(**kw) -> SimpleNamespace:
         harvest_yield=Decimal("380.00"), final_yield_after_clean=Decimal("360.00"),
         final_yield_unit="kg", harvest_date=datetime.date(2026, 8, 19),
         final_note="ผลผลิตหลังคัดแยก",
+        # Round X — report_repository reads the Oracle references too.
+        oracle_supplier_code=None, oracle_invoice=None, ref_account=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -248,6 +250,8 @@ def test_headers_order_separates_estimated_and_actual_harvest_columns() -> None:
         "ผลผลิตตอนเก็บเกี่ยว",
         "ผลผลิตจริงหลังทำความสะอาด",
         "หน่วยผลผลิตจริง",
+        # Round X — derived from the actual figures, so it joins their family.
+        "ผลผลิตจริงเทียบเป้า (%)",
         "วันที่เก็บเกี่ยว",
         "หมายเหตุผลผลิตสุดท้าย",
     ]

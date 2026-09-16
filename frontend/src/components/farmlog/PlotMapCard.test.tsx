@@ -76,9 +76,9 @@ describe('PlotMapCard', () => {
     const { container } = renderCard();
     await waitFor(() => expect(markerCount(container)).toBe(2));
 
-    // First combobox is the crop filter.
-    const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[0], { target: { value: 'พริก' } });
+    // Round Z — the filters are searchable listboxes: open and click.
+    fireEvent.click(screen.getByRole('button', { name: 'กรองชนิดพืช' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'พริก' }));
 
     await waitFor(() => expect(markerCount(container)).toBe(1));
   });

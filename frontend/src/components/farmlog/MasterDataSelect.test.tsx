@@ -2,9 +2,13 @@
  * MasterDataSelect — round 8-15D: an inactive-but-currently-selected value
  * must stay visible (never go blank / look like data loss) but must be
  * unselectable as a NEW choice once the user picks something else.
+ *
+ * Round Z — the control is a searchable dropdown (SearchableSelect), not a
+ * native <select>, so its options exist only while the list is open. The
+ * rules under test are unchanged.
  */
 import { it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MasterDataSelect } from './MasterDataSelect';
 import { masterDataQueryKey, type MasterDataItem } from '../../api/masterdata';
@@ -40,6 +44,13 @@ beforeEach(() => {
   listMasterDataMock.mockReset();
 });
 
+/** Open the dropdown once its options have loaded. */
+async function openList() {
+  const trigger = await screen.findByRole('button', { name: 'เลือกcrop' });
+  await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(trigger);
+}
+
 it('queries with activeOnly=true', async () => {
   listMasterDataMock.mockResolvedValue([item('พริก'), item('เมล่อน')]);
   renderSelect(null);
@@ -50,31 +61,33 @@ it('queries with activeOnly=true', async () => {
 it('renders only active options returned by the query', async () => {
   listMasterDataMock.mockResolvedValue([item('พริก'), item('เมล่อน')]);
   renderSelect(null);
-  const opt = await screen.findByRole('option', { name: 'พริก' });
-  expect(opt).toBeTruthy();
+  await openList();
+  expect(screen.getByRole('option', { name: 'พริก' })).toBeTruthy();
   expect(screen.getByRole('option', { name: 'เมล่อน' })).toBeTruthy();
   // No stray "inactive" marker when the current value has nothing to mark.
   expect(screen.queryByText(/ปิดใช้งาน\/ค่าเดิม/)).toBeNull();
 });
 
-it('current value not in the active list stays visible, marked, and disabled', async () => {
+it('current value not in the active list stays visible and marked', async () => {
   // The list never contains "ทุเรียน" (e.g. deactivated after this cycle was created).
   listMasterDataMock.mockResolvedValue([item('พริก')]);
   renderSelect('ทุเรียน');
 
-  const legacyOption = await screen.findByRole(
-    'option', { name: 'ทุเรียน (ปิดใช้งาน/ค่าเดิม)' },
-  ) as HTMLOptionElement;
-  expect(legacyOption.disabled).toBe(true);
-  // The <select> itself still reflects it as the current value (never blank).
-  const select = screen.getByRole('combobox') as HTMLSelectElement;
-  expect(select.value).toBe('ทุเรียน');
+  // Round Z — the field still SHOWS it (never blank, never data loss), and
+  // it is not among the options a new choice can be made from.
+  const trigger = await screen.findByRole('button', { name: 'เลือกcrop' });
+  await waitFor(() =>
+    expect(trigger.textContent).toContain('ทุเรียน (ปิดใช้งาน/ค่าเดิม)'),
+  );
+  fireEvent.click(trigger);
+  expect(screen.queryByRole('option', { name: /ทุเรียน/ })).toBeNull();
 });
 
 it('an active current value renders with no legacy marker', async () => {
   listMasterDataMock.mockResolvedValue([item('พริก'), item('เมล่อน')]);
   renderSelect('พริก');
-  await screen.findByRole('option', { name: 'พริก' });
+  await openList();
+  expect(screen.getByRole('option', { name: 'พริก' })).toBeTruthy();
   expect(screen.queryByText(/ปิดใช้งาน\/ค่าเดิม/)).toBeNull();
 });
 
@@ -92,6 +105,7 @@ it('round 8-22A: never reuses the Admin (all-status) cache entry, even when it i
   renderSelect(null, vi.fn(), qc);
 
   await waitFor(() => expect(listMasterDataMock).toHaveBeenCalled());
+  await openList();
   // A distinct key means this query starts with no cached data of its own
   // — it never even transiently shows the Admin page's inactive-included
   // list before its own fetch resolves.

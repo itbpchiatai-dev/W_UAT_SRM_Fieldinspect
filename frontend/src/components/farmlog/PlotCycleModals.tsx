@@ -32,7 +32,7 @@ import {
 import { useHasPermission } from '../../hooks/useHasPermission';
 import { MasterDataSelect } from './MasterDataSelect';
 import { PCodeSelect } from './PCodeSelect';
-import { YIELD_UNIT_OPTIONS, formatYieldQuantity } from '../../lib/yield-planning';
+import { DEFAULT_YIELD_UNIT, YIELD_UNIT_OPTIONS, formatYieldQuantity } from '../../lib/yield-planning';
 
 const optionalNumberInput = z.preprocess(
   (value) => (value === '' || value === undefined ? undefined : value),
@@ -753,7 +753,11 @@ export function StartCycleModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<CycleFormValues>({
     resolver: zodResolver(cycleFormSchema),
-    defaultValues: { poNumber: '', pCode: '' },
+    // Round Z — the unit starts on kg: it is what every plan on UAT uses,
+    // and a blank one meant a yield figure could be typed with no unit and
+    // only fail on submit (requireUnitWithYield). An EDIT form is untouched:
+    // it keeps whatever the cycle already stores.
+    defaultValues: { poNumber: '', pCode: '', expectedYieldUnit: DEFAULT_YIELD_UNIT },
   });
 
   const createM = useMutation({ mutationFn: (p: PlotCycleCreatePayload) => createPlotCycle(plotId, p) });
@@ -1132,7 +1136,11 @@ export function RolloverCycleModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<RolloverFormValues>({
     resolver: zodResolver(rolloverSchema),
-    defaultValues: { closeStatus: 'harvested', closeReason: '', poNumber: '', pCode: '' },
+    defaultValues: {
+      closeStatus: 'harvested', closeReason: '', poNumber: '', pCode: '',
+      // Round Z — rollover opens a NEW cycle, so the same kg default.
+      expectedYieldUnit: DEFAULT_YIELD_UNIT,
+    },
   });
 
   const rolloverM = useMutation({
@@ -1324,7 +1332,11 @@ export function ReactivatePlotWithCycleModal({
 }) {
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting } } = useForm<CycleFormValues>({
     resolver: zodResolver(cycleFormSchema),
-    defaultValues: { poNumber: '', pCode: '' },
+    // Round Z — the unit starts on kg: it is what every plan on UAT uses,
+    // and a blank one meant a yield figure could be typed with no unit and
+    // only fail on submit (requireUnitWithYield). An EDIT form is untouched:
+    // it keeps whatever the cycle already stores.
+    defaultValues: { poNumber: '', pCode: '', expectedYieldUnit: DEFAULT_YIELD_UNIT },
   });
 
   const reactivateM = useMutation({

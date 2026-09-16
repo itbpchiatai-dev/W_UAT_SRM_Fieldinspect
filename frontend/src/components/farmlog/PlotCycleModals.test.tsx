@@ -610,6 +610,37 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     return { onClose, onSaved };
   }
 
+  // --- round Z: the unit a new cycle starts with ---------------------------
+
+  it("round Z: the หน่วย box starts on kg, so a yield can be typed straight away", () => {
+    renderStart();
+
+    const unitSelect = document.querySelector(
+      'select[name="expectedYieldUnit"]',
+    ) as HTMLSelectElement;
+    expect(unitSelect.value).toBe('kg');
+  });
+
+  it('round Z: a cycle created without touching the unit is submitted as kg', async () => {
+    createPlotCycleMock.mockReset();
+    createPlotCycleMock.mockResolvedValue(legacyCycle());
+    renderStart();
+
+    await pickPCode();
+    fireEvent.change(
+      screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } },
+    );
+    fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '1200' } });
+    fireEvent.click(screen.getByRole('button', { name: 'เริ่มรอบปลูก' }));
+
+    await waitFor(() => expect(createPlotCycleMock).toHaveBeenCalled());
+    const payload = createPlotCycleMock.mock.calls[0][1];
+    // Before round Z this was null and the form refused to submit at all
+    // (requireUnitWithYield) until the user picked a unit by hand.
+    expect(payload.expectedYieldUnit).toBe('kg');
+    expect(payload.expectedYieldFull).toBe(1200);
+  });
+
   it('submits successfully with PO left blank — payload.poNumber is null', async () => {
     createPlotCycleMock.mockReset();
     createPlotCycleMock.mockResolvedValue(legacyCycle());

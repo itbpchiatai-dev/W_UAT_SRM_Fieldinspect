@@ -171,6 +171,15 @@ function masterDataItem(overrides: Partial<{
   };
 }
 
+/** Round Z — the Supplier field is a searchable listbox now: open it and
+ * click the option, instead of setting a <select>'s value. */
+async function pickSupplier(name = 'Supplier One') {
+  fireEvent.click(screen.getByRole('button', { name: '— เลือก Supplier —' }));
+  // findBy, not getBy: the suppliers query is async, so the option may land
+  // after the list is already open.
+  fireEvent.click(await screen.findByRole('option', { name }));
+}
+
 beforeEach(() => {
   listSuppliersMock.mockReset();
   listPlotsMock.mockReset();
@@ -220,12 +229,7 @@ describe('RecordForm — plot GPS with string coordinates', () => {
 
     renderNewRecordForm();
 
-    // Wait for the supplier option to actually be in the DOM before
-    // selecting it — the select shows the placeholder from first render,
-    // so waiting on that alone races the async suppliers query.
-    await screen.findByText('Supplier One');
-    const supplierSelect = screen.getByDisplayValue('— เลือก Supplier —');
-    fireEvent.change(supplierSelect, { target: { value: 'sup-1' } });
+    await pickSupplier();
 
     const plotPickerTrigger = await screen.findByText('— เลือกแปลง —');
     fireEvent.click(plotPickerTrigger);
@@ -252,12 +256,7 @@ describe('RecordForm — plot GPS with string coordinates', () => {
 
     renderNewRecordForm();
 
-    // Wait for the supplier option to actually be in the DOM before
-    // selecting it — the select shows the placeholder from first render,
-    // so waiting on that alone races the async suppliers query.
-    await screen.findByText('Supplier One');
-    const supplierSelect = screen.getByDisplayValue('— เลือก Supplier —');
-    fireEvent.change(supplierSelect, { target: { value: 'sup-1' } });
+    await pickSupplier();
 
     const plotPickerTrigger = await screen.findByText('— เลือกแปลง —');
     fireEvent.click(plotPickerTrigger);
@@ -301,8 +300,7 @@ describe('RecordForm — plot master crop/variety are read-only in inspection fl
 
     renderNewRecordForm();
 
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
 
     const plotPickerTrigger = await screen.findByText('— เลือกแปลง —');
     fireEvent.click(plotPickerTrigger);
@@ -338,8 +336,7 @@ describe('RecordForm — plot master crop/variety are read-only in inspection fl
 
     renderNewRecordForm();
 
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     const plotPickerTrigger = await screen.findByText('— เลือกแปลง —');
     fireEvent.click(plotPickerTrigger);
     fireEvent.click(await screen.findByText('SUP001-P001'));
@@ -366,7 +363,9 @@ describe('RecordForm — "ตรวจแปลง" deep-link prefill (supplier 
     renderPrefilledRecordForm('sup-1', 'plot-7');
 
     // Supplier is preselected (locked select shows the chosen supplier's name).
-    await waitFor(() => expect(screen.getByDisplayValue('Supplier One')).toBeTruthy());
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: '— เลือก Supplier —' }).textContent,
+    ).toContain('Supplier One'));
     // Plot is preselected — the plot code shows in both the picker trigger and
     // the read-only "ข้อมูลแปลง" panel, which auto-fills from it.
     expect((await screen.findAllByText('SUP001-P007')).length).toBeGreaterThanOrEqual(1);
@@ -385,7 +384,9 @@ describe('RecordForm — "ตรวจแปลง" deep-link prefill (supplier 
 
     renderPrefilledRecordForm('sup-1', 'plot-7');
 
-    await waitFor(() => expect(screen.getByDisplayValue('Supplier One')).toBeTruthy());
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: '— เลือก Supplier —' }).textContent,
+    ).toContain('Supplier One'));
     const nameInput = screen.getByPlaceholderText('ไม่บังคับ') as HTMLInputElement;
     expect(nameInput.value).toBe('');
   });
@@ -406,7 +407,9 @@ describe('RecordForm — QR scan resolves the round-20 opaque qrKey format', () 
 
     await waitFor(() => expect(lookupPlotByQrKeyMock).toHaveBeenCalledWith('opaque-key-xyz'));
     expect(lookupPlotByQrMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByDisplayValue('Supplier One')).toBeTruthy());
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: '— เลือก Supplier —' }).textContent,
+    ).toContain('Supplier One'));
   });
 
   it('shows a QR-specific not-found message (no plot/supplier code echoed) when the qrKey does not resolve', async () => {
@@ -458,8 +461,7 @@ describe('RecordForm — Yield % defaults from the plot latest inspection (round
 
     renderNewRecordForm();
 
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
 
@@ -486,8 +488,7 @@ describe('RecordForm — Yield % defaults from the plot latest inspection (round
 
     renderNewRecordForm();
 
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P002'));
 
@@ -510,8 +511,7 @@ describe('RecordForm — Yield % defaults from the plot latest inspection (round
 
     renderNewRecordForm();
 
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P003'));
 
@@ -537,8 +537,7 @@ describe('RecordForm — submit (บันทึก)', () => {
 
   async function fillAndSubmit() {
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
@@ -547,7 +546,6 @@ describe('RecordForm — submit (บันทึก)', () => {
   it('never renders a รหัสผู้กรอกข้อมูล field (retired round 8-3G)', async () => {
     listPlotsMock.mockResolvedValue(plotForSubmit());
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
 
     expect(screen.queryByText(/รหัสผู้กรอกข้อมูล/)).toBeNull();
     expect(screen.queryByPlaceholderText(/FIELD01/)).toBeNull();
@@ -592,8 +590,7 @@ describe('RecordForm — submit (บันทึก)', () => {
     createRecordMock.mockResolvedValue({ id: 'rec-9' });
 
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
     await screen.findByText('100.0%'); // default prefill (no history, target=1000kg)
@@ -623,8 +620,7 @@ describe('RecordForm — submit (บันทึก)', () => {
     createRecordMock.mockResolvedValue({ id: 'rec-9' });
 
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
     await screen.findByText('100.0%');
@@ -694,8 +690,7 @@ describe('RecordForm — round 8-14B: photo processing gates submit', () => {
   async function goToNewRecordForm() {
     listPlotsMock.mockResolvedValue(plotForSubmit());
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
   }
@@ -807,8 +802,7 @@ describe('RecordForm — protocol-driven scores', () => {
 
   async function renderPickPlotAndStage(stage?: string) {
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
     if (stage) fireEvent.click(await screen.findByRole('button', { name: stage }));
@@ -957,8 +951,7 @@ describe('RecordForm — recordDate is the Thai business date (round 8-19.1)', (
 
   async function fillAndSubmit() {
     renderNewRecordForm();
-    await screen.findByText('Supplier One');
-    fireEvent.change(screen.getByDisplayValue('— เลือก Supplier —'), { target: { value: 'sup-1' } });
+    await pickSupplier();
     fireEvent.click(await screen.findByText('— เลือกแปลง —'));
     fireEvent.click(await screen.findByText('SUP001-P001'));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));

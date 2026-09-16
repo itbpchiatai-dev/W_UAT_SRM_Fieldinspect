@@ -6,6 +6,7 @@
  * plots.read (the Dashboard gates it).
  */
 import { useMemo, useState } from 'react';
+import { SearchableSelect } from './SearchableSelect';
 import { useQuery } from '@tanstack/react-query';
 import { MapPin } from 'lucide-react';
 import { listPlots, type PlotSummary } from '../../api/plots';
@@ -74,8 +75,6 @@ export function PlotMapCard() {
     return entries;
   }, [filtered]);
 
-  const selectClass =
-    'rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
   return (
     <div className="overflow-hidden rounded-lg border bg-card shadow-sm">
@@ -85,24 +84,37 @@ export function PlotMapCard() {
       </div>
 
       <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:flex-wrap">
-        <select value={crop} onChange={(e) => setCrop(e.target.value)} className={selectClass}>
-          <option value="">ทุกชนิดพืช</option>
-          {cropOptions.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-        <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={selectClass}>
-          <option value="">ทุก Supplier</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>{s.label}</option>
-          ))}
-        </select>
-        <select value={province} onChange={(e) => setProvince(e.target.value)} className={selectClass}>
-          <option value="">ทุกจังหวัด</option>
-          {provinceOptions.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
+        {/* Round Z — searchable: 77 provinces and a growing supplier list
+            are not something to scroll on a dashboard. */}
+        <SearchableSelect
+          label="กรองชนิดพืช"
+          placeholder="ทุกชนิดพืช"
+          clearLabel="ทุกชนิดพืช"
+          options={cropOptions.map((c) => ({ value: c, label: c }))}
+          value={crop || null}
+          onChange={(v) => setCrop(v ?? '')}
+          className="relative w-full sm:w-44"
+        />
+        <SearchableSelect
+          label="กรอง Supplier"
+          placeholder="ทุก Supplier"
+          clearLabel="ทุก Supplier"
+          options={suppliers.map((s) => ({ value: s.id, label: s.label }))}
+          value={supplierId || null}
+          onChange={(v) => setSupplierId(v ?? '')}
+          searchPlaceholder="ค้นหา Supplier..."
+          emptyMessage="ไม่พบ Supplier"
+          className="relative w-full sm:w-56"
+        />
+        <SearchableSelect
+          label="กรองจังหวัด"
+          placeholder="ทุกจังหวัด"
+          clearLabel="ทุกจังหวัด"
+          options={provinceOptions.map((p) => ({ value: p, label: p }))}
+          value={province || null}
+          onChange={(v) => setProvince(v ?? '')}
+          className="relative w-full sm:w-44"
+        />
       </div>
 
       <div className="p-4">

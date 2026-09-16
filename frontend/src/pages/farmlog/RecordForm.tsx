@@ -26,6 +26,7 @@ import {
 import { listSuppliers } from '../../api/suppliers';
 import { listPlots, lookupPlotByQr, lookupPlotByQrKey, type PlotSummary } from '../../api/plots';
 import { SmartPlotPicker } from '../../components/farmlog/SmartPlotPicker';
+import { SearchableSelect } from '../../components/farmlog/SearchableSelect';
 import { LazyPlotQrScan } from '../../components/farmlog/LazyPlotQrScan';
 import { parsePlotQr } from '../../lib/plot-qr';
 import { MasterDataButtons } from '../../components/farmlog/MasterDataButtons';
@@ -440,11 +441,17 @@ export function RecordForm() {
           <h2 className="mb-4 text-base font-semibold text-foreground">ข้อมูลพื้นฐาน</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Supplier" required>
-              <select value={form.supplierId} onChange={e => { set('supplierId', e.target.value); set('plotId', ''); setSelectedPlot(null); }}
-                className={inputCls}>
-                <option value="">— เลือก Supplier —</option>
-                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              {/* Round Z — searchable: field staff pick from the whole
+                  supplier list on a phone, where scrolling a native select
+                  is the worst part of the form. */}
+              <SearchableSelect
+                label="— เลือก Supplier —"
+                options={suppliers.map(s => ({ value: s.id, label: s.name }))}
+                value={form.supplierId || null}
+                onChange={(v) => { set('supplierId', v ?? ''); set('plotId', ''); setSelectedPlot(null); }}
+                searchPlaceholder="ค้นหา Supplier..."
+                emptyMessage="ไม่พบ Supplier"
+              />
             </Field>
 
             <Field label="แปลง" required>

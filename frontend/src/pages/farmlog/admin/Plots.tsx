@@ -62,6 +62,7 @@ import { PlotQrPrintSheet, type PlotQrLabelData } from '../../../components/farm
 import { PlotImportModal } from '../../../components/farmlog/PlotImportModal';
 import { MasterDataSelect } from '../../../components/farmlog/MasterDataSelect';
 import { SearchableFilterCombobox } from '../../../components/farmlog/SearchableFilterCombobox';
+import { SearchableSelect } from '../../../components/farmlog/SearchableSelect';
 import {
   CyclePlanFields,
   cyclePlanFields,
@@ -84,6 +85,7 @@ import { toNumberOrNull } from '../../../lib/numeric';
 import { fetchAllPages } from '../../../lib/paginate';
 import { formatThaiMobile } from '../../../lib/phone';
 import {
+  DEFAULT_YIELD_UNIT,
   computeCurrentExpectedYield,
   describeYieldPlanGap,
   formatYieldQuantity,
@@ -465,91 +467,22 @@ function SupplierFilterCombobox({
   value: string;
   onChange: (supplierId: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const ref = useRef<HTMLDivElement | null>(null);
-  const selected = suppliers.find((supplier) => supplier.id === value) ?? null;
-  const normalizedSearch = search.trim().toLowerCase();
-  const visibleSuppliers = normalizedSearch
-    ? suppliers.filter((supplier) => supplierLabel(supplier).toLowerCase().includes(normalizedSearch))
-    : suppliers;
-
-  useEffect(() => {
-    if (!open) return;
-    function onMouseDown(e: MouseEvent) {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    }
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-
+  // Round Z — was its own copy of the open/search/click-outside dance, the
+  // second of two in the app. Both now wear SearchableSelect; what is left
+  // here is this filter's own wording and the "" (= no filter) convention
+  // its callers use, which the shared control expresses as null.
   return (
-    <div ref={ref} className="relative min-w-[260px] flex-1 sm:max-w-sm">
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        aria-label="กรอง Supplier"
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-sm transition-colors hover:bg-secondary/60 focus:outline-none focus:ring-2 focus:ring-ring"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <span className={selected ? 'truncate text-foreground' : 'truncate text-muted-foreground'}>
-          {selected ? supplierLabel(selected) : '— ทุก Supplier —'}
-        </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-      </button>
-
-      {open ? (
-        <div className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg">
-          <label className="relative block">
-            <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="ค้นหา Supplier..."
-              className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              autoFocus
-            />
-          </label>
-          <div role="listbox" className="mt-2 max-h-64 overflow-y-auto">
-            <button
-              type="button"
-              role="option"
-              aria-selected={value === ''}
-              onClick={() => { onChange(''); setSearch(''); setOpen(false); }}
-              className="flex w-full items-center rounded-md px-3 py-2 text-left text-sm hover:bg-secondary"
-            >
-              — ทุก Supplier —
-            </button>
-            {visibleSuppliers.map((supplier) => (
-              <button
-                key={supplier.id}
-                type="button"
-                role="option"
-                aria-selected={supplier.id === value}
-                onClick={() => { onChange(supplier.id); setSearch(''); setOpen(false); }}
-                className={`flex w-full flex-col rounded-md px-3 py-2 text-left text-sm hover:bg-secondary ${
-                  supplier.id === value ? 'bg-primary/10 text-primary' : ''
-                }`}
-              >
-                <span className="font-medium">{supplier.code}</span>
-                <span className="text-xs text-muted-foreground">{supplier.name}</span>
-              </button>
-            ))}
-            {visibleSuppliers.length === 0 && (
-              <p className="px-3 py-3 text-sm text-muted-foreground">ไม่พบ Supplier</p>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </div>
+    <SearchableSelect
+      label="กรอง Supplier"
+      placeholder="— ทุก Supplier —"
+      clearLabel="— ทุก Supplier —"
+      options={suppliers.map((s) => ({ value: s.id, label: supplierLabel(s) }))}
+      value={value || null}
+      onChange={(next) => onChange(next ?? '')}
+      searchPlaceholder="ค้นหา Supplier..."
+      emptyMessage="ไม่พบ Supplier"
+      className="relative min-w-[260px] flex-1 sm:max-w-sm"
+    />
   );
 }
 
@@ -2129,7 +2062,8 @@ function CreatePlotModal({
     // Round 8-5B — the first cycle needs pCode (required); PO is optional.
     // Round A — there is no lot mode to default: the server always generates
     // the cycle's Lot No.
-    defaultValues: { poNumber: '', pCode: '' },
+    // Round Z — หน่วย starts on kg, like every other create form.
+    defaultValues: { poNumber: '', pCode: '', expectedYieldUnit: DEFAULT_YIELD_UNIT },
   });
 
   // Access phones (round 8-3C) — a plain controlled value alongside the RHF
@@ -2239,12 +2173,19 @@ function CreatePlotModal({
             <h3 className="mb-3 text-sm font-semibold text-foreground">ข้อมูลแปลง</h3>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Supplier *" error={errors.supplierId?.message} className="col-span-2">
-                <select {...register('supplierId')} className="field-input">
-                  <option value="">— เลือก Supplier —</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
-                  ))}
-                </select>
+                {/* Round Z — searchable: the list grows with every supplier
+                    added, and scrolling a plain <select> to find one was the
+                    complaint that started this round. */}
+                <SearchableSelect
+                  label="— เลือก Supplier —"
+                  options={suppliers.map((s) => ({ value: s.id, label: supplierLabel(s) }))}
+                  value={watch('supplierId') || null}
+                  onChange={(v) => setValue('supplierId', v ?? '', {
+                    shouldDirty: true, shouldValidate: true,
+                  })}
+                  searchPlaceholder="ค้นหา Supplier..."
+                  emptyMessage="ไม่พบ Supplier"
+                />
               </Field>
               {/* Round V — the code is always generated, so this is a preview,
                   not an input: what the server WILL produce, with ### for the

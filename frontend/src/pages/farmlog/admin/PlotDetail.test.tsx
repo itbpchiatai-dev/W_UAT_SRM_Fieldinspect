@@ -112,16 +112,29 @@ vi.mock('../../../api/masterdata', async (importOriginal) => {
 /** Round Y — fills the cycle form's crop, then picks a P.Code from the ones
  * that crop offers. The พันธุ์ is no longer a control at all: it is shown
  * read-only, derived from the P.Code. */
+async function clickOptionContaining(text: string) {
+  const listbox = await screen.findByRole('listbox');
+  const option = within(listbox)
+    .getAllByRole('option')
+    .find((o) => (o.textContent ?? '').includes(text));
+  if (!option) throw new Error(`no option containing "${text}"`);
+  fireEvent.click(option);
+}
+
 async function pickCropAndPCode(pCode = 'Melon-A') {
-  const cropBox = await screen.findByLabelText('— เลือกชนิดพืช —');
-  // The crop options arrive from master data; changing to a value that is not
-  // an option yet is a no-op, which would leave the P.Code box disabled.
-  await waitFor(() => expect(within(cropBox).getByRole('option', { name: 'พริก' })).toBeTruthy());
-  fireEvent.change(cropBox, { target: { value: 'พริก' } });
-  const box = await screen.findByLabelText('เลือก P.Code');
-  await waitFor(() => expect(within(box).getByRole('option', { name: new RegExp(pCode) })).toBeTruthy());
-  fireEvent.change(box, { target: { value: pCode } });
-  await waitFor(() => expect((box as HTMLSelectElement).value).toBe(pCode));
+  // Round Z — both are searchable listboxes now: open, then click. Each
+  // trigger stays disabled until its master data has loaded, which is what
+  // these waits are for.
+  const cropBox = await screen.findByRole('button', { name: '— เลือกชนิดพืช —' });
+  await waitFor(() => expect((cropBox as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(cropBox);
+  await clickOptionContaining('พริก');
+
+  const box = await screen.findByRole('button', { name: 'เลือก P.Code' });
+  await waitFor(() => expect((box as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(box);
+  await clickOptionContaining(pCode);
+  await waitFor(() => expect(box.textContent).toContain(pCode));
 }
 
 // null = every permission allowed (the default the existing tests rely on);

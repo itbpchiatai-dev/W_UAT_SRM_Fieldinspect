@@ -10,6 +10,7 @@ import { listSuppliers } from '../../api/suppliers';
 import { listPlots } from '../../api/plots';
 import { useHasPermission } from '../../hooks/useHasPermission';
 import { CompactScores } from '../../components/farmlog/CompactScores';
+import { SearchableSelect } from '../../components/farmlog/SearchableSelect';
 import { recordCycleDisplayName } from '../../lib/plot-cycle';
 import { formatYieldQuantity } from '../../lib/yield-planning';
 import { toNumberOrNull } from '../../lib/numeric';
@@ -126,33 +127,36 @@ export function RecordList() {
           placeholder, no visible cue for which one was "from" vs "to". */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <label htmlFor="record-filter-supplier" className="mb-1 block text-xs font-medium text-gray-500">
+          <span className="mb-1 block text-xs font-medium text-gray-500">
             ชื่อ Supplier
-          </label>
-          <select
-            id="record-filter-supplier"
-            value={filterSupplier}
-            onChange={e => { setFilterSupplier(e.target.value); setFilterPlot(''); setPage(0); }}
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-          >
-            <option value="">ทุก Supplier</option>
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          </span>
+          {/* Round Z — searchable, like every other chooser. */}
+          <SearchableSelect
+            label="ชื่อ Supplier"
+            placeholder="ทุก Supplier"
+            clearLabel="ทุก Supplier"
+            options={suppliers.map(s => ({ value: s.id, label: s.name }))}
+            value={filterSupplier || null}
+            onChange={(v) => { setFilterSupplier(v ?? ''); setFilterPlot(''); setPage(0); }}
+            searchPlaceholder="ค้นหา Supplier..."
+            emptyMessage="ไม่พบ Supplier"
+          />
         </div>
 
         <div>
-          <label htmlFor="record-filter-plot" className="mb-1 block text-xs font-medium text-gray-500">
+          <span className="mb-1 block text-xs font-medium text-gray-500">
             แปลงที่ต้องการตรวจ
-          </label>
-          <select
-            id="record-filter-plot"
-            value={filterPlot}
-            onChange={e => { setFilterPlot(e.target.value); setPage(0); }}
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
-          >
-            <option value="">ทุกแปลง</option>
-            {plots.map(p => <option key={p.id} value={p.id}>{p.plotCode} — {p.name}</option>)}
-          </select>
+          </span>
+          <SearchableSelect
+            label="แปลงที่ต้องการตรวจ"
+            placeholder="ทุกแปลง"
+            clearLabel="ทุกแปลง"
+            options={plots.map(p => ({ value: p.id, label: `${p.plotCode} — ${p.name}` }))}
+            value={filterPlot || null}
+            onChange={(v) => { setFilterPlot(v ?? ''); setPage(0); }}
+            searchPlaceholder="ค้นหาแปลง..."
+            emptyMessage="ไม่พบแปลง"
+          />
         </div>
 
         <div>

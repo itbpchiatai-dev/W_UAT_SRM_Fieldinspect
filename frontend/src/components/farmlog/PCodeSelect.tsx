@@ -17,9 +17,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { listMasterData, masterDataQueryKey } from '../../api/masterdata';
-
-const inputCls =
-  'w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:bg-gray-50 disabled:text-gray-500';
+import { SearchableSelect } from './SearchableSelect';
 
 interface Props {
   /** The chosen ชนิดพืช. Null = nothing to offer yet. */
@@ -43,36 +41,29 @@ export function PCodeSelect({ crop, value, onChange, disabled }: Props) {
   });
 
   const varietyOf = new Set((varietiesQuery.data ?? []).map((v) => v.value));
-  const options = (pCodesQuery.data ?? []).filter((p) => p.parent && varietyOf.has(p.parent));
+  const matching = (pCodesQuery.data ?? []).filter((p) => p.parent && varietyOf.has(p.parent));
   const loading = varietiesQuery.isLoading || pCodesQuery.isLoading;
-  const empty = !!crop && !loading && options.length === 0;
+  const empty = !!crop && !loading && matching.length === 0;
 
   return (
     <>
-      <select
-        className={inputCls}
-        // The wrapping <label> carries no htmlFor, so this is the field's only
-        // accessible name.
-        aria-label="เลือก P.Code"
-        value={value ?? ''}
-        disabled={disabled || !crop || loading}
-        onChange={(e) => {
-          const picked = e.target.value || null;
-          const match = options.find((o) => o.value === picked);
+      <SearchableSelect
+        label="เลือก P.Code"
+        placeholder={crop ? '— เลือก P.Code —' : '— เลือกชนิดพืชก่อน —'}
+        // Round Z — the label carries the variety, which is both what makes
+        // the choice readable and what makes it searchable: typing part of a
+        // variety name finds its P.Code.
+        options={matching.map((o) => ({ value: o.value, label: `${o.value} — ${o.parent}` }))}
+        value={value}
+        onChange={(picked) => {
+          const match = matching.find((o) => o.value === picked);
           onChange(picked, match?.parent ?? null);
         }}
-      >
-        <option value="">{crop ? '— เลือก P.Code —' : '— เลือกชนิดพืชก่อน —'}</option>
-        {/* A stored value that is no longer on offer (deactivated since the
-            cycle was created) stays visible and marked, never silently
-            blank — the same rule MasterDataSelect follows. */}
-        {value && !options.some((o) => o.value === value) && (
-          <option value={value} disabled>{value} (ปิดใช้งาน/ค่าเดิม)</option>
-        )}
-        {options.map((o) => (
-          <option key={o.id} value={o.value}>{`${o.value} — ${o.parent}`}</option>
-        ))}
-      </select>
+        disabled={disabled || !crop || loading}
+        // A P.Code deactivated since the cycle was created stays visible and
+        // marked, never silently blank.
+        staleLabel={value ? `${value} (ปิดใช้งาน/ค่าเดิม)` : undefined}
+      />
       {empty && (
         <p className="text-xs text-destructive">
           ชนิดพืชนี้ยังไม่มี P.Code — กรุณาเพิ่มที่เมนู Master Data ก่อน

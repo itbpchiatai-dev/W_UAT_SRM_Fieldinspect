@@ -19,6 +19,10 @@ import { toNumberOrNull } from './numeric';
 // start/edit modals (round 7.3) — one canonical list.
 export const YIELD_UNIT_OPTIONS = ['kg', 'g', 'ตัน', 'ผล', 'ลัง'];
 
+// Round Z — what a NEW cycle's unit starts as. Kilograms: it is what the
+// plans on UAT are written in, and what harvest figures are stored in.
+export const DEFAULT_YIELD_UNIT = 'kg';
+
 export function computeCurrentExpectedYield(
   expectedYieldFull: string | number | null | undefined,
   currentYieldPct: string | number | null | undefined,

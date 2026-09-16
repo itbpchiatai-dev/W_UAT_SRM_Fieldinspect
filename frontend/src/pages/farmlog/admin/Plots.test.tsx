@@ -56,19 +56,33 @@ function defaultMasterData({ type }: { type: string }) {
   return Promise.resolve([]);
 }
 
+/** Round Z — every chooser is now a searchable listbox, so an option is
+ * clicked by its text rather than selected by value. Supplier options read
+ * "SUP001 — Supplier One", so a code alone still finds one. */
+async function clickOptionContaining(text: string) {
+  const listbox = await screen.findByRole('listbox');
+  const option = within(listbox)
+    .getAllByRole('option')
+    .find((o) => (o.textContent ?? '').includes(text));
+  if (!option) throw new Error(`no option containing "${text}"`);
+  fireEvent.click(option);
+}
+
 /** Round Y — fills the cycle form's crop, then picks a P.Code from the ones
  * that crop offers. The พันธุ์ is no longer a control at all: it is shown
  * read-only, derived from the P.Code. */
 async function pickCropAndPCode(pCode = 'Melon-A') {
-  const cropBox = await screen.findByLabelText('— เลือกชนิดพืช —');
-  // The crop options arrive from master data; changing to a value that is not
-  // an option yet is a no-op, which would leave the P.Code box disabled.
-  await waitFor(() => expect(within(cropBox).getByRole('option', { name: 'พริก' })).toBeTruthy());
-  fireEvent.change(cropBox, { target: { value: 'พริก' } });
-  const box = await screen.findByLabelText('เลือก P.Code');
-  await waitFor(() => expect(within(box).getByRole('option', { name: new RegExp(pCode) })).toBeTruthy());
-  fireEvent.change(box, { target: { value: pCode } });
-  await waitFor(() => expect((box as HTMLSelectElement).value).toBe(pCode));
+  const cropBox = await screen.findByRole('button', { name: '— เลือกชนิดพืช —' });
+  // Round Z — the crop options arrive from master data and the trigger stays
+  // disabled until they do; opening it earlier would find an empty list.
+  await waitFor(() => expect((cropBox as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(cropBox);
+  await clickOptionContaining('พริก');
+  const box = await screen.findByRole('button', { name: 'เลือก P.Code' });
+  await waitFor(() => expect((box as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(box);
+  await clickOptionContaining(pCode);
+  await waitFor(() => expect(box.textContent).toContain(pCode));
 }
 
 const getPlotAccessPhonesMock = vi.fn();
@@ -679,13 +693,15 @@ describe('Plots create modal — supplier auto-preselect (supplier self-service)
     // supplier-scoped (supplier:owner) user sees, since the backend narrows
     // the suppliers list to their own supplier.
     listPlotsMock.mockResolvedValue([]);
-    const { container } = renderPlotsPage();
+    renderPlotsPage();
 
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
-    const supplierSelect = container.querySelector('select[name="supplierId"]') as HTMLSelectElement;
-    await waitFor(() => expect(supplierSelect.value).toBe('sup-1'));
+    // Round Z — the field is a searchable trigger, so "which supplier is
+    // selected" is read off what it shows.
+    const trigger = screen.getByRole('button', { name: '— เลือก Supplier —' });
+    await waitFor(() => expect(trigger.textContent).toContain('SUP001'));
   });
 
   it('leaves the supplier unselected when there are multiple options', async () => {
@@ -694,17 +710,54 @@ describe('Plots create modal — supplier auto-preselect (supplier self-service)
       { id: 'sup-2', code: 'SUP002', name: 'Supplier Two', isActive: true, contactName: null, contactEmail: null },
     ]);
     listPlotsMock.mockResolvedValue([]);
+    renderPlotsPage();
+
+    fireEvent.click(await screen.findByText('เพิ่มแปลง'));
+    await screen.findByText('เพิ่มแปลงใหม่');
+
+    const trigger = screen.getByRole('button', { name: '— เลือก Supplier —' });
+    expect(trigger.textContent).toContain('— เลือก Supplier —');
+  });
+});
+
+describe('Plots create modal — yield planning validation & hints (round 18)', () => {
+  it("round Z: the หน่วย box starts on kg", async () => {
+    listPlotsMock.mockResolvedValue([]);
     const { container } = renderPlotsPage();
 
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
-    const supplierSelect = container.querySelector('select[name="supplierId"]') as HTMLSelectElement;
-    expect(supplierSelect.value).toBe('');
+    const unit = container.querySelector('select[name="expectedYieldUnit"]') as HTMLSelectElement;
+    expect(unit.value).toBe('kg');
   });
-});
 
-describe('Plots create modal — yield planning validation & hints (round 18)', () => {
+  it('round Z: a plot created without touching the unit is submitted as kg', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    createPlotWithCycleMock.mockReset();
+    createPlotWithCycleMock.mockResolvedValue({
+      plot: { id: 'plot-9' }, cycle: { id: 'cycle-9' },
+    });
+    const { container } = renderPlotsPage();
+
+    fireEvent.click(await screen.findByText('เพิ่มแปลง'));
+    await screen.findByText('เพิ่มแปลงใหม่');
+
+    fireEvent.click(screen.getByRole('button', { name: '— เลือก Supplier —' }));
+    await clickOptionContaining('SUP001');
+    fireEvent.change(container.querySelector('input[name="name"]')!, { target: { value: 'แปลงใหม่' } });
+    await pickCropAndPCode();
+    fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
+    fireEvent.change(container.querySelector('input[name="expectedYieldFull"]')!, {
+      target: { value: '800' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
+
+    await waitFor(() => expect(createPlotWithCycleMock).toHaveBeenCalled());
+    expect(createPlotWithCycleMock.mock.calls[0][0].cycle.expectedYieldUnit).toBe('kg');
+  });
+
   it('shows an inline hint naming the missing field while the base plan is incomplete', async () => {
     listPlotsMock.mockResolvedValue([]);
     renderPlotsPage();
@@ -730,6 +783,12 @@ describe('Plots create modal — yield planning validation & hints (round 18)', 
     await pickCropAndPCode();
     const expectedYieldFullInput = container.querySelector('input[name="expectedYieldFull"]')!;
     fireEvent.change(expectedYieldFullInput, { target: { value: '1000' } });
+    // Round Z — the unit starts on kg, so reaching this rule now takes a
+    // deliberate clearing of it. That it still fires is the point: the rule
+    // guards a user who empties the box, not a user who never filled it.
+    fireEvent.change(container.querySelector('select[name="expectedYieldUnit"]')!, {
+      target: { value: '' },
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'สร้าง' }));
 
@@ -768,23 +827,29 @@ describe('Plots create modal — crop/variety master data (round 19)', () => {
     fireEvent.click(await screen.findByText('เพิ่มแปลง'));
     await screen.findByText('เพิ่มแปลงใหม่');
 
-    const cropSelect = await screen.findByDisplayValue('— เลือกชนิดพืช —') as HTMLSelectElement;
-    fireEvent.change(cropSelect, { target: { value: 'พริก' } });
+    const cropSelect = await screen.findByRole('button', { name: '— เลือกชนิดพืช —' });
+    await waitFor(() => expect((cropSelect as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(cropSelect);
+    await clickOptionContaining('พริก');
 
     // Only พริก's P.Code is offered — ML-900 belongs to a เมล่อน variety.
-    const pCodeSelect = await screen.findByLabelText('เลือก P.Code') as HTMLSelectElement;
-    await waitFor(() => expect(pCodeSelect.querySelector('option[value="WM-141"]')).toBeTruthy());
-    expect(pCodeSelect.querySelector('option[value="ML-900"]')).toBeNull();
+    const pCodeSelect = await screen.findByRole('button', { name: 'เลือก P.Code' });
+    await waitFor(() => expect((pCodeSelect as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(pCodeSelect);
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).getByRole('option', { name: /WM-141/ })).toBeTruthy();
+    expect(within(listbox).queryByRole('option', { name: /ML-900/ })).toBeNull();
 
-    fireEvent.change(pCodeSelect, { target: { value: 'WM-141' } });
+    await clickOptionContaining('WM-141');
     // The พันธุ์ appears read-only, derived from that P.Code.
     await waitFor(() =>
       expect(screen.getByLabelText('พันธุ์/สายพันธุ์').textContent).toContain('พริกขี้หนู'),
     );
 
     // Changing the crop clears the now-mismatched P.Code and its variety.
-    fireEvent.change(cropSelect, { target: { value: 'เมล่อน' } });
-    await waitFor(() => expect(pCodeSelect.value).toBe(''));
+    fireEvent.click(cropSelect);
+    await clickOptionContaining('เมล่อน');
+    await waitFor(() => expect(pCodeSelect.textContent).toContain('— เลือก P.Code —'));
     expect(screen.getByLabelText('พันธุ์/สายพันธุ์').textContent).not.toContain('พริกขี้หนู');
   });
 });
@@ -1119,7 +1184,7 @@ describe('Plots list — UX redesign (round 20)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
     fireEvent.change(screen.getByPlaceholderText('ค้นหา Supplier...'), { target: { value: 'two' } });
     await waitFor(() => expect(screen.queryByText('SUP001')).toBeNull());
-    fireEvent.click(await screen.findByText('SUP002'));
+    await clickOptionContaining('SUP002');
 
     await waitFor(() => expect(hasListPlotsCallContaining({
       supplierId: 'sup-2',
@@ -1502,7 +1567,7 @@ describe('Plots list — searchable province/crop/variety filters (round 8-18A)'
     await screen.findByText('แปลงทดสอบ');
 
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(within(await screen.findByRole('listbox')).getByText('SUP001'));
+    await clickOptionContaining('SUP001');
     await selectProvinceFilter('เชียงใหม่');
     await selectCropFilter('พริก');
     await selectVarietyFilter('พริกขี้หนู');
@@ -1597,7 +1662,7 @@ describe('Plots list — "รอบปลูกปัจจุบัน" filter 
     await screen.findByText('แปลงทดสอบ');
 
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(within(await screen.findByRole('listbox')).getByText('SUP001'));
+    await clickOptionContaining('SUP001');
 
     openCycleLabelCombobox();
     fireEvent.click(await screen.findByText('jun2026'));
@@ -1707,7 +1772,7 @@ describe('Plots list — "วันที่เริ่ม...ถึง" plantin
     await screen.findByText('แปลงทดสอบ');
 
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(within(await screen.findByRole('listbox')).getByText('SUP001'));
+    await clickOptionContaining('SUP001');
     fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
     await waitFor(() => expect(hasListPlotsCallContaining({ plantingDateFrom: '2026-08-01' })).toBe(true));
 
@@ -2152,7 +2217,7 @@ describe('Plots create modal — access phones (round 8-3C)', () => {
 describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   async function selectSupplierFilter(code: string) {
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(await screen.findByText(code));
+    await clickOptionContaining(code);
   }
 
   // Round 8-6G — "Excel ตามตัวกรอง" is no longer a standalone button; it's
@@ -2483,7 +2548,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
 describe('Excel ตามตัวกรอง — request-state race + error cleanup + q summary (round 8-6C)', () => {
   async function selectSupplierFilter(code: string) {
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(await screen.findByText(code));
+    await clickOptionContaining(code);
   }
 
   // Round 8-6G — same helper set as the "round 8-6B" describe block above
@@ -2680,7 +2745,7 @@ describe('Excel ตามตัวกรอง — request-state race + error cl
 describe('ดาวน์โหลด Excel — "ทุก Supplier" all-suppliers mode (round 8-6G)', () => {
   async function selectSupplierFilter(code: string) {
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(await screen.findByText(code));
+    await clickOptionContaining(code);
   }
 
   function downloadTrigger() {
@@ -3551,8 +3616,8 @@ describe('Plots list — secure phone search (round 8-17A.2)', () => {
 
     // Supplier filter required before the filtered-download button engages.
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    const listbox = await screen.findByRole('listbox');
-    fireEvent.click(within(listbox).getByText('SUP001'));
+    await screen.findByRole('listbox');
+    await clickOptionContaining('SUP001');
 
     fireEvent.change(screen.getByLabelText(ACCESS_NUMBER_LABEL), {
       target: { value: '0812345678' },
@@ -3765,7 +3830,7 @@ describe('Plots list — split identity/access-number search (round 8-18B)', () 
     await screen.findByText('แปลงทดสอบ');
 
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(within(await screen.findByRole('listbox')).getByText('SUP001'));
+    await clickOptionContaining('SUP001');
 
     fireEvent.change(screen.getByLabelText(NAME_CODE_LABEL), { target: { value: 'SUP001-P001' } });
     fireEvent.change(screen.getByLabelText(ACCESS_NUMBER_LABEL), { target: { value: '0812345678' } });
@@ -4032,7 +4097,7 @@ describe('Plots list — partial identity/access-number search (round 8-18B.1)',
     await screen.findByText('แปลงเมล่อน');
 
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(within(await screen.findByRole('listbox')).getByText('SUP001'));
+    await clickOptionContaining('SUP001');
 
     fireEvent.change(screen.getByLabelText(NAME_CODE_LABEL), { target: { value: '002' } });
     fireEvent.change(screen.getByLabelText(ACCESS_NUMBER_LABEL), { target: { value: '5552' } });
@@ -4085,7 +4150,7 @@ describe('Plots — round 8-27E: excluded plots are reported on screen, not in a
     // The filtered download refuses to call the API without a Supplier
     // selected (round 8-6B item 12), so pick one first.
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
-    fireEvent.click(await screen.findByText('SUP001'));
+    await clickOptionContaining('SUP001');
     await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
     clickFilteredDownload();
   }

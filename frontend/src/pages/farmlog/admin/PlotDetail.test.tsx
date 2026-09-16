@@ -8,7 +8,7 @@
  *   orders most-recent-first — this just proves the page doesn't re-sort).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PlotDetail } from './PlotDetail';
@@ -90,7 +90,7 @@ vi.mock('../../../api/masterdata', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/masterdata')>();
   return {
     ...actual,
-    listMasterData: ({ type, parent }: { type: string; parent?: string }) => {
+    listMasterData: ({ type }: { type: string }) => {
       if (type === 'crop') return Promise.resolve([masterDataRow('crop', 'พริก', null)]);
       if (type === 'variety') {
         return Promise.resolve(
@@ -98,23 +98,30 @@ vi.mock('../../../api/masterdata', async (importOriginal) => {
         );
       }
       if (type === 'p_code') {
-        const code = parent ? MD_P_CODE_BY_VARIETY[parent] : undefined;
-        return Promise.resolve(code ? [masterDataRow('p_code', code, parent!)] : []);
+        // Round Y — PCodeSelect asks for every active P.Code and joins them
+        // to the crop's varieties itself, so this ignores `parent`.
+        return Promise.resolve(
+          Object.entries(MD_P_CODE_BY_VARIETY).map(([v, code]) => masterDataRow('p_code', code, v)),
+        );
       }
       return Promise.resolve([]);
     },
   };
 });
 
-/** Round 8-26C — fills the cycle form's crop/variety and waits for the
- * derived P.Code to land. Replaces the old "type into the P.Code box" step:
- * that box is read-only now. */
-async function pickCropAndVariety(variety = 'พริกขี้หนู') {
-  fireEvent.change(await screen.findByLabelText('— เลือกชนิดพืช —'), { target: { value: 'พริก' } });
-  fireEvent.change(await screen.findByLabelText('— เลือกพันธุ์ —'), { target: { value: variety } });
-  await waitFor(() => expect(
-    (screen.getByLabelText('P.Code') as HTMLInputElement).value,
-  ).toBe(MD_P_CODE_BY_VARIETY[variety]));
+/** Round Y — fills the cycle form's crop, then picks a P.Code from the ones
+ * that crop offers. The พันธุ์ is no longer a control at all: it is shown
+ * read-only, derived from the P.Code. */
+async function pickCropAndPCode(pCode = 'Melon-A') {
+  const cropBox = await screen.findByLabelText('— เลือกชนิดพืช —');
+  // The crop options arrive from master data; changing to a value that is not
+  // an option yet is a no-op, which would leave the P.Code box disabled.
+  await waitFor(() => expect(within(cropBox).getByRole('option', { name: 'พริก' })).toBeTruthy());
+  fireEvent.change(cropBox, { target: { value: 'พริก' } });
+  const box = await screen.findByLabelText('เลือก P.Code');
+  await waitFor(() => expect(within(box).getByRole('option', { name: new RegExp(pCode) })).toBeTruthy());
+  fireEvent.change(box, { target: { value: pCode } });
+  await waitFor(() => expect((box as HTMLSelectElement).value).toBe(pCode));
 }
 
 // null = every permission allowed (the default the existing tests rely on);
@@ -963,7 +970,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     // cycle; either one opens the same StartCycleModal.
     fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกแรก' }))[0]);
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    await pickCropAndVariety();
+    await pickCropAndPCode();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -986,7 +993,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
     const labelInput = await screen.findByPlaceholderText('เช่น jun2026 หรือ may2026');
     fireEvent.change(labelInput, { target: { value: 'jul2026' } });
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    await pickCropAndVariety();
+    await pickCropAndPCode();
     // (cycleLabel was already set above — Auto Lot needs it, and this test is
     // specifically about that field reaching the payload.)
     fireEvent.click(await screen.findByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -1147,7 +1154,7 @@ describe('PlotDetail — plot cycle lifecycle (round 7.3)', () => {
 
     fireEvent.click((await screen.findAllByRole('button', { name: 'เริ่มรอบปลูกแรก' }))[0]);
     fireEvent.change(screen.getByPlaceholderText('เช่น PO25001'), { target: { value: 'PO25001' } });
-    await pickCropAndVariety();
+    await pickCropAndPCode();
     // Round 8-12B — Auto Lot needs a cycleLabel as well as a P.Code.
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
     fireEvent.click(await screen.findByRole('button', { name: 'เริ่มรอบปลูก' }));

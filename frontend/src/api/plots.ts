@@ -1416,7 +1416,9 @@ export interface PlotCycleCreatePayload {
   poNumber?: string | null;
   pCode: string;
   crop?: string | null;
-  variety?: string | null;
+  // Round Y — no `variety`: the server reads it off the pCode above
+  // (Master Data crop → variety → p_code) and REFUSES a submitted one, so
+  // leaving it out of the type means this client cannot even try.
   // Round 8-17A.1 — REQUIRED (nonblank after trim) on every "create a new
   // cycle" flow this payload backs (Start / Create-plot-with-cycle /
   // Rollover.newCycle / Reactivate-with-cycle) — it is a component of the
@@ -1469,7 +1471,7 @@ export interface PlotCycleCreatePayload {
  * still accepts the stored value re-sent but refuses a different one (422);
  * leaving them out of the type means this client can't even try. */
 export type PlotCycleUpdatePayload = Partial<
-  Omit<PlotCycleCreatePayload, 'crop' | 'variety' | 'cycleLabel' | 'pCode'>
+  Omit<PlotCycleCreatePayload, 'crop' | 'cycleLabel' | 'pCode'>
 >;
 
 export interface PlotCycleClosePayload {

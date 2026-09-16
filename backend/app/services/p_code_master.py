@@ -86,7 +86,7 @@ async def assert_p_code_assignable(
 ) -> None:
     """Raise HTTPException(422) if a P.Code cannot point at `variety`. Same
     service-raises-HTTPException shape as
-    master_data_validation.assert_crop_variety_valid."""
+    master_data_validation.assert_crop_p_code_valid."""
     errors = await p_code_assignment_errors(db, variety, exclude_id=exclude_id)
     if errors:
         raise HTTPException(status_code=422, detail="; ".join(errors))

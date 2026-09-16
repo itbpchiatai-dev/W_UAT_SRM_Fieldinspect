@@ -360,7 +360,7 @@ async def test_a_losing_racer_gets_409_and_writes_nothing() -> None:
     with patch("app.api.v1.plots.repo.get_plot_for_update", AsyncMock(return_value=plot)), \
          patch("app.api.v1.plots.plot_cycle_repo.get_active_cycle_for_plot_for_update",
                AsyncMock(return_value=None)), \
-         patch("app.api.v1.plots.master_data_validation.assert_crop_variety_valid",
+         patch("app.api.v1.plots.master_data_validation.assert_crop_p_code_valid",
                AsyncMock()), \
          patch("app.api.v1.plots.plot_cycle_repo.create_cycle",
                AsyncMock(side_effect=boom)), \

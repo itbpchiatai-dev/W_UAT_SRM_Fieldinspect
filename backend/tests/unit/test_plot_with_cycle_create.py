@@ -73,7 +73,8 @@ def _payload(**o) -> PlotWithCycleCreate:
     d = dict(
         plot=PlotCreate(supplierId=uuid4(), name="แปลง A"),
         cycle=PlotCycleCreate(
-            cycleLabel="jun2026", crop="พริก", variety="พริกขี้หนู", lotNo="LOT-01",
+            # Round Y — no variety: the server reads it off the P.Code.
+            cycleLabel="jun2026", crop="พริก", lotNo="LOT-01",
             poNumber="PO25001", pCode="Melon-A",
             plantingDate=datetime.date(2026, 6, 1), plantCount=1000,
             expectedYieldFull=800, expectedYieldUnit="kg",

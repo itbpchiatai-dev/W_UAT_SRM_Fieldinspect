@@ -198,8 +198,9 @@ _S_STATUS = {
 # the import columns, so one width went with it. Round V added the read-only
 # supplierName (after supplierCode) and systemLotNo (after pCode).
 _COL_WIDTHS = [
-    # import columns, in IMPORT_COLUMNS order (action..supplierLotNo, 20 cols):
-    22, 14, 24, 16, 24, 16, 28, 14, 14, 14, 12, 12, 8, 14, 14, 16, 14, 14, 26, 14,
+    # import columns, in IMPORT_COLUMNS order (action..supplierLotNo, 19 cols
+    # since round Y dropped variety):
+    22, 14, 24, 16, 24, 16, 28, 14, 14, 14, 12, 12, 8, 14, 16, 14, 14, 26, 14,
     18, 18, 18,  # oracleSupplierCode, oracleInvoice, refAccount (round 8-21A)
     # plantingDate..newInspectionPassword (11 cols):
     12, 16, 14, 14, 12, 12, 20, 16, 20, 20, 20,

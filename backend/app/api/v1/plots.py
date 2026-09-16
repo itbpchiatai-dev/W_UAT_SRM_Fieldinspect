@@ -370,8 +370,10 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "primaryPhone": "0845552162", "additionalPhones": "0855551234",
             "village": "ต.ตัวอย่าง", "district": "อ.ตัวอย่าง", "province": "เชียงใหม่",
             "latitude": "18.7883", "longitude": "98.9853", "rai": "5",
-            "crop": "พริก", "variety": "พริกขี้หนู", "cycleLabel": "jun2026",
-            "poNumber": "PO25001", "pCode": "Melon-A",
+            "crop": "พริก", "cycleLabel": "jun2026",
+            # Round Y — the variety is not in the file: it is read off the
+            # P.Code (Master Data crop → variety → p_code).
+            "poNumber": "PO25001", "pCode": "WM-141",
             # Round 8-12A — the Supplier's OWN lot number, unrelated to the
             # system's Lot No. Free-form; leave blank when there isn't one.
             # Round A — there is no lotNo column any more: the system generates
@@ -499,7 +501,6 @@ _TEMPLATE_COLUMN_KIND: dict[str, str] = {
     # The Auto Lot is built from these (plot_cycle_repository.
     # ONE_TIME_CYCLE_FIELDS) — the importer refuses a change on an update row.
     "crop": _KIND_ONE_TIME,
-    "variety": _KIND_ONE_TIME,
     "cycleLabel": _KIND_ONE_TIME,
     "pCode": _KIND_ONE_TIME,
     "poNumber": _KIND_EDITABLE,
@@ -732,7 +733,6 @@ def _update_cycle_row_values(
         "longitude": str(plot.longitude) if plot.longitude is not None else None,
         "rai": str(plot.rai) if plot.rai is not None else None,
         "crop": cycle.crop if cycle is not None else None,
-        "variety": cycle.variety if cycle is not None else None,
         "cycleLabel": cycle.cycle_label if cycle is not None else None,
         "poNumber": cycle.po_number if cycle is not None else None,
         "pCode": cycle.p_code if cycle is not None else None,
@@ -803,7 +803,6 @@ def _reactivate_row_values(
         "longitude": str(plot.longitude) if plot.longitude is not None else None,
         "rai": str(plot.rai) if plot.rai is not None else None,
         "crop": cycle.crop if cycle is not None else None,
-        "variety": cycle.variety if cycle is not None else None,
         "cycleLabel": cycle.cycle_label if cycle is not None else None,
         "poNumber": cycle.po_number if cycle is not None else None,
         "pCode": cycle.p_code if cycle is not None else None,
@@ -1805,11 +1804,12 @@ async def create_plot_with_cycle(
     # Round V — no duplicate pre-check: the code is always generated (see
     # POST /plots), so there is no supplied code to look up.
     nc = payload.cycle
-    # Round 8-15D — a brand-new cycle's crop/variety (if given) must exist and
-    # be active in Master Data; a variety must belong to the chosen crop.
-    await master_data_validation.assert_crop_variety_valid(
-        db, nc.crop, nc.variety, p_code=nc.p_code,
-    )
+    # Round Y — the user picks crop + P.Code; the VARIETY is whatever that
+    # P.Code belongs to in Master Data. This one call both checks the pair
+    # (unknown/deactivated P.Code, or one under another crop -> 422) and
+    # hands back the variety to store, so a cycle can never be saved with a
+    # variety that was not just validated.
+    variety = await master_data_validation.assert_crop_p_code_valid(db, nc.crop, nc.p_code)
     started_at = (
         datetime.combine(nc.planting_date, time.min, tzinfo=timezone.utc)
         if nc.planting_date is not None
@@ -1824,7 +1824,7 @@ async def create_plot_with_cycle(
         plot = await repo.create_plot(db, payload.plot, month_source=nc.planting_date)
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
-            crop=nc.crop, variety=nc.variety, cycle_label=nc.cycle_label,
+            crop=nc.crop, variety=variety, cycle_label=nc.cycle_label,
             po_number=nc.po_number, p_code=nc.p_code,
             supplier_lot_no=nc.supplier_lot_no,
             oracle_supplier_code=nc.oracle_supplier_code, oracle_invoice=nc.oracle_invoice,
@@ -2300,10 +2300,10 @@ async def start_plot_cycle(
             status_code=409, detail="Plot already has an active planting cycle"
         )
 
-    # Round 8-15D — new cycle's crop/variety (if given) must exist and be
-    # active in Master Data; a variety must belong to the chosen crop.
-    await master_data_validation.assert_crop_variety_valid(
-        db, payload.crop, payload.variety, p_code=payload.p_code,
+    # Round Y — crop + P.Code are what the user picked; the variety comes
+    # back from Master Data (see create_plot_with_cycle).
+    variety = await master_data_validation.assert_crop_p_code_valid(
+        db, payload.crop, payload.p_code,
     )
     started_at = (
         datetime.combine(payload.planting_date, time.min, tzinfo=timezone.utc)
@@ -2313,7 +2313,7 @@ async def start_plot_cycle(
     try:
         cycle = await plot_cycle_repo.create_cycle(
             db, plot,
-            crop=payload.crop, variety=payload.variety,
+            crop=payload.crop, variety=variety,
             cycle_label=payload.cycle_label,
             po_number=payload.po_number, p_code=payload.p_code,
             supplier_lot_no=payload.supplier_lot_no,
@@ -2724,11 +2724,9 @@ async def rollover_plot_cycle(
         )
 
     nc = payload.new_cycle
-    # Round 8-15D — the fresh cycle opened by rollover is a NEW cycle, so its
-    # crop/variety (if given) must exist and be active in Master Data.
-    await master_data_validation.assert_crop_variety_valid(
-        db, nc.crop, nc.variety, p_code=nc.p_code,
-    )
+    # Round Y — the fresh cycle opened by rollover is a NEW cycle: its crop +
+    # P.Code are checked and its variety derived, exactly as on Start.
+    variety = await master_data_validation.assert_crop_p_code_valid(db, nc.crop, nc.p_code)
     started_at = (
         datetime.combine(nc.planting_date, time.min, tzinfo=timezone.utc)
         if nc.planting_date is not None
@@ -2740,7 +2738,7 @@ async def rollover_plot_cycle(
             close_status=payload.close_status,
             closed_by_id=current_user.id,
             close_reason=payload.close_reason or "Closed by rollover",
-            crop=nc.crop, variety=nc.variety, cycle_label=nc.cycle_label,
+            crop=nc.crop, variety=variety, cycle_label=nc.cycle_label,
             po_number=nc.po_number, p_code=nc.p_code,
             supplier_lot_no=nc.supplier_lot_no,
             oracle_supplier_code=nc.oracle_supplier_code, oracle_invoice=nc.oracle_invoice,
@@ -2959,10 +2957,10 @@ async def reactivate_plot_with_cycle(
     if plot is None:
         raise HTTPException(status_code=404, detail="Plot not found")
 
-    # Round 8-15D — reactivation starts a brand-new cycle, so its
-    # crop/variety (if given) must exist and be active in Master Data.
-    await master_data_validation.assert_crop_variety_valid(
-        db, payload.crop, payload.variety, p_code=payload.p_code,
+    # Round Y — reactivation starts a brand-new cycle: same crop + P.Code
+    # check, same derived variety.
+    variety = await master_data_validation.assert_crop_p_code_valid(
+        db, payload.crop, payload.p_code,
     )
     started_at = (
         datetime.combine(payload.planting_date, time.min, tzinfo=timezone.utc)
@@ -2972,7 +2970,7 @@ async def reactivate_plot_with_cycle(
     try:
         plot, cycle = await repo.reactivate_plot_with_cycle(
             db, plot,
-            crop=payload.crop, variety=payload.variety, cycle_label=payload.cycle_label,
+            crop=payload.crop, variety=variety, cycle_label=payload.cycle_label,
             po_number=payload.po_number, p_code=payload.p_code,
             supplier_lot_no=payload.supplier_lot_no,
             oracle_supplier_code=payload.oracle_supplier_code,

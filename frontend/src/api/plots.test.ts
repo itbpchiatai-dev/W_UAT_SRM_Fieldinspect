@@ -396,7 +396,8 @@ describe('rolloverPlotCycle', () => {
       closeReason: 'เก็บเกี่ยวแล้ว',
       newCycle: {
         poNumber: 'PO25001', pCode: 'Melon-A', cycleLabel: 'jul2026',
-        crop: 'เมล่อน', variety: 'ออเรนจ์',
+        // Round Y — crop + pCode only; the server derives the variety.
+        crop: 'เมล่อน',
         plantingDate: '2026-08-01', plantCount: 500,
         expectedYieldFull: 1500, expectedYieldUnit: 'ผล',
       },

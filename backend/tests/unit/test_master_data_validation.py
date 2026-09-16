@@ -1,7 +1,19 @@
-"""Shared crop/variety-vs-Master-Data validation (round 8-15D).
+"""Shared crop/P.Code-vs-Master-Data validation (round 8-15D, rewritten for
+round Y).
 
-DB-free: `crop_variety_errors` is pure (no I/O); `load_crop_variety_lookup`/
-`assert_crop_variety_valid` are exercised with `master_data_repository.
+Round 8-15D wrote this around a crop/variety PAIR the caller supplied, with
+an "unchanged is still allowed" escape hatch for edits. Both halves are gone:
+round V made crop/variety/cycleLabel/P.Code one-time (an edit cannot change
+them, so there is nothing to re-validate and nothing to exempt), and round Y
+took the variety out of the caller's hands entirely — a new cycle is a crop
+plus a P.Code, and the variety is read off the P.Code.
+
+What survives, and is tested here: the batching guarantees and the 422
+wrapper. The per-rule cases live in test_variety_from_p_code_round_y.py,
+where the rule itself is defined.
+
+DB-free: `crop_p_code_errors` is pure (no I/O); `load_crop_p_code_lookup` /
+`assert_crop_p_code_valid` are exercised with `master_data_repository.
 list_by_type_values` patched — never a real database. These tests carry the
 `nodefault_crop_variety` marker so tests/unit/conftest.py's permissive
 autouse default doesn't shadow the very functions under test.
@@ -23,146 +35,51 @@ def _md(type_, value, parent=None, active=True):
     return SimpleNamespace(type=type_, value=value, parent=parent, active=active)
 
 
-def _lookup(crops=None, varieties=None) -> mdv.CropVarietyLookup:
-    crops = crops or []
-    varieties = varieties or []
-    return mdv.CropVarietyLookup(
-        crops={c.value: c for c in crops}, varieties={v.value: v for v in varieties},
+def _lookup(crops=None, varieties=None, p_codes=None) -> mdv.CropTaxonomyLookup:
+    return mdv.CropTaxonomyLookup(
+        crops={c.value: c for c in (crops or [])},
+        varieties={v.value: v for v in (varieties or [])},
+        p_codes={p.value: p for p in (p_codes or [])},
     )
 
 
-# --- crop_variety_errors — pure logic --------------------------------------
+# --- crop_p_code_errors — pure logic ---------------------------------------
 
 def test_active_crop_alone_passes() -> None:
+    # A crop with no P.Code yet is not this validator's problem: pCode
+    # requiredness belongs to PlotCycleCreate and the import's own check.
     lookup = _lookup(crops=[_md("crop", "พริก")])
-    assert mdv.crop_variety_errors(lookup, "พริก", None) == []
+    assert mdv.crop_p_code_errors(lookup, "พริก", None) == []
 
 
 def test_missing_crop_rejected() -> None:
-    lookup = _lookup()
-    errors = mdv.crop_variety_errors(lookup, "พริก", None)
-    assert len(errors) == 1
-    assert "ไม่พบ" in errors[0] and "พริก" in errors[0]
+    assert mdv.crop_p_code_errors(_lookup(), "พริก", None) == [
+        'ไม่พบชนิดพืช "พริก" ใน Master Data'
+    ]
 
 
 def test_inactive_crop_rejected() -> None:
     lookup = _lookup(crops=[_md("crop", "พริก", active=False)])
-    errors = mdv.crop_variety_errors(lookup, "พริก", None)
-    assert len(errors) == 1
-    assert "ปิดใช้งาน" in errors[0]
-
-
-def test_active_variety_under_correct_crop_passes() -> None:
-    lookup = _lookup(
-        crops=[_md("crop", "พริก")],
-        varieties=[_md("variety", "พริกขี้หนู", parent="พริก")],
-    )
-    assert mdv.crop_variety_errors(lookup, "พริก", "พริกขี้หนู") == []
-
-
-def test_missing_variety_rejected() -> None:
-    lookup = _lookup(crops=[_md("crop", "พริก")])
-    errors = mdv.crop_variety_errors(lookup, "พริก", "พริกขี้หนู")
-    assert any("ไม่พบพันธุ์" in e for e in errors)
-
-
-def test_inactive_variety_rejected() -> None:
-    lookup = _lookup(
-        crops=[_md("crop", "พริก")],
-        varieties=[_md("variety", "พริกขี้หนู", parent="พริก", active=False)],
-    )
-    errors = mdv.crop_variety_errors(lookup, "พริก", "พริกขี้หนู")
-    assert any("ปิดใช้งาน" in e for e in errors)
-
-
-def test_variety_wrong_parent_rejected() -> None:
-    lookup = _lookup(
-        crops=[_md("crop", "พริก"), _md("crop", "เมล่อน")],
-        varieties=[_md("variety", "พริกขี้หนู", parent="พริก")],
-    )
-    errors = mdv.crop_variety_errors(lookup, "เมล่อน", "พริกขี้หนู")
-    assert any("ไม่ได้อยู่ภายใต้" in e for e in errors)
-
-
-def test_variety_without_crop_rejected() -> None:
-    lookup = _lookup(varieties=[_md("variety", "พริกขี้หนู", parent="พริก")])
-    errors = mdv.crop_variety_errors(lookup, None, "พริกขี้หนู")
-    assert errors == ["กรุณาระบุชนิดพืชก่อนเลือกพันธุ์"]
+    assert mdv.crop_p_code_errors(lookup, "พริก", None) == [
+        'ชนิดพืช "พริก" ถูกปิดใช้งาน กรุณาเปิดใช้งานใน Master Data ก่อน'
+    ]
 
 
 def test_both_blank_passes() -> None:
-    assert mdv.crop_variety_errors(_lookup(), None, None) == []
-    assert mdv.crop_variety_errors(_lookup(), "", "") == []
-
-
-# --- "unchanged legacy value" exemption (update semantics) -----------------
-
-def test_unchanged_pair_passes_even_when_inactive_or_missing() -> None:
-    """Rule 4/5 — a cycle's existing crop/variety, left untouched, is never
-    invalidated retroactively even if since deactivated (or the lookup finds
-    nothing at all, e.g. an inactive value not returned by the batch query)."""
-    lookup = _lookup()  # empty — as if deactivated/removed from the active set
-    errors = mdv.crop_variety_errors(
-        lookup, "พริก", "พริกขี้หนู", current_crop="พริก", current_variety="พริกขี้หนู",
-    )
-    assert errors == []
-
-
-def test_editing_unrelated_field_is_equivalent_to_unchanged_pair() -> None:
-    """A cycle edit that doesn't touch crop/variety at all passes the SAME
-    (unchanged) crop/variety through as both 'new' and 'current' — covers
-    'แก้ field อื่นโดยไม่เปลี่ยน Crop/Variety ได้' even when the legacy value is
-    inactive."""
-    lookup = _lookup(crops=[_md("crop", "พริก", active=False)])
-    errors = mdv.crop_variety_errors(
-        lookup, "พริก", None, current_crop="พริก", current_variety=None,
-    )
-    assert errors == []
-
-
-def test_crop_changed_variety_string_unchanged_still_revalidates_parent() -> None:
-    """'ถ้าเปลี่ยน crop แต่ไม่ส่ง variety และ variety เดิมไม่เข้ากับ crop ใหม่ ต้อง 422' —
-    variety's raw string is IDENTICAL to current, but crop changed, so the
-    WHOLE effective pair is re-validated, catching the now-mismatched parent."""
-    lookup = _lookup(
-        crops=[_md("crop", "เมล่อน")],
-        varieties=[_md("variety", "พริกขี้หนู", parent="พริก")],  # still parented to the OLD crop
-    )
-    errors = mdv.crop_variety_errors(
-        lookup, "เมล่อน", "พริกขี้หนู", current_crop="พริก", current_variety="พริกขี้หนู",
-    )
-    assert any("ไม่ได้อยู่ภายใต้" in e for e in errors)
-
-
-def test_changed_to_inactive_value_rejected() -> None:
-    lookup = _lookup(crops=[_md("crop", "เมล่อน", active=False)])
-    errors = mdv.crop_variety_errors(
-        lookup, "เมล่อน", None, current_crop="พริก", current_variety=None,
-    )
-    assert any("ปิดใช้งาน" in e for e in errors)
-
-
-def test_clearing_to_blank_is_allowed() -> None:
-    """Changing FROM a (possibly now-inactive) value TO blank is always fine
-    — blank needs no Master Data membership."""
-    lookup = _lookup()
-    errors = mdv.crop_variety_errors(
-        lookup, None, None, current_crop="พริก", current_variety="พริกขี้หนู",
-    )
-    assert errors == []
+    assert mdv.crop_p_code_errors(_lookup(), None, None) == []
 
 
 def test_whitespace_only_normalizes_like_blank() -> None:
-    assert mdv.crop_variety_errors(_lookup(), "  ", None, current_crop=None) == []
+    assert mdv.crop_p_code_errors(_lookup(), "  ", "  ") == []
 
 
-# --- load_crop_variety_lookup — batching / N+1 ------------------------------
+# --- load_crop_p_code_lookup — batching / N+1 ------------------------------
 
 async def test_load_lookup_issues_one_query_per_type() -> None:
-    """Round 8-26C made it three types (crop/variety/p_code), still ONE query
-    each no matter how many values. That an EMPTY value-set costs no query at
-    all is a separate guarantee, owned by the repository's own short-circuit
-    and covered by the next test."""
+    """THREE queries for a whole file no matter how many values: crops,
+    P.Codes, then the varieties those P.Codes name. The third is round Y's —
+    the varieties are no longer an input, so they have to be fetched from
+    what the P.Codes point at."""
     call_count = {"n": 0}
 
     async def fake(db, type_, values):
@@ -170,19 +87,20 @@ async def test_load_lookup_issues_one_query_per_type() -> None:
         if type_ == "crop":
             return [_md("crop", v) for v in values]
         if type_ == "p_code":
-            return []
+            return [_md("p_code", v, parent="พริกขี้หนู") for v in values]
         return [_md("variety", v, parent="พริก") for v in values]
 
     with patch(
         "app.services.master_data_validation.master_data_repo.list_by_type_values",
         AsyncMock(side_effect=fake),
     ):
-        lookup = await mdv.load_crop_variety_lookup(
-            object(), {"พริก", "เมล่อน", "มะเขือเทศ"}, {"พริกขี้หนู", "ญี่ปุ่น"},
+        lookup = await mdv.load_crop_p_code_lookup(
+            object(), {"พริก", "เมล่อน", "มะเขือเทศ"}, {"WM-111", "WM-141"},
         )
     assert call_count["n"] == 3  # ONE per type, regardless of value-set size
     assert set(lookup.crops) == {"พริก", "เมล่อน", "มะเขือเทศ"}
-    assert set(lookup.varieties) == {"พริกขี้หนู", "ญี่ปุ่น"}
+    assert set(lookup.p_codes) == {"WM-111", "WM-141"}
+    assert set(lookup.varieties) == {"พริกขี้หนู"}
 
 
 async def test_load_lookup_empty_sets_short_circuit_with_no_query() -> None:
@@ -190,23 +108,28 @@ async def test_load_lookup_empty_sets_short_circuit_with_no_query() -> None:
     lives in master_data_repository.list_by_type_values itself (`if not
     values: return []`), so this calls the REAL repo function with a bare
     `object()` db and relies on it never reaching `db.execute(...)`."""
-    lookup = await mdv.load_crop_variety_lookup(object(), set(), set())
-    assert lookup.crops == {} and lookup.varieties == {}
+    lookup = await mdv.load_crop_p_code_lookup(object(), set(), set())
+    assert lookup.crops == {} and lookup.varieties == {} and lookup.p_codes == {}
 
 
-# --- assert_crop_variety_valid — API convenience wrapper --------------------
+# --- assert_crop_p_code_valid — API convenience wrapper --------------------
 
-async def test_assert_valid_pair_does_not_raise() -> None:
+async def test_assert_valid_pair_returns_the_derived_variety() -> None:
     async def fake(db, type_, values):
         if type_ == "crop":
             return [_md("crop", "พริก")]
+        if type_ == "p_code":
+            return [_md("p_code", "WM-111", parent="พริกขี้หนู")]
         return [_md("variety", "พริกขี้หนู", parent="พริก")]
 
     with patch(
         "app.services.master_data_validation.master_data_repo.list_by_type_values",
         AsyncMock(side_effect=fake),
     ):
-        await mdv.assert_crop_variety_valid(object(), "พริก", "พริกขี้หนู")
+        variety = await mdv.assert_crop_p_code_valid(object(), "พริก", "WM-111")
+    # The endpoint stores exactly this — see
+    # test_cycle_variety_from_p_code_api_round_y.py.
+    assert variety == "พริกขี้หนู"
 
 
 async def test_assert_invalid_pair_raises_422_with_thai_message() -> None:
@@ -215,24 +138,8 @@ async def test_assert_invalid_pair_raises_422_with_thai_message() -> None:
         AsyncMock(return_value=[]),
     ):
         with pytest.raises(HTTPException) as exc:
-            await mdv.assert_crop_variety_valid(object(), "พริก", None)
+            await mdv.assert_crop_p_code_valid(object(), "พริก", None)
     assert exc.value.status_code == 422
     assert "ไม่พบ" in exc.value.detail
     # No stack trace / internal id ever in the detail.
     assert "Traceback" not in exc.value.detail
-
-
-async def test_assert_unchanged_legacy_pair_skips_lookup_entirely() -> None:
-    """An update that doesn't touch crop/variety shouldn't even need to
-    query Master Data — the pair-equality short-circuit in
-    crop_variety_errors makes load_crop_variety_lookup's result irrelevant,
-    but the query itself still runs today (no querying-skip optimization at
-    this wrapper level); this test locks in that it never raises regardless
-    of what the lookup would have found."""
-    with patch(
-        "app.services.master_data_validation.master_data_repo.list_by_type_values",
-        AsyncMock(return_value=[]),  # would fail if actually checked
-    ):
-        await mdv.assert_crop_variety_valid(
-            object(), "พริก", "พริกขี้หนู", current_crop="พริก", current_variety="พริกขี้หนู",
-        )

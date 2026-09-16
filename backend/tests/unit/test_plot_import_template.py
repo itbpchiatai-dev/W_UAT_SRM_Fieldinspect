@@ -156,7 +156,7 @@ def test_row_one_is_import_columns_action_first() -> None:
 def test_description_mapping_keys_match_import_columns_exactly() -> None:
     assert set(TEMPLATE_COLUMN_DESCRIPTIONS) == set(IMPORT_COLUMNS)
     # Round V added the read-only supplierName and systemLotNo -> 34.
-    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 34
+    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 33  # round Y: variety removed
 
 
 def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
@@ -165,7 +165,7 @@ def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
     # A description in every one of the 33 columns (round 8-21A added
     # oracleSupplierCode/oracleInvoice/refAccount).
     assert set(desc) == set(IMPORT_COLUMNS)
-    assert len(desc) == 34      # round V: + supplierName, systemLotNo
+    assert len(desc) == 33      # round V: + supplierName, systemLotNo; round Y: − variety
     # A2 is the exact skip marker (this is what the importer keys off).
     assert desc["action"] == TEMPLATE_DESCRIPTION_ACTION
     # Every other cell is exactly its mapped description.
@@ -297,8 +297,9 @@ def test_create_example_row_has_the_full_spec_values() -> None:
         "latitude": "18.7883", "longitude": "98.9853", "rai": "5",
         # Round 8-9B.1 — EXAMPLE-only password (never a real credential).
         "inspectionPasswordStatus": "not_configured", "newInspectionPassword": "1357",
-        "crop": "พริก", "variety": "พริกขี้หนู", "cycleLabel": "jun2026",
-        "poNumber": "PO25001", "pCode": "Melon-A",
+        # Round Y — no variety column: the P.Code carries it.
+        "crop": "พริก", "cycleLabel": "jun2026",
+        "poNumber": "PO25001", "pCode": "WM-141",
         # Round 8-12A — the Supplier's own lot number, unrelated to the system
         # Lot No. Round A — there is no lotNo column to show at all any more.
         "supplierLotNo": "SUP-LOT-2026-01",
@@ -319,7 +320,7 @@ def test_update_example_edits_green_cells_and_leaves_orange_blank() -> None:
     update = by_no[5]
     assert update["action"] == "update_current_cycle"
     assert update["plotCode"] == "SUP001-2605-002"
-    for one_time in ("crop", "variety", "cycleLabel", "pCode"):
+    for one_time in ("crop", "cycleLabel", "pCode"):
         assert one_time not in update          # blank cell => key omitted
     assert (update["plotName"], update["village"], update["rai"]) == (
         "แปลงตัวอย่าง (เปลี่ยนชื่อ)", "บ้านใหม่", "6.5")

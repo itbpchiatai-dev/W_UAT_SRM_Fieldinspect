@@ -82,17 +82,23 @@ def _user(**o):
 
 
 def _ccreate(**o) -> PlotCycleCreate:
-    d = dict(poNumber="PO25001", pCode="Melon-A", cycleLabel="jun2026", crop="พริก", variety="พริกขี้หนู")
+    # Round Y — crop + pCode are the whole taxonomy a caller supplies.
+    d = dict(poNumber="PO25001", pCode="Melon-A", cycleLabel="jun2026", crop="พริก")
     d.update(o)
     return PlotCycleCreate(**d)
 
 
 def _permissive():
-    return patch(f"{_P}.master_data_validation.assert_crop_variety_valid", AsyncMock(return_value=None))
+    return patch(
+        f"{_P}.master_data_validation.assert_crop_p_code_valid",
+        AsyncMock(return_value="พริกขี้หนู"),  # the derived variety
+    )
 
 
 def _rejecting():
-    return patch(f"{_P}.master_data_validation.assert_crop_variety_valid", AsyncMock(side_effect=_REJECT))
+    return patch(
+        f"{_P}.master_data_validation.assert_crop_p_code_valid", AsyncMock(side_effect=_REJECT)
+    )
 
 
 # --- create_plot_with_cycle -------------------------------------------------
@@ -127,7 +133,7 @@ async def test_create_with_cycle_passes_when_master_data_valid() -> None:
         result = await create_plot_with_cycle(payload=payload, current_user=_user(), db=_db())
     assert result.cycle.id == cycle.id
     mk_assert.assert_awaited_once()
-    assert mk_assert.call_args.args[1:] == ("พริก", "พริกขี้หนู")
+    assert mk_assert.call_args.args[1:] == ("พริก", "Melon-A")  # crop + P.Code
 
 
 # --- start_plot_cycle --------------------------------------------------------
@@ -269,7 +275,7 @@ async def test_close_cycle_never_calls_master_data_validation() -> None:
          patch(f"{_P}.plot_cycle_repo.get_actual_harvest_source_record",
                AsyncMock(return_value=None)), \
          patch(f"{_P}.plot_cycle_repo.close_cycle", AsyncMock(return_value=closed)), \
-         patch(f"{_P}.master_data_validation.assert_crop_variety_valid", AsyncMock()) as mk_assert:
+         patch(f"{_P}.master_data_validation.assert_crop_p_code_valid", AsyncMock()) as mk_assert:
         await close_plot_cycle(
             plot_id=plot.id, cycle_id=cycle.id, payload=payload, current_user=_user(), db=_db(),
         )

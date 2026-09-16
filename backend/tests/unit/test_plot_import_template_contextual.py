@@ -152,7 +152,6 @@ def test_new_cycle_row_copies_active_cycle_plan_fields() -> None:
     ))
     values = _update_cycle_row_values(plot)
     assert values["crop"] == "ทุเรียน"
-    assert values["variety"] == "หมอนทอง"
     assert values["cycleLabel"] == "aug2026"
     assert values["poNumber"] == "PO99999"
     assert values["pCode"] == "Durian-A"
@@ -202,7 +201,7 @@ def test_plot_without_active_cycle_has_blank_cycle_fields() -> None:
     plot = _plot(active_cycle=None, cycles=[closed])
     values = _update_cycle_row_values(plot)
     assert values["action"] == ACTION_UPDATE
-    for field in ("crop", "variety", "cycleLabel", "poNumber", "pCode", "plantCount",
+    for field in ("crop", "cycleLabel", "poNumber", "pCode", "plantCount",
                   "expectedYieldFull", "expectedYieldUnit"):
         assert values[field] is None, field
     # Never inferred from the closed cycle in `cycles`.

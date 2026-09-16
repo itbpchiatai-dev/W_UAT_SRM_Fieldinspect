@@ -6,7 +6,7 @@
  * same plan fields, just cycle-scoped instead of plot-scoped.
  */
 import axios from 'axios';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import type { UseFormRegister, UseFormWatch, UseFormSetValue, FieldErrors, Path } from 'react-hook-form';
 import { z } from 'zod';
@@ -31,7 +31,7 @@ import {
 } from '../../api/plots';
 import { useHasPermission } from '../../hooks/useHasPermission';
 import { MasterDataSelect } from './MasterDataSelect';
-import { listMasterData, masterDataQueryKey } from '../../api/masterdata';
+import { PCodeSelect } from './PCodeSelect';
 import { YIELD_UNIT_OPTIONS, formatYieldQuantity } from '../../lib/yield-planning';
 
 const optionalNumberInput = z.preprocess(
@@ -84,12 +84,10 @@ export const cyclePlanFields = {
   poNumber: z.string().max(100).optional().or(z.literal('')),
   pCode: z.string().trim().min(1, 'กรุณากรอก P.Code').max(100),
   ...planCoreFields,
-  // Round 8-26C — variety is REQUIRED when CREATING a cycle, overriding
-  // planCoreFields above. P.Code is required on create and is now derived
-  // from the variety (a variety owns exactly one active P.Code), so without
-  // a variety there is no P.Code to derive and the cycle cannot be created
-  // at all. Confirmed with the user as an accepted consequence.
-  variety: z.string().trim().min(1, 'กรุณาเลือกพันธุ์').max(100),
+  // Round Y — nothing extra: the user picks crop + P.Code, and pCode above
+  // is the required one. `variety` stays in the shape (planCoreFields) purely
+  // so the form can HOLD the derived name for display; it is never required
+  // and never submitted (see toPayload).
 };
 
 export const cycleEditPlanFields = {
@@ -236,7 +234,8 @@ export function toPayload(values: CycleFormValues): PlotCycleCreatePayload {
     poNumber: values.poNumber?.trim() || null,
     pCode: values.pCode.trim(),
     crop: values.crop || null,
-    variety: values.variety || null,
+    // Round Y — no variety: the server reads it off the P.Code, and a
+    // submitted one is refused outright (PlotCycleCreate._variety_is_derived).
     // requireCycleLabel (superRefine) already blocked submit on a blank
     // value, so `.trim()` here is always nonblank — never sent as null,
     // matching PlotCycleCreatePayload.cycleLabel's now-required `string`.
@@ -472,42 +471,18 @@ export function CyclePlanFields<T extends CyclePlanShape>({
   // an edit shows them locked rather than as inputs the backend would refuse.
   const oneTimeLocked = mode === 'edit';
 
-  // --- Round 8-26C: P.Code is DERIVED from the variety, not typed ---------
-  // A variety owns exactly one active P.Code (services/p_code_master.py), so
-  // the only honest control here is a read-only echo of what the variety
-  // resolves to. `varietyTouched` is why this is not a plain effect keyed on
-  // `variety`: in EDIT mode an untouched form must leave the cycle's stored
-  // P.Code exactly as it is — a legacy cycle carries a free-text value that
-  // is not in Master Data, and silently rewriting it to the variety's
-  // current P.Code (or to blank) would change data the user never touched,
-  // and would change the Lot No a regenerate produces. So the derivation
-  // only ever runs after the user actually picks a crop or a variety.
-  const variety = (watch('variety' as Path<T>) as string | undefined) || '';
-  const [varietyTouched, setVarietyTouched] = useState(false);
-  const deriveActive = mode === 'create' || varietyTouched;
-
-  const pCodeQuery = useQuery({
-    queryKey: masterDataQueryKey('p_code', variety || null, true),
-    queryFn: () => listMasterData({ type: 'p_code', parent: variety, activeOnly: true }),
-    enabled: deriveActive && !!variety,
-  });
-  const derivedPCode = pCodeQuery.data?.[0]?.value ?? '';
-  // Only the RESOLVED value is written back, and only once it is known —
-  // writing '' while the query is still in flight would blank the field on
-  // every re-render and fight the user's own selection.
-  const settledPCode = !variety ? '' : pCodeQuery.isSuccess ? derivedPCode : null;
-  const lastWritten = useRef<string | null>(null);
-  useEffect(() => {
-    if (!deriveActive || settledPCode === null) return;
-    if (lastWritten.current === settledPCode) return;
-    lastWritten.current = settledPCode;
-    setValue('pCode' as Path<T>, settledPCode as never, {
-      shouldDirty: true, shouldValidate: true,
-    });
-  }, [deriveActive, settledPCode, setValue]);
-
+  // --- Round Y: the P.Code is PICKED; the variety follows from it ---------
+  // Round 8-26C had this the other way round (pick a variety, derive its one
+  // active P.Code). The user asked for the pair they actually work with —
+  // "WM" and "CTT-507" — and reading the chain upward is also the direction
+  // with exactly one answer: a P.Code belongs to one variety, while a crop
+  // owns many. The variety is kept in the form only so it can be SHOWN; the
+  // server derives the value it stores from the same Master Data
+  // (master_data_validation.variety_for_p_code), so a stale option here can
+  // never become stored data.
+  const crop = (watch('crop' as Path<T>) as string | undefined) || '';
   const pCodeValue = (watch('pCode' as Path<T>) as string | undefined) || '';
-  const varietyHasNoPCode = deriveActive && !!variety && pCodeQuery.isSuccess && !derivedPCode;
+  const varietyValue = (watch('variety' as Path<T>) as string | undefined) || '';
 
   return (
     <>
@@ -527,10 +502,10 @@ export function CyclePlanFields<T extends CyclePlanShape>({
             </p>
           )}
         </Field>
-        {/* Round 8-26C — read-only: the value comes from the chosen พันธุ์,
-            never from typing. `register` still binds it so the form owns the
-            value (submit, validation, and the Auto Lot preview all read it),
-            and `readOnly` rather than `disabled` keeps it in the payload. */}
+        {/* Round Y — the one plant control the user operates, filtered to
+            the chosen ชนิดพืช. `register` keeps the form owning the value
+            (submit, validation and the Auto Lot preview all read it) while
+            PCodeSelect drives it. */}
         <Field
           label={`P.Code${pCodeRequired ? ' *' : ''}`}
           error={errors.pCode?.message as string | undefined}
@@ -539,26 +514,21 @@ export function CyclePlanFields<T extends CyclePlanShape>({
             <LockedValue label="P.Code" value={pCodeValue} />
           ) : (
             <>
-              <input
-                {...register('pCode' as Path<T>)}
-                readOnly
-                aria-readonly="true"
-                // Field's <label> has no htmlFor, so without this the input has
-                // no accessible name at all — and a read-only field the user
-                // cannot click into needs one more than most.
-                aria-label="P.Code"
-                className="field-input bg-muted text-muted-foreground"
-                placeholder={variety ? '—' : 'เลือกพันธุ์ก่อน'}
+              <PCodeSelect
+                crop={crop || null}
+                value={pCodeValue || null}
+                onChange={(picked, derivedVariety) => {
+                  setValue('pCode' as Path<T>, (picked ?? '') as never, {
+                    shouldDirty: true, shouldValidate: true,
+                  });
+                  setValue('variety' as Path<T>, (derivedVariety ?? '') as never, {
+                    shouldDirty: true,
+                  });
+                }}
               />
-              {varietyHasNoPCode ? (
-                <p className="text-xs text-destructive">
-                  พันธุ์นี้ยังไม่ได้กำหนด P.Code — กรุณาเพิ่มที่เมนู Master Data ก่อน
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  {pCodeValue ? 'มาจากพันธุ์ที่เลือก' : 'ระบบจะเติมให้อัตโนมัติเมื่อเลือกพันธุ์'}
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground">
+                {crop ? 'ใช้สร้าง Lot No และระบุพันธุ์' : 'เลือกชนิดพืชก่อน'}
+              </p>
             </>
           )}
         </Field>
@@ -597,34 +567,25 @@ export function CyclePlanFields<T extends CyclePlanShape>({
               placeholder="— เลือกชนิดพืช —"
               value={(watch('crop' as Path<T>) as string | undefined) || null}
               onChange={(v) => {
-                // Changing the crop clears the variety, which clears the
-                // derived P.Code — so this counts as touching the variety.
-                setVarietyTouched(true);
+                // Round Y — a different crop offers different P.Codes, so the
+                // chosen one (and the variety it derived) cannot survive the
+                // change: clearing both is the only honest option.
                 setValue('crop' as Path<T>, (v ?? '') as never, { shouldDirty: true });
-                setValue('variety' as Path<T>, '' as never, { shouldDirty: true, shouldValidate: true });
+                setValue('pCode' as Path<T>, '' as never, { shouldDirty: true, shouldValidate: true });
+                setValue('variety' as Path<T>, '' as never, { shouldDirty: true });
               }}
             />
           )}
         </Field>
-        <Field
-          label={`พันธุ์/สายพันธุ์${mode === 'create' ? ' *' : ''}`}
-          error={errors.variety?.message as string | undefined}
-        >
-          {oneTimeLocked ? (
-            <LockedValue label="พันธุ์/สายพันธุ์" value={watch('variety' as Path<T>) as string | undefined} />
-          ) : (
-            <MasterDataSelect
-              type="variety"
-              placeholder="— เลือกพันธุ์ —"
-              parent={(watch('crop' as Path<T>) as string | undefined) || null}
-              value={(watch('variety' as Path<T>) as string | undefined) || null}
-              onChange={(v) => {
-                setVarietyTouched(true);
-                setValue('variety' as Path<T>, (v ?? '') as never, {
-                  shouldDirty: true, shouldValidate: true,
-                });
-              }}
-            />
+        <Field label="พันธุ์/สายพันธุ์">
+          {/* Round Y — never a choice: it is a detail OF the P.Code, shown so
+              the user can see which plant CTT-507 is. On an edit it is the
+              stored value, like every other one-time field. */}
+          <LockedValue label="พันธุ์/สายพันธุ์" value={varietyValue} />
+          {!oneTimeLocked && (
+            <p className="text-xs text-muted-foreground">
+              {varietyValue ? 'มาจาก P.Code ที่เลือก' : 'ระบบจะเติมให้เมื่อเลือก P.Code'}
+            </p>
           )}
         </Field>
       </div>

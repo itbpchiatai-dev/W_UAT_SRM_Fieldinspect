@@ -221,10 +221,13 @@ async def test_an_update_row_with_no_plot_details_does_not_touch_the_plot() -> N
 
 
 # --- 4. the orange columns are fixed once the cycle exists ------------------
+# Round Y — variety left this list because it left the FILE: a row that
+# carries one at all is refused by _removed_input_column_errors (see
+# test_plot_import_variety_round_y.py), which is a stricter rule than the
+# "same value is fine" one the remaining three columns follow.
 
 @pytest.mark.parametrize("column,stored,changed", [
     ("crop", "พริก", "เมล่อน"),
-    ("variety", "พริกขี้หนู", "พริกหยวก"),
     ("cycleLabel", "jun2026", "jul2026"),
     ("pCode", "Melon-A", "Melon-B"),
 ])

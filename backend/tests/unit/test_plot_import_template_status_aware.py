@@ -109,7 +109,6 @@ def test_reactivate_row_copies_latest_historical_cycle_fields():
     values = _reactivate_row_values(plot, latest)
     assert values["action"] == plot_import.ACTION_REACTIVATE_WITH_CYCLE
     assert values["crop"] == "ทุเรียน"
-    assert values["variety"] == "หมอนทอง"
     assert values["cycleLabel"] == "closed2025"
     assert values["poNumber"] == "PO24009"
     assert values["pCode"] == "Durian-Z"
@@ -129,7 +128,7 @@ def test_reactivate_row_with_no_cycle_history_is_blank_never_invented():
     plot = _plot(is_active=False)
     values = _reactivate_row_values(plot, None)
     assert values["action"] == plot_import.ACTION_REACTIVATE_WITH_CYCLE
-    for field in ("crop", "variety", "cycleLabel", "poNumber", "pCode",
+    for field in ("crop", "cycleLabel", "poNumber", "pCode",
                   "plantingDate", "plantCount", "expectedYieldFull", "expectedYieldUnit"):
         assert values[field] is None, field
 

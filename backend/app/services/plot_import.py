@@ -180,7 +180,9 @@ _MSG_RETIRED_ACTION = (
 
 # Round V — the Excel column behind each one-time cycle field.
 _ONE_TIME_FIELD_COLUMNS: dict[str, str] = {
-    "crop": "crop", "variety": "variety", "cycle_label": "cycleLabel", "p_code": "pCode",
+    # Round Y — no "variety" entry: the column is gone, so an update row
+    # can never change it and this map is only read for columns that exist.
+    "crop": "crop", "cycle_label": "cycleLabel", "p_code": "pCode",
 }
 
 
@@ -224,7 +226,6 @@ _MAX_VILLAGE = 255
 _MAX_DISTRICT = 255
 _MAX_PROVINCE = 100
 _MAX_CROP = 100
-_MAX_VARIETY = 100
 _MAX_CYCLE_LABEL = 100
 _MAX_LOT_NO = 100
 _MAX_PO_NUMBER = 100
@@ -284,7 +285,7 @@ IMPORT_COLUMNS: list[str] = [
     "action", "supplierCode", "supplierName", "plotCode", "plotName",
     "primaryPhone", "additionalPhones",
     "village", "district",
-    "province", "latitude", "longitude", "rai", "crop", "variety", "cycleLabel",
+    "province", "latitude", "longitude", "rai", "crop", "cycleLabel",
     # Round A — lotNo was REMOVED from the input contract, the same way round
     # 8-10B removed finalYieldUnit/finalInspectionRecordId below: the system lot
     # is generated at cycle creation and is immutable afterwards, so there is
@@ -402,14 +403,13 @@ TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     # from them. An update row may leave them blank or repeat the stored value.
     "crop": "ชนิดพืช — เช่น พริก กรอกครั้งเดียวตอนสร้างรอบปลูก แก้ภายหลังไม่ได้ "
             "(update_current_cycle: เว้นว่างหรือใส่ค่าเดิม)",
-    "variety": "พันธุ์ — เช่น พริกขี้หนู จำเป็นตอนสร้าง กรอกครั้งเดียว แก้ภายหลังไม่ได้ "
-               "(update_current_cycle: เว้นว่างหรือใส่ค่าเดิม)",
     "cycleLabel": "ชื่อรอบปลูก — เช่น jun2026 จำเป็นตอนสร้าง ใช้สร้าง Lot No "
                   "กรอกครั้งเดียว แก้ภายหลังไม่ได้ (update_current_cycle: เว้นว่างหรือใส่ค่าเดิม; "
                   "final_plot: ต้องตรงกับรอบที่เปิดอยู่)",
     "poNumber": "PO Number — เลข PO ของรอบปลูก ไม่บังคับ เช่น PO25001 "
                 "(ระบบแปลงเป็นตัวพิมพ์ใหญ่); update_current_cycle เว้นว่างเพื่อคงค่าเดิม",
-    "pCode": "P.Code — รหัสสินค้าของพันธุ์ เช่น WM-141 จำเป็นตอนสร้าง ใช้สร้าง Lot No "
+    "pCode": "P.Code — รหัสสินค้า เช่น CTT-507 จำเป็นตอนสร้าง ใช้สร้าง Lot No "
+             "และระบบใช้หาพันธุ์ให้เอง ต้องอยู่ใต้ชนิดพืชที่กรอก "
              "กรอกครั้งเดียว แก้ภายหลังไม่ได้ (update_current_cycle: เว้นว่างหรือใส่ค่าเดิม)",
     "systemLotNo": "Lot No ระบบ — ระบบสร้างให้ตอนเปิดรอบปลูก "
                    "{ชื่อรอบปลูก}-{รหัส Supplier}-{P.Code}-{เลขรัน} "
@@ -910,7 +910,6 @@ def _parse_row(raw: dict[str, str], columns_present: frozenset[str] = frozenset(
         longitude=_decimal(raw, "longitude", errors, "Longitude"),
         rai=_decimal(raw, "rai", errors, "พื้นที่ (ไร่)"),
         crop=_str(raw, "crop"),
-        variety=_str(raw, "variety"),
         cycle_label=_str(raw, "cycleLabel"),
         po_number=normalize_po_number(_str(raw, "poNumber")),
         p_code=normalize_p_code(_str(raw, "pCode")),
@@ -969,6 +968,9 @@ def _removed_input_column_errors(raw: dict[str, str]) -> list[str]:
       - finalYieldUnit / finalInspectionRecordId (round 8-10B) — the figures are
         always kilograms and the record to snapshot is always the cycle's own
         latest active one.
+      - variety (round Y) — the variety is a DETAIL of the P.Code, read off
+        Master Data's crop → variety → p_code chain, so a row says WM +
+        CTT-507 and the system supplies the rest.
       - lotNo (round A) — the system lot is generated when the cycle is created
         ({cycleLabel}-{supplierCode}-{pCode}-{running}) and can never be
         hand-typed or replaced. supplierLotNo, the supplier's OWN lot number,
@@ -982,6 +984,11 @@ def _removed_input_column_errors(raw: dict[str, str]) -> list[str]:
         errors.append(
             "ไม่ต้องระบุ finalInspectionRecordId ระบบเลือกบันทึกการตรวจล่าสุดให้อัตโนมัติ "
             "กรุณาลบค่าจากคอลัมน์นี้"
+        )
+    if _str(raw, "variety") is not None:
+        errors.append(
+            "ไม่ต้องระบุ variety ระบบใช้พันธุ์ของ P.Code ที่กรอกให้อัตโนมัติ "
+            "กรุณาลบค่าจากคอลัมน์นี้ (ถ้าต้องการเปลี่ยนพันธุ์ ให้เลือก P.Code ของพันธุ์นั้นแทน)"
         )
     if _str(raw, "lotNo") is not None:
         errors.append(
@@ -1204,7 +1211,6 @@ async def _validate_row(
     _check_length(p.district, _MAX_DISTRICT, "district", errors)
     _check_length(p.province, _MAX_PROVINCE, "province", errors)
     _check_length(p.crop, _MAX_CROP, "crop", errors)
-    _check_length(p.variety, _MAX_VARIETY, "variety", errors)
     _check_length(p.cycle_label, _MAX_CYCLE_LABEL, "cycleLabel", errors,
                   label="ชื่อรอบปลูก (cycleLabel)")
     _check_length(p.po_number, _MAX_PO_NUMBER, "poNumber", errors)
@@ -1378,7 +1384,7 @@ async def _validate_row(
         # an update no longer writes the label at all.)
         filled = {
             field: value for field, value in (
-                ("crop", p.crop), ("variety", p.variety),
+                ("crop", p.crop),
                 ("cycle_label", p.cycle_label), ("p_code", p.p_code),
             ) if value
         }
@@ -1661,36 +1667,38 @@ async def _apply_credential_status(db: AsyncSession, states: list["_RowState"]) 
 
 
 async def _apply_master_data_crop_variety_checks(db: AsyncSession, states: list["_RowState"]) -> None:
-    """Round 8-15D — the batched second pass enforcing that a NEW cycle's
-    crop/variety reference an existing, ACTIVE Master Data value — and that a
-    variety belongs to the chosen crop.
+    """Round 8-15D, rewritten for round Y — the batched pass that both
+    VALIDATES a new cycle's crop + P.Code against Master Data and DERIVES the
+    variety each row will be created with.
 
-    Round V — create_plot_with_cycle is the only action that still sets them:
-    update_current_cycle refuses a change outright (changed_one_time_fields),
-    so the "an unchanged legacy value on an update is exempt" carve-out this
-    pass used to carry has nothing left to exempt. final_plot never reached it.
+    The file no longer carries a variety at all: a row says WM + CTT-507, and
+    the variety is whatever CTT-507 belongs to. Deriving it here, in the same
+    pass that validates, is what keeps the Excel path and the web form
+    honest — `master_data_validation` owns the rule, and neither caller can
+    store a variety it did not just check. A row that fails keeps its blank
+    variety rather than a half-resolved one; it is never executed anyway.
 
-    Batched exactly like _apply_cycle_label_history_checks: ONE query for
-    every crop value + ONE for every variety value across the WHOLE file,
-    never one pair of queries per row."""
+    Round V — create_plot_with_cycle is the only action that reaches here:
+    update_current_cycle refuses a change to any one-time column outright
+    (changed_one_time_fields) and final_plot never touched them.
+
+    Batched exactly like _apply_cycle_label_history_checks: a FIXED three
+    queries for the whole file (crops, P.Codes, then the varieties those
+    P.Codes name), never one set per row."""
     relevant = [s for s in states if s.needs_master_data_check]
     if not relevant:
         return
     crop_values = {s.parsed.crop for s in relevant if s.parsed.crop}
-    variety_values = {s.parsed.variety for s in relevant if s.parsed.variety}
-    # Round 8-26C — pCode joins the same batch (one more query for the whole
-    # file, never one per row).
     p_code_values = {s.parsed.p_code for s in relevant if s.parsed.p_code}
-    lookup = await master_data_validation.load_crop_variety_lookup(
-        db, crop_values, variety_values, p_code_values,
+    lookup = await master_data_validation.load_crop_p_code_lookup(
+        db, crop_values, p_code_values,
     )
     for s in relevant:
         p = s.parsed
-        s.errors.extend(
-            master_data_validation.crop_variety_errors(
-                lookup, p.crop, p.variety, p_code=p.p_code,
-            )
-        )
+        errors = master_data_validation.crop_p_code_errors(lookup, p.crop, p.p_code)
+        s.errors.extend(errors)
+        if not errors:
+            p.variety = master_data_validation.variety_for_p_code(lookup, p.p_code)
 
 
 async def _apply_cycle_label_history_checks(db: AsyncSession, states: list["_RowState"]) -> None:

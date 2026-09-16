@@ -33,10 +33,11 @@ import type { PlotCycle } from '../../api/plots';
 // react-query is imported transitively by ./PlotCycleModals; the helpers under
 // test don't touch it, and CyclePlanFields renders standalone.
 //
-// Round 8-26C — this stub is now INTERACTIVE. P.Code stopped being a typed
-// field and is derived from the chosen พันธุ์, so a display-only stub would
-// leave no way to reach it at all. One <select> per `type`, addressed by
-// data-testid.
+// Round Y — the crop stub stays interactive (the crop drives which P.Codes
+// are offered); PCodeSelect is stubbed as one <select> whose options carry
+// the variety each P.Code belongs to, so picking one reports the pair the
+// real control reports. PCodeSelect's own behaviour is covered by
+// PCodeSelect.test.tsx.
 vi.mock('./MasterDataSelect', () => ({
   MasterDataSelect: ({ type, value, onChange }: {
     type: string; value: string | null; onChange: (v: string | null) => void;
@@ -48,17 +49,34 @@ vi.mock('./MasterDataSelect', () => ({
     >
       <option value="">—</option>
       <option value="พริก">พริก</option>
-      <option value="พริกขี้หนู">พริกขี้หนู</option>
-      <option value="พริกไม่มีรหัส">พริกไม่มีรหัส</option>
+      <option value="พืชไม่มีรหัส">พืชไม่มีรหัส</option>
     </select>
   ),
 }));
 
-// The variety -> active P.Code mapping the form derives from. พริกขี้หนู
-// resolves to WM-141 so the payload assertions below keep asserting the same
-// value they did when P.Code was typed by hand; พริกไม่มีรหัส deliberately
-// resolves to nothing, for the "this variety has no P.Code yet" path.
-const P_CODE_BY_VARIETY: Record<string, string> = { 'พริกขี้หนู': 'WM-141' };
+// P.Code -> the variety it belongs to. WM-141 keeps the value every payload
+// assertion below already used, from when P.Code was typed by hand.
+const VARIETY_BY_P_CODE: Record<string, string> = { 'WM-141': 'พริกขี้หนู' };
+vi.mock('./PCodeSelect', () => ({
+  PCodeSelect: ({ crop, value, onChange }: {
+    crop: string | null; value: string | null;
+    onChange: (pCode: string | null, variety: string | null) => void;
+  }) => (
+    <select
+      data-testid="p-code-select"
+      data-crop={crop ?? ''}
+      value={value ?? ''}
+      onChange={(e) => {
+        const picked = e.target.value || null;
+        onChange(picked, picked ? (VARIETY_BY_P_CODE[picked] ?? null) : null);
+      }}
+    >
+      <option value="">—</option>
+      <option value="WM-141">WM-141 — พริกขี้หนู</option>
+    </select>
+  ),
+}));
+
 const listMasterDataMock = vi.fn();
 vi.mock('../../api/masterdata', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/masterdata')>()),
@@ -67,24 +85,15 @@ vi.mock('../../api/masterdata', async (importOriginal) => ({
 
 beforeEach(() => {
   listMasterDataMock.mockReset();
-  listMasterDataMock.mockImplementation(({ type, parent }: { type: string; parent?: string }) => {
-    if (type !== 'p_code') return Promise.resolve([]);
-    const value = parent ? P_CODE_BY_VARIETY[parent] : undefined;
-    return Promise.resolve(value ? [{
-      id: `pc-${value}`, type: 'p_code', value, parent: parent ?? null,
-      orderIndex: 0, active: true,
-      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
-    }] : []);
-  });
+  listMasterDataMock.mockResolvedValue([]);
 });
 
-/** Pick a พันธุ์ and wait for the derived P.Code to land in the form —
- * replaces the old "type into the P.Code box" step everywhere below. */
-async function pickVariety(variety = 'พริกขี้หนู') {
-  fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: variety } });
-  const expected = P_CODE_BY_VARIETY[variety] ?? '';
+/** Pick a P.Code — replaces round 8-26C's "pick a พันธุ์ and wait for the
+ * derived P.Code" step everywhere below. */
+async function pickPCode(pCode = 'WM-141') {
+  fireEvent.change(screen.getByTestId('p-code-select'), { target: { value: pCode } });
   await waitFor(() =>
-    expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(expected),
+    expect((screen.getByTestId('p-code-select') as HTMLSelectElement).value).toBe(pCode),
   );
 }
 
@@ -606,7 +615,7 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     createPlotCycleMock.mockResolvedValue(legacyCycle());
     const { onSaved } = renderStart();
 
-    await pickVariety();
+    await pickPCode();
     // Round 8-17A.1 — cycleLabel is required on every new-cycle form.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } },
@@ -627,7 +636,7 @@ describe('StartCycleModal — PO Number optional (round 8-13B)', () => {
     renderStart();
 
     fireEvent.change(screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } });
-    await pickVariety();
+    await pickPCode();
     expect(screen.getByText('2605-SUP010-WM-141-###')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'เริ่มรอบปลูก' }));
@@ -655,7 +664,7 @@ describe('RolloverCycleModal — PO Number optional (round 8-13B)', () => {
       </QueryClientProvider>,
     );
 
-    await pickVariety();
+    await pickPCode();
     // Round 8-17A.1 — cycleLabel is required on every new-cycle form.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jul2026' } },
@@ -682,7 +691,7 @@ describe('ReactivatePlotWithCycleModal — PO Number optional (round 8-13B)', ()
       </QueryClientProvider>,
     );
 
-    await pickVariety();
+    await pickPCode();
     // Round 8-17A.1 — cycleLabel is required on every new-cycle form.
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'aug2026' } },
@@ -837,7 +846,7 @@ describe('StartCycleModal / RolloverCycleModal / ReactivatePlotWithCycleModal �
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: '2605' } },
     );
-    await pickVariety();
+    await pickPCode();
     fireEvent.change(
       screen.getByPlaceholderText('เช่น ORC-SUP-001'), { target: { value: '  ORC-1  ' } },
     );
@@ -865,7 +874,7 @@ describe('StartCycleModal / RolloverCycleModal / ReactivatePlotWithCycleModal �
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'jul2026' } },
     );
-    await pickVariety();
+    await pickPCode();
     fireEvent.change(
       screen.getByPlaceholderText('เช่น INV-2026-0001'), { target: { value: '  INV-9  ' } },
     );
@@ -890,7 +899,7 @@ describe('StartCycleModal / RolloverCycleModal / ReactivatePlotWithCycleModal �
     fireEvent.change(
       screen.getByPlaceholderText('เช่น jun2026 หรือ may2026'), { target: { value: 'aug2026' } },
     );
-    await pickVariety();
+    await pickPCode();
     fireEvent.change(
       screen.getByPlaceholderText('เช่น ACC-0001'), { target: { value: '  ACC-9  ' } },
     );
@@ -945,110 +954,97 @@ describe('EditCycleModal — Oracle reference fields (round 8-21B)', () => {
   });
 });
 
-describe('CyclePlanFields — round 8-26C: P.Code derives from the พันธุ์', () => {
-  it('renders P.Code read-only — it can never be typed into', async () => {
+describe('CyclePlanFields — round Y: the พันธุ์ follows the P.Code', () => {
+  it('offers a P.Code chooser instead of a พันธุ์ one', async () => {
     renderPlan();
 
-    const input = await screen.findByLabelText('P.Code');
-    expect((input as HTMLInputElement).readOnly).toBe(true);
+    expect(await screen.findByTestId('p-code-select')).toBeTruthy();
+    expect(screen.queryByTestId('master-select-variety')).toBeNull();
   });
 
-  it('fills P.Code from the chosen พันธุ์', async () => {
+  it('shows the พันธุ์ of the chosen P.Code, read-only', async () => {
     renderPlan();
-
-    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: 'พริกขี้หนู' } });
+    await pickPCode();
 
     await waitFor(() =>
-      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe('WM-141'),
+      expect(screen.getByLabelText('พันธุ์/สายพันธุ์').textContent).toContain('พริกขี้หนู'),
+    );
+    // Never an input: there is nothing here for the user to decide.
+    expect(screen.queryByTestId('master-select-variety')).toBeNull();
+  });
+
+  it('clears the พันธุ์ when the P.Code is cleared', async () => {
+    renderPlan();
+    await pickPCode();
+
+    fireEvent.change(screen.getByTestId('p-code-select'), { target: { value: '' } });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('พันธุ์/สายพันธุ์').textContent).not.toContain('พริกขี้หนู'),
     );
   });
 
-  it('clears P.Code when the พันธุ์ is cleared', async () => {
+  it('clears both when the ชนิดพืช changes — another crop has other P.Codes', async () => {
     renderPlan();
-    await pickVariety();
-
-    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: '' } });
-
-    await waitFor(() =>
-      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(''),
-    );
-  });
-
-  it('clears P.Code when the ชนิดพืช changes, because that clears the พันธุ์', async () => {
-    renderPlan();
-    await pickVariety();
+    await pickPCode();
 
     fireEvent.change(screen.getByTestId('master-select-crop'), { target: { value: 'พริก' } });
 
     await waitFor(() =>
-      expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe(''),
+      expect((screen.getByTestId('p-code-select') as HTMLSelectElement).value).toBe(''),
+    );
+    expect(screen.getByLabelText('พันธุ์/สายพันธุ์').textContent).not.toContain('พริกขี้หนู');
+  });
+
+  it('passes the chosen ชนิดพืช down, so only its P.Codes are offered', async () => {
+    renderPlan();
+
+    fireEvent.change(screen.getByTestId('master-select-crop'), { target: { value: 'พริก' } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('p-code-select').getAttribute('data-crop')).toBe('พริก'),
     );
   });
 
-  it('warns, and leaves P.Code blank, for a พันธุ์ that has no P.Code yet', async () => {
+  it('marks P.Code as required on create, and พันธุ์ as nothing to fill in', async () => {
     renderPlan();
 
-    fireEvent.change(screen.getByTestId('master-select-variety'), { target: { value: 'พริกไม่มีรหัส' } });
-
-    expect(await screen.findByText(/พันธุ์นี้ยังไม่ได้กำหนด P.Code/)).toBeTruthy();
-    expect((screen.getByLabelText('P.Code') as HTMLInputElement).value).toBe('');
-  });
-
-  it('marks พันธุ์ as required on create', async () => {
-    renderPlan();
-
-    expect(await screen.findByText('พันธุ์/สายพันธุ์ *')).toBeTruthy();
-  });
-
-  it('does NOT mark พันธุ์ required on edit — a legacy cycle without one stays editable', async () => {
-    renderPlan({ mode: 'edit' });
-
-    expect(await screen.findByText('พันธุ์/สายพันธุ์')).toBeTruthy();
+    expect(await screen.findByText('P.Code *')).toBeTruthy();
+    expect(screen.getByText('พันธุ์/สายพันธุ์')).toBeTruthy();
     expect(screen.queryByText('พันธุ์/สายพันธุ์ *')).toBeNull();
   });
 
-  it('never re-derives a stored P.Code on edit', async () => {
-    // The stored P.Code may be a legacy free-text value; deriving it again
-    // would rewrite data the lot was built from. Round V makes that
-    // impossible rather than merely avoided: the value is shown locked.
+  it('round V: on edit there is no P.Code, พันธุ์ or crop to pick', () => {
     renderPlan({ mode: 'edit' });
 
-    expect(screen.getByLabelText('P.Code').textContent).toContain('WM-141');
-    expect(listMasterDataMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'p_code' }),
-    );
-  });
-
-  it('round V: on edit there is no พันธุ์ or crop to pick', () => {
-    // Was "derives on edit once the user does pick a พันธุ์" — the pickers are
-    // gone from the edit form, because the variety is fixed once the cycle
-    // exists.
-    renderPlan({ mode: 'edit' });
+    expect(screen.queryByTestId('p-code-select')).toBeNull();
     expect(screen.queryByTestId('master-select-variety')).toBeNull();
     expect(screen.queryByTestId('master-select-crop')).toBeNull();
+    // The stored values are still shown, locked.
+    expect(screen.getByLabelText('P.Code').textContent).toContain('WM-141');
   });
 });
 
-describe('cycleFormSchema — round 8-26C: พันธุ์ required on create', () => {
-  it('rejects a create with no variety', () => {
-    const r = cycleFormSchema.safeParse({
+describe('cycleFormSchema — round Y: the พันธุ์ is not an input', () => {
+  it('accepts a create with no variety at all — the server derives it', () => {
+    expect(cycleFormSchema.safeParse({
       poNumber: '', pCode: 'WM-141', cycleLabel: '2605',
-    });
-    expect(r.success).toBe(false);
-    if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('variety');
+    }).success).toBe(true);
   });
 
-  it('rejects a whitespace-only variety', () => {
-    const r = cycleFormSchema.safeParse({
-      poNumber: '', pCode: 'WM-141', cycleLabel: '2605', variety: '   ',
-    });
+  it('still requires the P.Code, which is what the variety now depends on', () => {
+    const r = cycleFormSchema.safeParse({ poNumber: '', pCode: '', cycleLabel: '2605' });
     expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.map((i) => i.path[0])).toContain('pCode');
   });
 
-  it('the EDIT schema still accepts a blank variety', () => {
-    const r = cycleEditFormSchema.safeParse({
-      poNumber: '', pCode: '', cycleLabel: '2605', variety: '',
-    });
-    expect(r.success).toBe(true);
+  it('never sends a variety, even when the form is holding one for display', () => {
+    const payload = toPayload({
+      poNumber: '', pCode: 'WM-141', cycleLabel: '2605',
+      crop: 'พริก', variety: 'พริกขี้หนู',
+    } as CycleFormValues);
+    expect('variety' in payload).toBe(false);
+    expect(payload.pCode).toBe('WM-141');
+    expect(payload.crop).toBe('พริก');
   });
 });

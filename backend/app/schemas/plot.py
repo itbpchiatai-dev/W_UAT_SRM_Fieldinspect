@@ -11,6 +11,7 @@ from pydantic import ConfigDict, Field, SecretStr, SkipValidation, field_validat
 from app.core.phone import normalize_thai_mobile
 from app.schemas.base import CamelBaseModel
 from app.services.cycle_reference_fields import normalize_cycle_reference_text
+from app.services.master_data_validation import VARIETY_IS_DERIVED_MESSAGE
 from app.services.plot_code import PLOT_CODE_IS_GENERATED_MESSAGE
 from app.services.lot_number import (
     normalize_p_code,
@@ -704,6 +705,12 @@ class PlotCycleCreate(CamelBaseModel):
     # hand-typed one.
     po_number: str | None = Field(None, max_length=100)
     p_code: str = Field(..., max_length=100)
+    # Round Y — the variety is DERIVED from p_code (Master Data's
+    # crop → variety → p_code chain) and written by the endpoint, so this
+    # field is accept-if-empty only: an older SPA build that still sends the
+    # key with nothing in it keeps working, a filled one is refused. Exactly
+    # the shape round V gave PlotCreate.plot_code, and for the same reason —
+    # a value the caller believes it chose must never be silently dropped.
     # Round 8-12A — the SUPPLIER's own lot number for this cycle. OPTIONAL and
     # free-form (trimmed, blank -> None): unlike poNumber/pCode it never feeds
     # the Auto Lot formula, so requiring it would block a legitimate cycle for
@@ -722,6 +729,13 @@ class PlotCycleCreate(CamelBaseModel):
     plant_count: int | None = Field(None, ge=0)
     expected_yield_full: Decimal | None = Field(None, ge=0)
     expected_yield_unit: str | None = Field(None, max_length=20)
+
+    @field_validator("variety")
+    @classmethod
+    def _variety_is_derived(cls, v: str | None) -> None:
+        if v is not None and v.strip():
+            raise ValueError(VARIETY_IS_DERIVED_MESSAGE)
+        return None
 
     @field_validator("cycle_label")
     @classmethod

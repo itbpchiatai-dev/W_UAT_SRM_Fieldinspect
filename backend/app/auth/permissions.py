@@ -71,6 +71,22 @@ class PermissionKey:
     # Excel importer — all of which plots.update unlocks together.
     PLOTS_CANCEL_CYCLE = "plots.cancel_cycle"
 
+    # FarmLog — Reports (round 29). One key PER REPORT, and the Supplier's
+    # copies are their own reports with their own keys.
+    #
+    # All four endpoints used to be gated by plots.read: anyone who could open
+    # the Plots page ran both reports and downloaded both workbooks, and there
+    # was no way to grant one report without the other. supplier:owner holds
+    # plots.read, so Suppliers were already running the internal reports —
+    # scoped to their own rows by RLS, but with the internal column set.
+    #
+    # An export shares its report's key exactly. A workbook must never be
+    # reachable by someone who cannot open the report it belongs to.
+    REPORTS_PLOT_STATUS = "reports.plot_status"
+    REPORTS_CYCLE_YIELD = "reports.cycle_yield"
+    REPORTS_PLOT_STATUS_SUPPLIER = "reports.plot_status_supplier"
+    REPORTS_CYCLE_YIELD_SUPPLIER = "reports.cycle_yield_supplier"
+
     # FarmLog — Records
     RECORDS_READ   = "records.read"
     RECORDS_CREATE = "records.create"

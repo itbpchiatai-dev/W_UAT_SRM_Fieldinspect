@@ -34,7 +34,17 @@ def _build_tree(items: list[MenuItem], allowed: set[str]) -> list[MenuRead]:
       - After per-node filtering, drop any node whose perm gate was empty
         AND now has no visible children — keeps the sidebar from showing
         an empty 'Settings' parent for a role with no settings access.
+
+    Round 29 — that last rule had never worked. It judged "had children" by
+    the children that SURVIVED the filter, so a group whose every child was
+    filtered out looked like a childless leaf and stayed: roles without
+    settings access saw an empty "การตั้งค่า", and once "รายงาน" lost its own
+    permission (each report carries one now) every role without a report key
+    would have seen an empty "รายงาน" too. A node is a group if the CATALOGUE
+    gives it children; that is what decides whether an empty one hides.
     """
+    # Every node that is a parent of anything, before filtering.
+    groups = {item.parent_id for item in items if item.parent_id is not None}
     by_parent: dict = {}
     for item in items:
         perm = item.required_permission_key or ""
@@ -47,10 +57,10 @@ def _build_tree(items: list[MenuItem], allowed: set[str]) -> list[MenuRead]:
         out: list[MenuRead] = []
         for n in nodes:
             children = walk(n.id)
-            # Drop empty-perm parents whose children were all filtered out
-            # (they'd render as a dead-end chevron in the UI otherwise).
-            had_children = n.id in by_parent
-            if (not n.required_permission_key) and had_children and not children:
+            # Drop empty-perm groups with nothing visible inside (they'd render
+            # as a dead-end chevron otherwise). A permission-less LEAF such as
+            # Dashboard is not a group and is always kept.
+            if (not n.required_permission_key) and n.id in groups and not children:
                 continue
             out.append(MenuRead(
                 id=n.id, key=n.key, label_th=n.label_th, label_en=n.label_en,

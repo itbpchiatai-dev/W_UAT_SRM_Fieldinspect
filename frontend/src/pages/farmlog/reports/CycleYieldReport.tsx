@@ -17,6 +17,7 @@ import { Sprout, Download, Loader2, FileText } from 'lucide-react';
 import {
   listCycleYieldReport,
   downloadCycleYieldReport,
+  type ReportAudience,
   type CycleYieldRow,
   type CycleYieldParams,
 } from '../../../api/reports';
@@ -66,7 +67,11 @@ function lotSourceLabel(source: CycleYieldRow['lotNoSource']): string | null {
   return null;
 }
 
-export function CycleYieldReport() {
+/** Round 29 — see PlotStatusReport: `audience` picks which of the two copies
+ *  of this report the page calls. */
+export function CycleYieldReport({ audience = 'internal' }: {
+  audience?: ReportAudience;
+} = {}) {
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterCrop, setFilterCrop] = useState('');
   const [filterStatus, setFilterStatus] = useState('closed');
@@ -103,20 +108,23 @@ export function CycleYieldReport() {
   });
 
   const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ['report-cycle-yield', page, pageSize, filterParams],
+    queryKey: ['report-cycle-yield', audience, page, pageSize, filterParams],
     queryFn: () => {
       if (pageSize === 'all') {
         return fetchAllPages(
-          (offset, limit) => listCycleYieldReport({ ...filterParams, limit, offset }),
+          (offset, limit) =>
+            listCycleYieldReport({ ...filterParams, limit, offset }, audience),
           ALL_FETCH_CHUNK,
         );
       }
-      return listCycleYieldReport({ ...filterParams, limit: pageSize, offset: page * pageSize });
+      return listCycleYieldReport(
+        { ...filterParams, limit: pageSize, offset: page * pageSize }, audience,
+      );
     },
   });
 
   const exportM = useMutation({
-    mutationFn: () => downloadCycleYieldReport(filterParams),
+    mutationFn: () => downloadCycleYieldReport(filterParams, audience),
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');

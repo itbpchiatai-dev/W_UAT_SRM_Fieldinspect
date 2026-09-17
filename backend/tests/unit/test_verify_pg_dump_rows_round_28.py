@@ -15,8 +15,6 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 
-import pytest
-
 _SCRIPT = (
     pathlib.Path(__file__).resolve().parents[3] / "scripts" / "verify_pg_dump_rows.py"
 )

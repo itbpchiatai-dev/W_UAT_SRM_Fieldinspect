@@ -126,3 +126,47 @@ describe('round X — invoice param', () => {
     expect(getMock.mock.calls[0][1].params.invoice).toBeUndefined();
   });
 });
+
+// --- round 29: the Supplier's copies are their own endpoints --------------
+//
+// Separate URLs behind separate permissions. Getting this wrong in the client
+// would not leak data (the internal endpoints refuse a Supplier outright), but
+// it would show them an error instead of their report.
+describe('report audience (round 29)', () => {
+  it.each([
+    ['listPlotStatus', () => listPlotStatus({}, 'supplier'),
+      '/api/v1/reports/supplier/plot-status'],
+    ['downloadPlotStatusReport', () => downloadPlotStatusReport({}, 'supplier'),
+      '/api/v1/reports/supplier/plot-status/export'],
+    ['listCycleYieldReport', () => listCycleYieldReport({}, 'supplier'),
+      '/api/v1/reports/supplier/cycle-yield'],
+    ['downloadCycleYieldReport', () => downloadCycleYieldReport({}, 'supplier'),
+      '/api/v1/reports/supplier/cycle-yield/export'],
+  ])('%s asks the supplier endpoint', async (_name, call, url) => {
+    getMock.mockResolvedValue({ data: [] });
+    await call();
+    expect(getMock.mock.calls[0][0]).toBe(url);
+  });
+
+  it.each([
+    ['listPlotStatus', () => listPlotStatus({}), '/api/v1/reports/plot-status'],
+    ['downloadPlotStatusReport', () => downloadPlotStatusReport({}),
+      '/api/v1/reports/plot-status/export'],
+    ['listCycleYieldReport', () => listCycleYieldReport({}), '/api/v1/reports/cycle-yield'],
+    ['downloadCycleYieldReport', () => downloadCycleYieldReport({}),
+      '/api/v1/reports/cycle-yield/export'],
+  ])('%s still asks the internal endpoint by default', async (_name, call, url) => {
+    getMock.mockResolvedValue({ data: [] });
+    await call();
+    expect(getMock.mock.calls[0][0]).toBe(url);
+  });
+
+  it('a supplier export still strips limit/offset, like the internal one', async () => {
+    getMock.mockResolvedValue({ data: new Blob() });
+    await downloadPlotStatusReport({ crop: 'พริก', limit: 500, offset: 100 }, 'supplier');
+    const [, config] = getMock.mock.calls[0];
+    expect(config.params.limit).toBeUndefined();
+    expect(config.params.offset).toBeUndefined();
+    expect(config.params.crop).toBe('พริก');
+  });
+});

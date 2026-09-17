@@ -558,6 +558,8 @@ def test_report_routes_are_authenticated_and_not_public() -> None:
     from app.api.v1.reports import router as reports_router
 
     cycle_routes = [r for r in reports_router.routes if "cycle-yield" in getattr(r, "path", "")]
-    assert len(cycle_routes) == 2  # list + export
+    # Round 29 — four: the internal pair plus the Supplier's own pair,
+    # which are separate routes with their own permission keys.
+    assert len(cycle_routes) == 4
     # no cycle-yield route on the public router
     assert not any("cycle-yield" in getattr(r, "path", "") for r in public_router.routes)

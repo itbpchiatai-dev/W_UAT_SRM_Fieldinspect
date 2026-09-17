@@ -85,6 +85,14 @@ DEFAULT_PERMISSIONS: list[tuple[str, str, str, bool]] = [
     ("plots.delete", "ปิด/ลบแปลง",      "farmlog", False),
     ("plots.cancel_cycle", "ยกเลิกรอบปลูก (จบด้วยการยกเลิก)", "farmlog", False),
     ("plots.assign", "มอบหมาย user ให้แปลง", "farmlog", False),
+    # FarmLog — Reports (round 29). One key per report; is_menu=True because
+    # each key also gates that report's sidebar entry.
+    ("reports.plot_status", "รายงานสถานะแปลงปัจจุบัน", "farmlog", True),
+    ("reports.cycle_yield", "รายงานผลผลิตตามรอบปลูก", "farmlog", True),
+    ("reports.plot_status_supplier",
+     "รายงานสถานะแปลงปัจจุบัน (Supplier)", "farmlog", True),
+    ("reports.cycle_yield_supplier",
+     "รายงานผลผลิตตามรอบปลูก (Supplier)", "farmlog", True),
     # FarmLog — Records
     ("records.read",   "ดูบันทึกการตรวจแปลง", "farmlog", True),
     ("records.create", "สร้างบันทึก",           "farmlog", False),
@@ -132,6 +140,10 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
         "plots.read", "plots.create", "plots.update", "plots.delete", "plots.assign",
         "plots.cancel_cycle",
         "records.read", "records.create", "records.update", "records.delete",
+        # Round 29 — the internal reports. The Supplier copies are granted to
+        # supplier:owner only; an admin who needs to see exactly what a
+        # Supplier sees is given that key deliberately, not by default.
+        "reports.plot_status", "reports.cycle_yield",
     ]),
     ("internal:super_user",  "Super User",   "internal", [
         "menus.read", "menus.update", "menus.reorder",
@@ -141,6 +153,8 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
     ("farmlog:supervisor",   "Supervisor",          "internal", [
         "suppliers.read", "plots.read", "plots.assign",
         "records.read", "records.create", "records.update",
+        # Round 29 — a supervisor reads the internal reports.
+        "reports.plot_status", "reports.cycle_yield",
         # manageMaster — supervisor curates dropdown options (Spec §10.4)
         "masterdata.read", "masterdata.create", "masterdata.update", "masterdata.delete",
     ]),
@@ -167,6 +181,10 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
         # along with it. Closing a season as HARVESTED stays Chiatai's: it is a
         # claim about a delivered crop, not an admission that one failed.
         "plots.cancel_cycle",
+        # Round 29 — an owner runs the SUPPLIER copies of the two reports,
+        # never the internal ones: same rows (RLS already scoped them to this
+        # supplier), but a column set that is this variant's to decide.
+        "reports.plot_status_supplier", "reports.cycle_yield_supplier",
         # Round 8-4F: an owner records inspections for their OWN supplier's
         # plots. records.create only unlocks the ACTION — the data boundary
         # stays RLS scope 'supplier' (app/api/deps/scope.py: owner + supplier_id
@@ -229,8 +247,14 @@ DEFAULT_MENUS: list[tuple[str, str, str, str | None, str, str | None, int, str]]
     ("farmlog.records",        "บันทึกการตรวจ", "Records",       "ClipboardList", "/farmlog/records",             "farmlog",       30, "records.read"),
     # FarmLog — Reports (gated by plots.read; the reports read from the
     # plots table's denormalized status, so no separate report permission).
-    ("farmlog.reports",            "รายงาน",     "Reports",     "BarChart3", "/farmlog/reports",             "farmlog",         40, "plots.read"),
-    ("farmlog.reports.plotstatus", "สถานะแปลง",  "Plot Status", "Table2",    "/farmlog/reports/plot-status", "farmlog.reports", 10, "plots.read"),
+    # Round 29 — the group carries no permission of its own: api/v1/me.py keeps
+    # a permission-less parent only while it has a visible child, so "รายงาน"
+    # appears for whoever can run at least one report and disappears otherwise.
+    ("farmlog.reports",            "รายงาน",     "Reports",     "BarChart3", "/farmlog/reports",             "farmlog",         40, ""),
+    ("farmlog.reports.plotstatus", "สถานะแปลงปัจจุบัน", "Plot Status", "Table2", "/farmlog/reports/plot-status", "farmlog.reports", 10, "reports.plot_status"),
+    ("farmlog.reports.cycleyield", "ผลผลิตตามรอบปลูก", "Cycle Yield", "Table2", "/farmlog/reports/cycle-yield", "farmlog.reports", 20, "reports.cycle_yield"),
+    ("farmlog.reports.plotstatus.supplier", "สถานะแปลงปัจจุบัน (Supplier)", "Plot Status (Supplier)", "Table2", "/farmlog/reports/supplier/plot-status", "farmlog.reports", 30, "reports.plot_status_supplier"),
+    ("farmlog.reports.cycleyield.supplier", "ผลผลิตตามรอบปลูก (Supplier)", "Cycle Yield (Supplier)", "Table2", "/farmlog/reports/supplier/cycle-yield", "farmlog.reports", 40, "reports.cycle_yield_supplier"),
 ]
 
 

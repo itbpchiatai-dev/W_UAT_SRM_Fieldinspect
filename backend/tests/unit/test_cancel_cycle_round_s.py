@@ -230,6 +230,7 @@ def test_every_migration_that_adds_a_permission_grants_it_to_super_admin() -> No
             continue
         if "internal:super_admin" not in body:
             offenders.append(f.name)
+
     assert not offenders, (
         "these migrations add a permission but never grant it to "
         f"internal:super_admin, so an existing database silently leaves the "

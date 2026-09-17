@@ -79,19 +79,39 @@ function toSnake(params: PlotStatusParams): Record<string, unknown> {
   };
 }
 
-export async function listPlotStatus(params: PlotStatusParams = {}): Promise<PlotStatusRow[]> {
-  const res = await apiClient.get<PlotStatusRow[]>('/api/v1/reports/plot-status', {
+/**
+ * Round 29 — which of the two COPIES of a report to call.
+ *
+ * 'internal' and 'supplier' are different reports with different permissions
+ * (reports.plot_status vs reports.plot_status_supplier) and, in time,
+ * different columns. The rows are the same either way: RLS scopes every
+ * report to the caller's own supplier regardless of which one is asked for.
+ */
+export type ReportAudience = 'internal' | 'supplier';
+
+function reportBase(audience: ReportAudience): string {
+  return audience === 'supplier' ? '/api/v1/reports/supplier' : '/api/v1/reports';
+}
+
+export async function listPlotStatus(
+  params: PlotStatusParams = {},
+  audience: ReportAudience = 'internal',
+): Promise<PlotStatusRow[]> {
+  const res = await apiClient.get<PlotStatusRow[]>(`${reportBase(audience)}/plot-status`, {
     params: toSnake(params),
   });
   return res.data;
 }
 
-export async function downloadPlotStatusReport(params: PlotStatusParams = {}): Promise<Blob> {
+export async function downloadPlotStatusReport(
+  params: PlotStatusParams = {},
+  audience: ReportAudience = 'internal',
+): Promise<Blob> {
   // limit/offset stripped even if a caller passes its on-screen pageSize
   // state through by mistake — an exported workbook must always contain
   // every filtered row, never just the current page.
   const { limit: _limit, offset: _offset, ...exportParams } = params;
-  const res = await apiClient.get<Blob>('/api/v1/reports/plot-status/export', {
+  const res = await apiClient.get<Blob>(`${reportBase(audience)}/plot-status/export`, {
     params: toSnake(exportParams),
     responseType: 'blob',
   });
@@ -184,18 +204,24 @@ function cycleYieldToSnake(params: CycleYieldParams): Record<string, unknown> {
   };
 }
 
-export async function listCycleYieldReport(params: CycleYieldParams = {}): Promise<CycleYieldRow[]> {
-  const res = await apiClient.get<CycleYieldRow[]>('/api/v1/reports/cycle-yield', {
+export async function listCycleYieldReport(
+  params: CycleYieldParams = {},
+  audience: ReportAudience = 'internal',
+): Promise<CycleYieldRow[]> {
+  const res = await apiClient.get<CycleYieldRow[]>(`${reportBase(audience)}/cycle-yield`, {
     params: cycleYieldToSnake(params),
   });
   return res.data;
 }
 
-export async function downloadCycleYieldReport(params: CycleYieldParams = {}): Promise<Blob> {
+export async function downloadCycleYieldReport(
+  params: CycleYieldParams = {},
+  audience: ReportAudience = 'internal',
+): Promise<Blob> {
   // limit/offset stripped even if a caller passes its on-screen pageSize
   // state through by mistake — see downloadPlotStatusReport's comment.
   const { limit: _limit, offset: _offset, ...exportParams } = params;
-  const res = await apiClient.get<Blob>('/api/v1/reports/cycle-yield/export', {
+  const res = await apiClient.get<Blob>(`${reportBase(audience)}/cycle-yield/export`, {
     params: cycleYieldToSnake(exportParams),
     responseType: 'blob',
   });

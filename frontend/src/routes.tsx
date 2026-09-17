@@ -46,8 +46,15 @@ const RecordForm = lazy(() =>
 const RecordPreview = lazy(() =>
   import('./pages/farmlog/RecordPreview').then((m) => ({ default: m.RecordPreview })),
 );
-const ReportsPage = lazy(() =>
-  import('./pages/farmlog/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+const PlotStatusReport = lazy(() =>
+  import('./pages/farmlog/reports/PlotStatusReport').then(
+    (m) => ({ default: m.PlotStatusReport }),
+  ),
+);
+const CycleYieldReport = lazy(() =>
+  import('./pages/farmlog/reports/CycleYieldReport').then(
+    (m) => ({ default: m.CycleYieldReport }),
+  ),
 );
 
 /**
@@ -92,7 +99,37 @@ export const MODULE_ROUTES: ReactElement[] = [
   <Route key="farmlog-record-detail" path="/farmlog/records/:id" element={
     <RequirePermission perm="records.read"><RecordDetailRedirect /></RequirePermission>
   } />,
+  // Round 29 — four reports, four routes, four permissions. The tabbed
+  // landing that used to serve both reports under one plots.read route is
+  // gone with the bundle it belonged to: a tab strip spanning two permissions
+  // would offer a user a report they cannot open. The sidebar is the
+  // navigation now, and it already hides what a role may not run.
   <Route key="farmlog-report-plot-status" path="/farmlog/reports/plot-status" element={
-    <RequirePermission perm="plots.read"><LazyRoute><ReportsPage /></LazyRoute></RequirePermission>
+    <RequirePermission perm="reports.plot_status">
+      <LazyRoute><PlotStatusReport /></LazyRoute>
+    </RequirePermission>
   } />,
+  <Route key="farmlog-report-cycle-yield" path="/farmlog/reports/cycle-yield" element={
+    <RequirePermission perm="reports.cycle_yield">
+      <LazyRoute><CycleYieldReport /></LazyRoute>
+    </RequirePermission>
+  } />,
+  <Route
+    key="farmlog-report-supplier-plot-status"
+    path="/farmlog/reports/supplier/plot-status"
+    element={
+      <RequirePermission perm="reports.plot_status_supplier">
+        <LazyRoute><PlotStatusReport audience="supplier" /></LazyRoute>
+      </RequirePermission>
+    }
+  />,
+  <Route
+    key="farmlog-report-supplier-cycle-yield"
+    path="/farmlog/reports/supplier/cycle-yield"
+    element={
+      <RequirePermission perm="reports.cycle_yield_supplier">
+        <LazyRoute><CycleYieldReport audience="supplier" /></LazyRoute>
+      </RequirePermission>
+    }
+  />,
 ];

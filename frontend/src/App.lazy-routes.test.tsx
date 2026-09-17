@@ -60,7 +60,8 @@ const MODULE_ROUTE_PAGES: Array<[string, string]> = [
   ['RecordList', './pages/farmlog/RecordList'],
   ['RecordForm', './pages/farmlog/RecordForm'],
   ['RecordPreview', './pages/farmlog/RecordPreview'],
-  ['ReportsPage', './pages/farmlog/reports/ReportsPage'],
+  ['PlotStatusReport', './pages/farmlog/reports/PlotStatusReport'],
+  ['CycleYieldReport', './pages/farmlog/reports/CycleYieldReport'],
 ];
 
 /** A static `import ... from '<path>'` at the top of the file. */
@@ -115,7 +116,8 @@ describe('public inspect isolation', () => {
       './pages/settings/AuthSettings',
       './pages/settings/DatabaseConnections',
       './pages/farmlog/admin/Plots',
-      './pages/farmlog/reports/ReportsPage',
+      './pages/farmlog/reports/PlotStatusReport',
+      './pages/farmlog/reports/CycleYieldReport',
     ];
     for (const path of forbidden) {
       expect(hasStaticImport(APP_SRC, path)).toBe(false);

@@ -15,6 +15,7 @@ import { BarChart3, Download, Loader2 } from 'lucide-react';
 import {
   listPlotStatus,
   downloadPlotStatusReport,
+  type ReportAudience,
   type PlotStatusRow,
   type PlotStatusParams,
 } from '../../../api/reports';
@@ -36,7 +37,16 @@ type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 const DEFAULT_PAGE_SIZE: PageSize = 100;
 const ALL_FETCH_CHUNK = 200;
 
-export function PlotStatusReport() {
+/**
+ * Round 29 — the same report is rendered for two audiences. `audience` picks
+ * WHICH report the page calls: the internal one or the Supplier's own copy,
+ * which are separate endpoints with separate permissions and their own column
+ * sets. Everything else on this page is identical, and deliberately so —
+ * one page, so the two can never drift into different behaviour.
+ */
+export function PlotStatusReport({ audience = 'internal' }: {
+  audience?: ReportAudience;
+} = {}) {
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterProvince, setFilterProvince] = useState('');
   const [filterCrop, setFilterCrop] = useState('');
@@ -79,20 +89,22 @@ export function PlotStatusReport() {
   });
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: ['report-plot-status', page, pageSize, filterParams],
+    queryKey: ['report-plot-status', audience, page, pageSize, filterParams],
     queryFn: () => {
       if (pageSize === 'all') {
         return fetchAllPages(
-          (offset, limit) => listPlotStatus({ ...filterParams, limit, offset }),
+          (offset, limit) => listPlotStatus({ ...filterParams, limit, offset }, audience),
           ALL_FETCH_CHUNK,
         );
       }
-      return listPlotStatus({ ...filterParams, limit: pageSize, offset: page * pageSize });
+      return listPlotStatus(
+        { ...filterParams, limit: pageSize, offset: page * pageSize }, audience,
+      );
     },
   });
 
   const exportM = useMutation({
-    mutationFn: () => downloadPlotStatusReport(filterParams),
+    mutationFn: () => downloadPlotStatusReport(filterParams, audience),
     onSuccess: (blob) => {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');

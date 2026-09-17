@@ -202,8 +202,9 @@ _COL_WIDTHS = [
     # since round Y dropped variety):
     22, 14, 24, 16, 24, 16, 28, 14, 14, 14, 12, 12, 8, 14, 16, 14, 14, 26, 14,
     18, 18, 18,  # oracleSupplierCode, oracleInvoice, refAccount (round 8-21A)
-    # plantingDate..newInspectionPassword (11 cols):
-    12, 16, 14, 14, 12, 12, 20, 16, 20, 20, 20,
+    # plantingDate..newInspectionPassword (10 cols since round 28 dropped
+    # inspectionPasswordStatus):
+    12, 16, 14, 14, 12, 12, 20, 16, 20, 20,
     # result columns:
     12, 14, 50, 12, 12, 24, 20, 14, 14, 20, 20,
 ]

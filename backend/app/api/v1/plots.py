@@ -390,7 +390,6 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             # red-highlighted "ตัวอย่าง" sheet (contextual workbook) or rows
             # 3-5 of the blank generic template; the importer never reads
             # either, and no current-data row is ever pre-filled with this.
-            "inspectionPasswordStatus": "not_configured",
             "newInspectionPassword": "1357",
         },
         {
@@ -414,7 +413,6 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
             "refAccount": "ACC-0002",
             "plantingDate": "2026-05-15", "plantCount": "800",
             "expectedYieldFull": "1000", "expectedYieldUnit": "kg",
-            "inspectionPasswordStatus": "configured",
             "newInspectionPassword": "135790",
         },
         {
@@ -518,7 +516,6 @@ _TEMPLATE_COLUMN_KIND: dict[str, str] = {
     "finalYieldAfterClean": _KIND_FINAL,
     "harvestDate": _KIND_FINAL,
     "finalNote": _KIND_FINAL,
-    "inspectionPasswordStatus": _KIND_SYSTEM,
     # Always exported BLANK (see _update_cycle_row_values) — a downloaded
     # template never carries an existing password back out.
     "newInspectionPassword": _KIND_EDITABLE,
@@ -678,16 +675,6 @@ def _plot_access_phone_fields(plot: Plot) -> tuple[str | None, str | None]:
     )
 
 
-def _inspection_password_status(configured: bool) -> str:
-    """The informational inspectionPasswordStatus cell (round 8-9B.1) — the
-    ONLY credential fact any exported workbook may carry. Never a password,
-    never a hash/digest, never a version, never a last-digits hint."""
-    return (
-        plot_import.INSPECTION_PASSWORD_STATUS_CONFIGURED if configured
-        else plot_import.INSPECTION_PASSWORD_STATUS_NOT_CONFIGURED
-    )
-
-
 def _update_cycle_row_values(
     plot: Plot, *, password_configured: bool = False,
 ) -> dict[str, str | None]:
@@ -761,7 +748,6 @@ def _update_cycle_row_values(
         ),
         "expectedYieldUnit": cycle.expected_yield_unit if cycle is not None else None,
         "currentPlotStatus": _CURRENT_PLOT_STATUS_ACTIVE_LABEL,
-        "inspectionPasswordStatus": _inspection_password_status(password_configured),
         # ALWAYS blank — a downloaded template must never carry an existing
         # password (or anything derived from one) back out of the server.
         "newInspectionPassword": None,
@@ -827,7 +813,6 @@ def _reactivate_row_values(
         ),
         "expectedYieldUnit": cycle.expected_yield_unit if cycle is not None else None,
         "currentPlotStatus": _CURRENT_PLOT_STATUS_INACTIVE_LABEL,
-        "inspectionPasswordStatus": _inspection_password_status(password_configured),
         # ALWAYS blank — see _update_cycle_row_values.
         "newInspectionPassword": None,
     }

@@ -254,6 +254,14 @@ class PlotImportPreview(CamelBaseModel):
     # client stores it in memory and echoes it back on commit. None on the
     # error-preview embedded in a commit's ImportHasErrors detail.
     preview_state: PlotImportPreviewState | None = None
+    # Round 28 — does committing THIS file require the preview_state above?
+    # The server owns the rule (plot_import.preview_state_required) and the
+    # client obeys it; before this, the modal re-derived it from row actions
+    # and drifted: it still looked for `start_next_cycle` (retired in round E)
+    # and never learned about password rows, so Commit stayed enabled for a
+    # file the server would refuse. Defaulted so an older client is
+    # unaffected.
+    requires_preview_state: bool = False
 
 
 class PlotImportCommitResult(CamelBaseModel):

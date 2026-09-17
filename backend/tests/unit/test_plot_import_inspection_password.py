@@ -135,30 +135,35 @@ async def _preview(rows, *, ctx=None, status=None, **lookups):
 
 # --- columns --------------------------------------------------------------
 
-def test_both_columns_exist_and_are_documented() -> None:
-    assert "inspectionPasswordStatus" in plot_import.IMPORT_COLUMNS
+def test_the_one_credential_column_exists_and_is_documented() -> None:
+    # Round 28 — inspectionPasswordStatus is gone; the input column is the
+    # only credential column a workbook has.
+    assert "inspectionPasswordStatus" not in plot_import.IMPORT_COLUMNS
     assert "newInspectionPassword" in plot_import.IMPORT_COLUMNS
     desc = plot_import.TEMPLATE_COLUMN_DESCRIPTIONS
+    assert "inspectionPasswordStatus" not in desc
     # Round V — every description opens with the column's Thai name.
-    assert desc["inspectionPasswordStatus"] == "สถานะรหัสยืนยันแปลง — ใช้ดูข้อมูลเท่านั้น"
     assert desc["newInspectionPassword"] == (
         "รหัสยืนยันแปลงใหม่ — "
         "กรอกตัวเลข 4 ถึง 20 หลักเมื่อต้องการตั้งหรือเปลี่ยนรหัส เว้นว่างเพื่อคงรหัสเดิม"
     )
 
 
-def test_status_column_is_never_read_by_the_parser() -> None:
-    """Informational only: a user editing it must not change what commits."""
-    src = inspect.getsource(plot_import._parse_row)
-    assert "inspectionPasswordStatus" not in src
+def test_the_retired_status_column_is_read_nowhere() -> None:
+    """Round 28 — it was export-only and is now gone entirely. A workbook
+    downloaded before this round still carries the header; the reader maps by
+    NAME, so the extra cell is simply not in the contract and changes
+    nothing (see test_editing_the_status_cell_changes_nothing)."""
     src_all = inspect.getsource(plot_import)
-    # The status constant is only ever WRITTEN (template) — the parser body
-    # never reads the column out of `raw`.
-    assert 'raw.get("inspectionPasswordStatus")' not in src_all
-    assert '_str(raw, "inspectionPasswordStatus")' not in src_all
+    code_only = chr(10).join(
+        line for line in src_all.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "inspectionPasswordStatus" not in code_only
 
 
 async def test_editing_the_status_cell_changes_nothing() -> None:
+    """A pre-round-28 workbook still carries the column — a filled cell is
+    ignored, never an error: it was never an input."""
     plot = _plot()
     preview = await _preview(
         [_update_row(inspectionPasswordStatus="configured")],
@@ -811,11 +816,13 @@ def _template_plot(**kw) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def test_template_exports_only_the_configured_status_never_a_secret() -> None:
+def test_template_exports_no_credential_data_at_all() -> None:
+    """Round 28 — was "exports only the status word": that word is gone too,
+    so the sheet now carries nothing about any plot's password."""
     plot = _template_plot()
     sheets = _template_sheets([plot], credential_status={plot.id: (True, 7)})
     text = "".join(sheets.values())
-    assert "configured" in text
+    assert "not_configured" not in text
     # the version is bookkeeping and is never exported
     assert ">7<" not in text
     for banned in ("$2b$", "passwordHash", "lookupDigest", "credentialVersion"):
@@ -833,14 +840,18 @@ def test_template_new_password_cells_are_blank_for_current_data_rows() -> None:
         _reactivate_row_values(plot, None, password_configured=True),
     ):
         assert values["newInspectionPassword"] is None
-        assert values["inspectionPasswordStatus"] == "configured"
+        assert "inspectionPasswordStatus" not in values
 
 
-def test_not_configured_plots_report_that_status() -> None:
+def test_a_downloaded_template_carries_no_credential_fact_at_all() -> None:
+    """Round 28 — with the status column gone, a workbook says nothing about
+    any plot's password: not the value, not a hash, not even whether one
+    exists. That is read on the plot's own screen."""
     from app.api.v1.plots import _update_cycle_row_values
 
-    values = _update_cycle_row_values(_template_plot(), password_configured=False)
-    assert values["inspectionPasswordStatus"] == "not_configured"
+    values = _update_cycle_row_values(_template_plot())
+    assert "inspectionPasswordStatus" not in values
+    assert not values.get("newInspectionPassword")
 
 
 def test_example_passwords_live_only_in_the_example_rows() -> None:
@@ -854,18 +865,173 @@ def test_example_passwords_live_only_in_the_example_rows() -> None:
         assert pin.isdigit() and 4 <= len(pin) <= 20
 
 
-def test_sheet_one_row_carries_password_status_only() -> None:
-    """Round 8-27E — the "ข้อมูลปัจจุบัน" and "รายการที่ไม่รวม" sheets this
-    test also covered are gone, so Sheet 1 is the only place a password
-    status can now be exported. The guarantee is unchanged: a status word,
-    never the password/hash/digest itself."""
+def test_sheet_one_row_carries_no_password_data() -> None:
+    """Round 8-27E — the "ข้อมูลปัจจุบัน" and "รายการที่ไม่รวม" sheets this test
+    also covered are gone. Round 28 removed the last credential column from
+    Sheet 1 as well."""
     from app.api.v1.plots import _update_cycle_row_values
 
     plot = _template_plot()
-    configured = _update_cycle_row_values(plot, password_configured=True)
-    unconfigured = _update_cycle_row_values(plot, password_configured=False)
-    assert configured["inspectionPasswordStatus"] == "configured"
-    assert unconfigured["inspectionPasswordStatus"] == "not_configured"
-    for values in (configured, unconfigured):
-        assert not values.get("newInspectionPassword")
-        assert not any("hash" in k.lower() or "digest" in k.lower() for k in values)
+    values = _update_cycle_row_values(plot)
+    # Round 28 — the status word went too: Sheet 1 now carries NO credential
+    # column at all, which is a stronger version of the same guarantee.
+    assert "inspectionPasswordStatus" not in values
+    assert not values.get("newInspectionPassword")
+    assert not any("hash" in k.lower() or "digest" in k.lower() for k in values)
+
+
+# --- round 28: a NEW plot may carry its password in the same file ----------
+#
+# The file a user actually sent: 43 create rows, every one with a password.
+# Preview passed, Commit answered 409 "สถานะรอบปลูกมีการเปลี่ยนแปลง" and wrote
+# nothing — every row flagged as changed, though nothing had changed.
+#
+# The two sides disagreed about the SAME blank cell: round V made the plot
+# code server-generated, so a create row leaves it empty; the preview recorded
+# that as '' while the commit read it back as None. Nothing to do with the
+# plot's state at all.
+
+
+def _create_commit_patches(created_plot, *, status=None):
+    """Everything commit_import touches for a create_plot_with_cycle row."""
+    cycle = _cycle()
+    return (
+        patch(f"{_M}.plot_repo.create_plot", AsyncMock(return_value=created_plot)),
+        patch(f"{_M}.plot_cycle_repo.create_cycle", AsyncMock(return_value=cycle)),
+        patch(f"{_M}.plot_cycle_repo.sync_plot_mirror_from_cycle", AsyncMock()),
+        patch(f"{_M}.plot_repo.get_plot_for_update", AsyncMock(return_value=created_plot)),
+        patch(f"{_M}.credential_repo.set_or_replace_plot_credential", AsyncMock()),
+        # Hashing needs the pepper; these tests are about the binding, not
+        # bcrypt (which has its own tests above).
+        patch("app.auth.plot_access_password.get_settings",
+              return_value=SimpleNamespace(PLOT_ACCESS_PASSWORD_PEPPER=PEPPER)),
+        _patch_credential_status(status),
+        patch(f"{_M}.ActivityLogger", MagicMock(return_value=AsyncMock())),
+    )
+
+
+async def _commit_create(rows, *, created_plot):
+    from contextlib import ExitStack
+
+    preview = await _preview(rows, plot=None, active=None)
+    assert preview.error_rows == 0, [r.message for r in preview.rows]
+    p_sup, p_plot, p_active = _patch_lookups(plot=None, active=None)
+    with ExitStack() as stack:
+        for cm in (p_sup, p_plot, p_active, *_create_commit_patches(created_plot)):
+            stack.enter_context(cm)
+        return await commit_import(
+            object(), _xlsx(rows), ctx=_ctx(), preview_state=preview.preview_state,
+        )
+
+
+async def test_a_new_plot_can_set_its_password_in_the_same_file() -> None:
+    created = _plot()
+    result = await _commit_create(
+        [_create_row(newInspectionPassword=PIN)], created_plot=created,
+    )
+    assert result.created_plots == 1
+    assert result.skipped_rows == 0
+    assert [r.status for r in result.row_results] == ["valid"]
+
+
+async def test_many_new_plots_with_passwords_commit_together() -> None:
+    """The real file's shape: one supplier, many new plots, one PIN each."""
+    created = _plot()
+    rows = [
+        _create_row(plotName=f"แปลงใหม่ {i}", newInspectionPassword=PIN)
+        for i in range(5)
+    ]
+    result = await _commit_create(rows, created_plot=created)
+    assert result.created_plots == 5
+    assert result.skipped_rows == 0
+    assert {r.status for r in result.row_results} == {"valid"}
+
+
+async def test_a_real_state_change_is_still_refused() -> None:
+    """The guard itself must survive the fix: an approved preview that no
+    longer matches the file's rows is still a conflict, not a silent write."""
+    rows = [_update_row(newInspectionPassword=PIN)]
+    preview = await _preview(rows, plot=_plot(), active=_cycle())
+    tampered = preview.preview_state.model_copy(deep=True)
+    tampered.credential_rows[0].expected_credential_version = 99
+
+    with pytest.raises(ImportPreviewStateConflict):
+        await _commit(rows, plot=_plot(), preview_state=tampered)
+
+
+# --- round 28: the backend says which files are bound to their preview ----
+#
+# The rule used to be spelled twice — once in commit_import_execute, once in
+# the modal's own `hasPreviewBoundRow`. They drifted: the client still checked
+# for `start_next_cycle` (retired in round E, gone from OFFERED_ACTIONS) and
+# never learned about password rows, so it enabled Commit for a file the
+# server would refuse. The server answers the question now; the client obeys.
+
+
+async def test_preview_says_a_password_file_is_bound() -> None:
+    preview = await _preview(
+        [_update_row(newInspectionPassword=PIN)], plot=_plot(), active=_cycle(),
+    )
+    assert preview.requires_preview_state is True
+
+
+async def test_preview_says_a_plain_file_is_not_bound() -> None:
+    preview = await _preview([_update_row()], plot=_plot(), active=_cycle())
+    assert preview.requires_preview_state is False
+
+
+async def test_a_file_the_preview_called_bound_is_the_file_commit_demands() -> None:
+    """The two answers come from ONE rule: whatever the preview flags as
+    bound is exactly what commit refuses to run without a preview_state."""
+    from contextlib import ExitStack
+
+    rows = [_update_row(newInspectionPassword=PIN)]
+    plot = _plot()
+    preview = await _preview(rows, plot=plot, active=_cycle())
+    assert preview.requires_preview_state is True
+
+    # commit_import directly, so "no preview_state at all" really means none
+    # (the _commit helper fills one in).
+    p_sup, p_plot, p_active = _patch_lookups(plot=plot, active=_cycle())
+    with ExitStack() as stack:
+        for cm in (p_sup, p_plot, p_active, *_commit_patches(plot=plot)):
+            stack.enter_context(cm)
+        with pytest.raises(ImportPreviewStateConflict):
+            await commit_import(object(), _xlsx(rows), ctx=_ctx(), preview_state=None)
+
+
+# --- round 28: a credential conflict says so, in its own words ------------
+
+
+async def test_a_credential_conflict_talks_about_the_password_not_the_cycle() -> None:
+    """The user's 409 read "สถานะรอบปลูกมีการเปลี่ยนแปลง" for a mismatch that
+    had nothing to do with a planting cycle. The message names what actually
+    diverged, and says nothing was saved — a wrong explanation costs a user
+    an hour of looking in the wrong place."""
+    rows = [_update_row(newInspectionPassword=PIN)]
+    preview = await _preview(rows, plot=_plot(), active=_cycle())
+    tampered = preview.preview_state.model_copy(deep=True)
+    tampered.credential_rows[0].expected_credential_version = 99
+
+    with pytest.raises(ImportPreviewStateConflict) as exc:
+        await _commit(rows, plot=_plot(), preview_state=tampered)
+
+    assert "รหัสยืนยันแปลง" in exc.value.message
+    assert "รอบปลูก" not in exc.value.message
+    assert "ไม่ได้บันทึก" in exc.value.message
+    assert exc.value.changed_rows == [2]
+
+
+async def test_a_row_that_moved_to_another_plot_is_refused() -> None:
+    """The identity check earns its place: if the approved preview described
+    a DIFFERENT plot than the row now names, the file changed under the user
+    and nothing may be written. (Round 28 made both sides read that identity
+    through one helper — this is what stops the helper being emptied out.)"""
+    rows = [_update_row(newInspectionPassword=PIN)]
+    preview = await _preview(rows, plot=_plot(), active=_cycle())
+    tampered = preview.preview_state.model_copy(deep=True)
+    tampered.credential_rows[0].plot_code = "P999"
+
+    with pytest.raises(ImportPreviewStateConflict) as exc:
+        await _commit(rows, plot=_plot(), preview_state=tampered)
+    assert exc.value.changed_rows == [2]

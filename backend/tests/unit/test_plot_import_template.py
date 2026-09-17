@@ -156,7 +156,7 @@ def test_row_one_is_import_columns_action_first() -> None:
 def test_description_mapping_keys_match_import_columns_exactly() -> None:
     assert set(TEMPLATE_COLUMN_DESCRIPTIONS) == set(IMPORT_COLUMNS)
     # Round V added the read-only supplierName and systemLotNo -> 34.
-    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 33  # round Y: variety removed
+    assert len(TEMPLATE_COLUMN_DESCRIPTIONS) == 32  # round Y: −variety; round 28: −status
 
 
 def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
@@ -165,7 +165,7 @@ def test_row_two_describes_every_column_and_action_cell_is_marker() -> None:
     # A description in every one of the 33 columns (round 8-21A added
     # oracleSupplierCode/oracleInvoice/refAccount).
     assert set(desc) == set(IMPORT_COLUMNS)
-    assert len(desc) == 33      # round V: + supplierName, systemLotNo; round Y: − variety
+    assert len(desc) == 32      # round V: +supplierName, systemLotNo; round Y: −variety; round 28: −inspectionPasswordStatus
     # A2 is the exact skip marker (this is what the importer keys off).
     assert desc["action"] == TEMPLATE_DESCRIPTION_ACTION
     # Every other cell is exactly its mapped description.
@@ -296,7 +296,8 @@ def test_create_example_row_has_the_full_spec_values() -> None:
         "village": "ต.ตัวอย่าง", "district": "อ.ตัวอย่าง", "province": "เชียงใหม่",
         "latitude": "18.7883", "longitude": "98.9853", "rai": "5",
         # Round 8-9B.1 — EXAMPLE-only password (never a real credential).
-        "inspectionPasswordStatus": "not_configured", "newInspectionPassword": "1357",
+        # Round 28 — inspectionPasswordStatus is gone from the contract.
+        "newInspectionPassword": "1357",
         # Round Y — no variety column: the P.Code carries it.
         "crop": "พริก", "cycleLabel": "jun2026",
         "poNumber": "PO25001", "pCode": "WM-141",

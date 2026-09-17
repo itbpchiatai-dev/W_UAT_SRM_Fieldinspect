@@ -310,23 +310,20 @@ IMPORT_COLUMNS: list[str] = [
     # and REJECTED with a clear message when they are not (see _legacy_final_
     # plot_column_errors) — never silently ignored.
     "harvestYield", "finalYieldAfterClean", "harvestDate", "finalNote",
-    # Round 8-9B.1 — plot inspection password ("รหัสยืนยันแปลง").
-    #   inspectionPasswordStatus — INFORMATIONAL ONLY, exactly like
-    #     currentPlotStatus: exported so the user can see which plots already
-    #     have a password, NEVER read by the parser. Editing it in the file has
-    #     no effect whatsoever on what a commit writes.
-    #   newInspectionPassword — the ONE input column. Blank = keep whatever the
-    #     plot already has (the overwhelmingly common case); non-blank = set or
-    #     replace. Deliberately composable with EVERY action rather than being
-    #     an action of its own, so one row can change the cycle and the
-    #     password together.
-    "inspectionPasswordStatus", "newInspectionPassword",
+    # Round 8-9B.1 — plot inspection password ("รหัสยืนยันแปลง"). Blank =
+    # keep whatever the plot already has (the overwhelmingly common case);
+    # non-blank = set or replace. Deliberately composable with EVERY action
+    # rather than being an action of its own, so one row can change the cycle
+    # and the password together.
+    #
+    # Round 28 — its companion inspectionPasswordStatus is GONE. It was
+    # export-only (the parser never read it), and a display column nobody may
+    # fill in is one more thing to explain on a sheet that already has 32.
+    # A plot's password status is read on the plot's own screen; a downloaded
+    # workbook carries no credential fact at all now.
+    "newInspectionPassword",
 ]
 MAX_IMPORT_ROWS = 1000
-
-# inspectionPasswordStatus cell values (informational). Never parsed back.
-INSPECTION_PASSWORD_STATUS_CONFIGURED = "configured"
-INSPECTION_PASSWORD_STATUS_NOT_CONFIGURED = "not_configured"
 
 # What a row will do to the plot's credential — the SAFE metadata the preview
 # and the result workbook show. Never accompanied by the password itself.
@@ -451,7 +448,6 @@ TEMPLATE_COLUMN_DESCRIPTIONS: dict[str, str] = {
     "harvestDate": "วันที่เก็บเกี่ยว — รูปแบบ YYYY-MM-DD สำหรับ final_plot เว้นว่างได้ "
                    "ระบบจะใช้วันที่ของบันทึกการตรวจที่รายงานผลผลิตให้",
     "finalNote": "หมายเหตุการเก็บเกี่ยว — สำหรับ final_plot ไม่บังคับ",
-    "inspectionPasswordStatus": "สถานะรหัสยืนยันแปลง — ใช้ดูข้อมูลเท่านั้น",
     "newInspectionPassword": (
         "รหัสยืนยันแปลงใหม่ — กรอกตัวเลข 4 ถึง 20 หลักเมื่อต้องการตั้งหรือเปลี่ยนรหัส "
         "เว้นว่างเพื่อคงรหัสเดิม"
@@ -499,6 +495,13 @@ _PS_RESOLUTION_CHANGED = "resolution_changed"
 _MSG_MISSING_PREVIEW_STATE = "กรุณาตรวจสอบไฟล์ด้วย Preview ก่อนยืนยันนำเข้า"
 _MSG_FILE_DIGEST_MISMATCH = "ไฟล์มีการเปลี่ยนแปลงหลังการตรวจสอบ กรุณา Preview ใหม่"
 _MSG_STATE_CHANGED = "สถานะรอบปลูกมีการเปลี่ยนแปลง กรุณาตรวจสอบไฟล์อีกครั้งก่อนนำเข้า"
+# Round 28 — the credential check gets its OWN sentence. It used to borrow
+# the one above, so a password mismatch told the user their PLANTING CYCLE
+# had changed — an explanation that sends them looking in the wrong place.
+_MSG_CREDENTIAL_STATE_CHANGED = (
+    "รหัสยืนยันแปลงของบางแถวถูกแก้ไขจากที่อื่น หลังจากที่คุณกดตรวจสอบ "
+    "ไม่ได้บันทึกข้อมูลใดๆ กรุณาตรวจสอบไฟล์อีกครั้งก่อนยืนยัน"
+)
 # Round 8-10B — the drift message a user sees when the record the server would
 # snapshot is no longer the one they approved in Preview.
 _MSG_FINAL_RECORD_CHANGED = (
@@ -882,8 +885,6 @@ def _inspection_password(raw: dict[str, str], errors: list[str]) -> str | None:
     rendered into the result workbook, which the user may forward to someone
     else.
 
-    NOTE: inspectionPasswordStatus is deliberately not read here (or anywhere).
-    It is export-only; a user editing it changes nothing.
     """
     raw_value = raw.get("newInspectionPassword")
     if raw_value is None or not raw_value.strip():
@@ -1738,8 +1739,8 @@ def _build_preview_state(
     final_plot_rows = [
         PlotImportFinalPlotPreviewStateRow(
             row_number=s.row_number,
-            supplier_code=s.parsed.supplier_code or "",
-            plot_code=s.parsed.plot_code or "",
+            supplier_code=_row_identity(s.parsed)[0],
+            plot_code=_row_identity(s.parsed)[1],
             plot_updated_at=s.plot.updated_at,
             active_cycle_id=s.active_cycle_id,
             active_cycle_no=s.active_cycle_no,
@@ -1758,8 +1759,8 @@ def _build_preview_state(
     credential_rows = [
         PlotImportCredentialPreviewStateRow(
             row_number=s.row_number,
-            supplier_code=s.parsed.supplier_code or "",
-            plot_code=s.parsed.plot_code or "",
+            supplier_code=_row_identity(s.parsed)[0],
+            plot_code=_row_identity(s.parsed)[1],
             plot_id=s.existing_plot_id,
             expected_configured=bool(s.credential_configured),
             expected_credential_version=s.credential_version,
@@ -1790,6 +1791,7 @@ def _build_preview(
         error_rows=error_rows,
         rows=results,
         preview_state=preview_state,
+        requires_preview_state=preview_state_required(states),
     )
 
 
@@ -2187,6 +2189,37 @@ def _counts_from_states(states: list[_RowState]) -> dict[str, int]:
     return counts
 
 
+def preview_state_required(states: list["_RowState"]) -> bool:
+    """Does committing this file have to echo the approved preview_state?
+
+    True when any row closes a cycle (final_plot) or sets a password: both
+    bind to state the user was SHOWN, and both are verified again under the
+    locks before anything is written.
+
+    Round 28 — the single source of this rule. commit_import_execute enforces
+    it and build_preview reports it, so the client never has to guess which
+    files are bound (it used to guess, and guessed wrong).
+    """
+    return any(
+        s.parsed.action == ACTION_FINAL or s.credential_change is not None
+        for s in states
+    )
+
+
+def _row_identity(parsed: "_Parsed") -> tuple[str, str]:
+    """How a preview-state entry and its commit-time row are matched up: the
+    (supplierCode, plotCode) the row carries.
+
+    Round 28 — ONE function for both sides, because they disagreed. A create
+    row leaves plotCode empty (round V made the code server-generated); the
+    preview recorded that blank as '' while the verifier compared it against
+    the parsed None, so every create row carrying a password was flagged as
+    "state changed" and the whole file was refused. Blank is blank on both
+    sides now, and neither side can drift again without the other.
+    """
+    return (parsed.supplier_code or "", parsed.plot_code or "")
+
+
 # --- Preview-state binding for start_next_cycle (round 8-2.7.2) -----------
 
 def _check_preview_state_file(
@@ -2246,7 +2279,7 @@ async def _verify_final_plot_snapshot(
     for s in final_states:
         expected = expected_by_row[s.row_number]
         p = s.parsed
-        if (expected.supplier_code, expected.plot_code) != (p.supplier_code, p.plot_code):
+        if (expected.supplier_code, expected.plot_code) != _row_identity(p):
             changed_rows.append(s.row_number)
             continue
         assert s.existing_plot_id is not None  # valid final_plot → plot exists
@@ -2360,7 +2393,7 @@ async def _verify_credential_snapshot(
 
     if actual_row_numbers != set(expected_by_row):
         changed = sorted(actual_row_numbers.symmetric_difference(expected_by_row))
-        raise ImportPreviewStateConflict(_PS_ROW_SET_MISMATCH, _MSG_STATE_CHANGED, changed)
+        raise ImportPreviewStateConflict(_PS_ROW_SET_MISMATCH, _MSG_CREDENTIAL_STATE_CHANGED, changed)
 
     # One bulk re-read under the locks — never one query per row.
     live = await credential_repo.get_credential_status_for_plots(
@@ -2370,9 +2403,7 @@ async def _verify_credential_snapshot(
     changed_rows: list[int] = []
     for s in credential_states:
         expected = expected_by_row[s.row_number]
-        if (expected.supplier_code, expected.plot_code) != (
-            s.parsed.supplier_code, s.parsed.plot_code
-        ):
+        if (expected.supplier_code, expected.plot_code) != _row_identity(s.parsed):
             changed_rows.append(s.row_number)
             continue
         if expected.intended_change != s.credential_change:
@@ -2395,7 +2426,7 @@ async def _verify_credential_snapshot(
 
     if changed_rows:
         raise ImportPreviewStateConflict(
-            _PS_RESOLUTION_CHANGED, _MSG_STATE_CHANGED, sorted(changed_rows)
+            _PS_RESOLUTION_CHANGED, _MSG_CREDENTIAL_STATE_CHANGED, sorted(changed_rows)
         )
 
 
@@ -2474,7 +2505,7 @@ async def commit_import_execute(
     credential_states = [s for s in states if s.credential_change is not None]
     checked_preview_state = (
         _check_preview_state_file(content, preview_state)
-        if final_states or credential_states
+        if preview_state_required(states)
         else None
     )
 

@@ -93,7 +93,9 @@ def test_the_remaining_columns_kept_their_order():
     assert tail == [
         "currentPlotStatus", "harvestYield", "finalYieldAfterClean",
         "harvestDate", "finalNote",
-        "inspectionPasswordStatus", "newInspectionPassword",
+        # Round 28 — inspectionPasswordStatus removed; the input column
+        # is the only credential column left.
+        "newInspectionPassword",
     ]
 
 

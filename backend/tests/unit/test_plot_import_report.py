@@ -67,7 +67,7 @@ def test_row1_has_41_headers_in_order() -> None:
     # Round 8-21A — oracleSupplierCode/oracleInvoice/refAccount added after
     # supplierLotNo; round V — read-only supplierName and systemLotNo.
     # 34 import columns + 11 result columns = 45.
-    assert len(headers) == 44  # round Y: variety removed
+    assert len(headers) == 43  # round Y: −variety; round 28: −inspectionPasswordStatus
     assert headers[:len(IMPORT_COLUMNS)] == IMPORT_COLUMNS
     assert headers[len(IMPORT_COLUMNS):] == R.RESULT_COLUMNS
 

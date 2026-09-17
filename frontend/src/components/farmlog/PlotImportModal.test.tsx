@@ -1102,7 +1102,10 @@ describe('PlotImportModal — preview-state binding (round 8-2.7.2)', () => {
   it('a start_next_cycle file whose preview response is missing previewState blocks Commit and shows guidance (round 8-6E item 6)', async () => {
     previewMock.mockResolvedValue(preview({
       rows: [row({ action: 'start_next_cycle', plotCode: 'P099', resolvedAction: 'start_new_cycle' })],
-      // no previewState field at all — the defensive case Part C item 5 guards.
+      // The server says this file is bound but sent no state — the contract
+      // drift Part C item 5 guards. Round 28: "bound" is the server's word
+      // (requiresPreviewState), not a guess made from the action column.
+      requiresPreviewState: true,
     }));
     renderModal();
     await doPreview();
@@ -1628,7 +1631,8 @@ describe('PlotImportModal — final_plot (round 8-7A/8-7B)', () => {
   it('a final_plot file whose preview response is missing previewState blocks Commit and shows guidance', async () => {
     previewMock.mockResolvedValue(preview({
       rows: [row({ action: 'final_plot', plotCode: 'P001', payload: finalPlotPayload() })],
-      // no previewState field at all
+      // bound per the server, but no state sent with it
+      requiresPreviewState: true,
     }));
     renderModal();
     await doPreview();
@@ -2051,5 +2055,58 @@ describe('PlotImportModal — inspection password (round 8-9B.1)', () => {
     const all = dump(globalThis.localStorage) + dump(globalThis.sessionStorage);
     expect(all).not.toContain(PIN);
     expect(all).not.toContain('previewState');
+  });
+});
+
+// --- round 28: the server decides which files are bound -------------------
+//
+// A user's file created 43 plots and set each one's inspection password. The
+// modal's own rule only knew about `final_plot` and the long-retired
+// `start_next_cycle`, so it enabled Commit; the server refused the file with
+// a 409 the user could do nothing about. The rule has one home now.
+describe('PlotImportModal — preview-state binding follows the server (round 28)', () => {
+  it('blocks Commit when the server calls the file bound but sends no state', async () => {
+    previewMock.mockResolvedValue(preview({
+      // a create row that also sets a password: no action the OLD rule knew
+      rows: [row({ action: 'create_plot_with_cycle', plotCode: '' })],
+      requiresPreviewState: true,
+    }));
+    renderModal();
+    await doPreview();
+
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'ยืนยันนำเข้า' }) as HTMLButtonElement).disabled,
+    ).toBe(true));
+    expect(screen.getByText(/ไม่พบข้อมูลตรวจสอบสถานะรอบปลูก/)).toBeTruthy();
+  });
+
+  it('allows Commit for a bound file once the state is there', async () => {
+    previewMock.mockResolvedValue(preview({
+      rows: [row({ action: 'create_plot_with_cycle', plotCode: '' })],
+      requiresPreviewState: true,
+      previewState: { fileSha256: 'abc', startNextRows: [], finalPlotRows: [], credentialRows: [] },
+    }));
+    renderModal();
+    await doPreview();
+
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'ยืนยันนำเข้า' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+  });
+
+  it('never blocks a file the server did not call bound, whatever its actions', async () => {
+    // The old rule keyed on the action column; this file carries the retired
+    // action name and is still not bound, because the server says so.
+    previewMock.mockResolvedValue(preview({
+      rows: [row({ action: 'start_next_cycle', plotCode: 'P010' })],
+      requiresPreviewState: false,
+    }));
+    renderModal();
+    await doPreview();
+
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'ยืนยันนำเข้า' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
+    expect(screen.queryByText(/ไม่พบข้อมูลตรวจสอบสถานะรอบปลูก/)).toBeNull();
   });
 });

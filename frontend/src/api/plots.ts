@@ -1039,6 +1039,12 @@ export interface PlotImportPreview {
   // Present on the read-only preview endpoints (round 8-2.7.2); absent on the
   // error-preview embedded in a commit's 422 detail.
   previewState?: PlotImportPreviewState | null;
+  // Round 28 — does committing THIS file have to echo previewState? The
+  // server owns the rule; this client used to re-derive it from row actions
+  // and drifted (it still looked for the retired `start_next_cycle` and never
+  // learned about password rows). Optional so an older server is read as
+  // "not bound", which is what it meant before the field existed.
+  requiresPreviewState?: boolean;
 }
 
 export interface PlotImportCommitResult {

@@ -457,16 +457,18 @@ export function PlotImportModal({ onClose, onImported }: { onClose: () => void; 
     if (file) runPreview(file);
   }
 
-  // Round 8-6E Part C item 5 (extended round 8-7A.1/8-7B to also cover
-  // final_plot) — a start_next_cycle OR final_plot row's commit is bound to
-  // the previewState the backend computed for THIS file; a preview response
-  // missing it (contract drift, or a stubbed/mocked response in tests) must
-  // block Commit rather than send `previewState: null` for a row type that
-  // requires it. Legacy actions never set this — previewState stays null for
-  // them by contract, and canCommit must not require it in that case.
-  const hasPreviewBoundRow = preview?.rows.some(
-    (r) => r.action === 'start_next_cycle' || r.action === 'final_plot',
-  ) ?? false;
+  // Round 8-6E Part C item 5 — a commit bound to the previewState the backend
+  // computed for THIS file must not be sent without it: a preview response
+  // missing the state (contract drift, or a stubbed response in tests) has to
+  // block Commit rather than send `previewState: null`.
+  //
+  // Round 28 — WHICH files are bound is the server's answer now
+  // (plot_import.preview_state_required), not a guess made here. This code
+  // used to look for `start_next_cycle`, an action retired in round E, and
+  // knew nothing about password rows — so a file that set a password on a new
+  // plot had Commit enabled and failed server-side with a 409 the user could
+  // do nothing about.
+  const hasPreviewBoundRow = preview?.requiresPreviewState ?? false;
   const missingPreviewStateForBoundAction = hasPreviewBoundRow && !preview?.previewState;
 
   // Round 8-7B, narrowed round 8-10C — resolvedFinalInspectionRecordId per

@@ -18,8 +18,10 @@ compare with the live counts before anything destructive happens.
 
     python verify_pg_dump_rows.py DUMP.sql --expect plots=43 records=16 ...
 
-Exits non-zero when a table is missing from the dump, holds zero rows, or
-disagrees with an --expect value. Tables not named in --expect are reported
+Exits non-zero when a table is missing from the dump, disagrees with an
+--expect value, or comes back empty with no --expect entry vouching for it
+(round 28: after the UAT wipe `records` was legitimately empty and every
+deploy aborted on a perfect backup). Tables not named in --expect are reported
 but never fail the run.
 """
 from __future__ import annotations
@@ -88,7 +90,15 @@ def main() -> int:
     for table in RLS_TABLES:
         if table not in counts:
             problems.append(f"{table}: no COPY block in the dump at all")
-        elif counts[table] == 0:
+        elif counts[table] == 0 and expected.get(table) != 0:
+            # Round 28 — only when the LIVE count does not vouch for the
+            # emptiness. --expect carries the counts taken from the live
+            # database moments earlier (deploy-uat.sh), so `records=0` there
+            # means the table really is empty and an empty dump of it is
+            # faithful. With no --expect entry nothing vouches for it and the
+            # original, careful answer stands. A table empty in the dump but
+            # NOT live still fails — on the mismatch check below if not here,
+            # which is the failure this guard exists for.
             problems.append(
                 f"{table}: 0 rows — the classic RLS-filtered dump. "
                 f"Re-run pg_dump as DB_APP_USER with PGOPTIONS='-c app.scope=all' "
@@ -117,7 +127,7 @@ def main() -> int:
             print(f"  - {p}", file=sys.stderr)
         return 1
 
-    print("\nDump verified — every RLS table carries rows.")
+    print("\nDump verified — every RLS table matches the live database.")
     return 0
 
 

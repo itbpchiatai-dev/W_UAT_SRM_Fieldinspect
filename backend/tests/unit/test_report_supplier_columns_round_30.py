@@ -100,15 +100,20 @@ def test_the_internal_report_is_untouched(
     ("/supplier/cycle-yield", "SUPPLIER_HIDDEN_CYCLE_YIELD"),
 ])
 def test_the_supplier_json_route_really_excludes_it(path: str, name: str) -> None:
-    """Reading the set is not the same as the route using it: this asserts the
-    live route object carries the exclusion, so the JSON a Supplier's browser
-    receives has no variety key in it at all."""
+    """The live route object carries the exclusion, in the per-item shape a
+    LIST response needs (round 30.1 — a bare set there silently excluded
+    nothing and the Supplier kept seeing the variety).
+
+    This still only checks CONFIGURATION. What the browser actually receives is
+    asserted against a real serialized payload in
+    test_report_supplier_payload_round_30_1.py — the distinction that let the
+    bug ship."""
     route = next(
         r for r in reports_api.router.routes
         if getattr(r, "path", None) == path and "GET" in getattr(r, "methods", set())
     )
-    assert route.response_model_exclude == getattr(reports_api, name)
-    assert route.response_model_exclude
+    assert route.response_model_exclude["__all__"] == set(getattr(reports_api, name))
+    assert route.response_model_exclude["__all__"]
 
 
 def test_the_p_code_is_populated_not_just_declared() -> None:

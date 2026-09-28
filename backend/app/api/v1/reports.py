@@ -451,10 +451,27 @@ SUPPLIER_HIDDEN_PLOT_STATUS: frozenset[str] = frozenset({"current_variety"})
 SUPPLIER_HIDDEN_CYCLE_YIELD: frozenset[str] = frozenset({"variety"})
 
 
+def _exclude_each(hidden: frozenset[str]) -> dict[str, set[str]]:
+    """The same hidden set, in the shape response_model_exclude needs when the
+    response model is a LIST.
+
+    Round 30.1 — a bare `{"current_variety"}` on a `list[Row]` route is not an
+    error and not a no-op warning: pydantic reads a set against a sequence as a
+    set of INDICES, finds no index named "current_variety", and returns every
+    row with every field. The route looked correctly configured, the workbook
+    (which reads the set directly) really did drop the column, and the Supplier
+    still saw the variety on screen. Wrapping it as {"__all__": {...}} applies
+    the exclusion to each item, which is what was meant all along.
+
+    Both surfaces still read ONE name per report — this only reshapes it at the
+    single point where FastAPI needs the other shape."""
+    return {"__all__": set(hidden)}
+
+
 @router.get(
     "/supplier/plot-status",
     response_model=list[ReportPlotStatusRow],
-    response_model_exclude=SUPPLIER_HIDDEN_PLOT_STATUS,
+    response_model_exclude=_exclude_each(SUPPLIER_HIDDEN_PLOT_STATUS),
     dependencies=[
         Depends(require_permission(PermissionKey.REPORTS_PLOT_STATUS_SUPPLIER)),
         Depends(get_rls_context),
@@ -507,7 +524,7 @@ async def export_supplier_plot_status_report(
 @router.get(
     "/supplier/cycle-yield",
     response_model=list[ReportCycleYieldRow],
-    response_model_exclude=SUPPLIER_HIDDEN_CYCLE_YIELD,
+    response_model_exclude=_exclude_each(SUPPLIER_HIDDEN_CYCLE_YIELD),
     dependencies=[
         Depends(require_permission(PermissionKey.REPORTS_CYCLE_YIELD_SUPPLIER)),
         Depends(get_rls_context),

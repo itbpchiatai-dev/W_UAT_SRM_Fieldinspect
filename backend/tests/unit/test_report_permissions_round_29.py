@@ -197,7 +197,10 @@ def test_the_supplier_export_uses_the_supplier_hidden_set() -> None:
         ("/supplier/cycle-yield", "SUPPLIER_HIDDEN_CYCLE_YIELD"),
     ):
         route = _route(path)
-        assert route.response_model_exclude == getattr(reports_api, name)
+        # Round 30.1 — the route carries the set wrapped for per-item exclusion
+        # (these routes answer with a LIST); the NAMES are still the report's
+        # own hidden set, which is what "one place" means here.
+        assert route.response_model_exclude["__all__"] == set(getattr(reports_api, name))
 
 
 # --- the migration that ships them ---------------------------------------

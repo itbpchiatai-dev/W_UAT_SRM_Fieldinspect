@@ -53,11 +53,11 @@ function row(overrides: Partial<PlotStatusRow> = {}): PlotStatusRow {
   };
 }
 
-function renderReport() {
+function renderReport(audience: 'internal' | 'supplier' = 'internal') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter><PlotStatusReport /></MemoryRouter>
+      <MemoryRouter><PlotStatusReport audience={audience} /></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -197,5 +197,55 @@ describe('PlotStatusReport — invoice search (round X)', () => {
     renderReport();
     expect(await screen.findByText('INV-2026-0001')).toBeTruthy();
     expect(screen.getByRole('columnheader', { name: 'Invoice' })).toBeTruthy();
+  });
+});
+
+/**
+ * Round 30 — the Supplier reads the P.Code where the internal reader reads the
+ * variety. The server is what decides (reports.SUPPLIER_HIDDEN_PLOT_STATUS
+ * drops currentVariety from the Supplier route's JSON), so the Supplier rows
+ * below arrive WITHOUT that key — which is exactly what the browser receives.
+ */
+describe('PlotStatusReport — P.Code in place of the variety for a Supplier (round 30)', () => {
+  function supplierRow() {
+    // The Supplier route omits the key entirely; it does not send null.
+    const { currentVariety: _dropped, ...rest } = row({ pCode: 'CTT-507' });
+    return rest as PlotStatusRow;
+  }
+
+  it('shows the P.Code and no variety on the Supplier copy', async () => {
+    listPlotStatusMock.mockResolvedValue([supplierRow()]);
+    renderReport('supplier');
+
+    expect(await screen.findByText('P.Code CTT-507')).toBeTruthy();
+    expect(screen.queryByText('พริกขี้หนู')).toBeNull();
+    // The crop itself is untouched — only the variety went.
+    expect(screen.getByText('พริก')).toBeTruthy();
+  });
+
+  it('names the column after what the Supplier actually gets', async () => {
+    listPlotStatusMock.mockResolvedValue([supplierRow()]);
+    renderReport('supplier');
+    await screen.findByText('SUP001-P001');
+
+    expect(screen.getByRole('columnheader', { name: 'พืช/P.Code/ระยะ' })).toBeTruthy();
+    expect(screen.queryByRole('columnheader', { name: 'พืช/พันธุ์/ระยะ' })).toBeNull();
+  });
+
+  it('leaves the internal copy showing the variety and no P.Code line', async () => {
+    listPlotStatusMock.mockResolvedValue([row({ pCode: 'CTT-507' })]);
+    renderReport();
+
+    expect(await screen.findByText('พริกขี้หนู')).toBeTruthy();
+    expect(screen.queryByText('P.Code CTT-507')).toBeNull();
+    expect(screen.getByRole('columnheader', { name: 'พืช/พันธุ์/ระยะ' })).toBeTruthy();
+  });
+
+  it('shows a dash rather than a blank when the cycle has no P.Code', async () => {
+    const { pCode: _none, ...rest } = supplierRow();
+    listPlotStatusMock.mockResolvedValue([rest as PlotStatusRow]);
+    renderReport('supplier');
+
+    expect(await screen.findByText('P.Code —')).toBeTruthy();
   });
 });

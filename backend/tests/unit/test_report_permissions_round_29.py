@@ -168,11 +168,18 @@ def test_a_hidden_field_is_a_real_row_field_so_the_json_drops_it_too() -> None:
             assert column.key in model.model_fields, column.key
 
 
-def test_nothing_is_hidden_from_the_supplier_yet() -> None:
-    """Round 29 ships the mechanism, not a policy: Oracle Invoice in
-    particular is shared on purpose so a Supplier can reconcile against it."""
-    assert reports_api.SUPPLIER_HIDDEN_PLOT_STATUS == frozenset()
-    assert reports_api.SUPPLIER_HIDDEN_CYCLE_YIELD == frozenset()
+def test_the_oracle_columns_stay_visible_to_the_supplier() -> None:
+    """Round 29 shipped the mechanism with an empty policy; round 30 fills it
+    in (see test_report_supplier_columns_round_30). What must NOT change is the
+    Oracle trio: it is shared on purpose so a Supplier can reconcile against
+    its own invoices."""
+    for hidden in (
+        reports_api.SUPPLIER_HIDDEN_PLOT_STATUS,
+        reports_api.SUPPLIER_HIDDEN_CYCLE_YIELD,
+    ):
+        assert "oracle_invoice" not in hidden
+        assert "oracle_supplier_code" not in hidden
+        assert "ref_account" not in hidden
 
 
 def test_the_supplier_export_uses_the_supplier_hidden_set() -> None:

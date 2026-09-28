@@ -47,6 +47,10 @@ const ALL_FETCH_CHUNK = 200;
 export function PlotStatusReport({ audience = 'internal' }: {
   audience?: ReportAudience;
 } = {}) {
+  // Round 30 — the Supplier copy shows the P.Code where the internal one shows
+  // the variety, so the header has to name the column the reader actually gets.
+  const isSupplierView = audience === 'supplier';
+  const cropColumnHeader = isSupplierView ? 'พืช/P.Code/ระยะ' : 'พืช/พันธุ์/ระยะ';
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterProvince, setFilterProvince] = useState('');
   const [filterCrop, setFilterCrop] = useState('');
@@ -216,7 +220,7 @@ export function PlotStatusReport({ audience = 'internal' }: {
                     still carries the old per-slot headers (server-generated,
                     downloadPlotStatusReport) — a backend change tracked
                     separately. */}
-                {['Supplier / แปลง', 'จังหวัด', 'Invoice', 'พืช/พันธุ์/ระยะ', 'ผลผลิตที่คาดว่าจะได้', 'คะแนนตรวจ (4 หัวข้อ)', 'ตรวจล่าสุด', 'สถานะ'].map((h) => (
+                {['Supplier / แปลง', 'จังหวัด', 'Invoice', cropColumnHeader, 'ผลผลิตที่คาดว่าจะได้', 'คะแนนตรวจ (4 หัวข้อ)', 'ตรวจล่าสุด', 'สถานะ'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>
@@ -248,7 +252,18 @@ export function PlotStatusReport({ audience = 'internal' }: {
                       {hasActiveCycle ? (
                         <>
                           <div>{r.currentCrop ?? '—'}</div>
+                          {/* Round 30 — the Supplier copy reads the P.Code
+                              where the internal copy reads the variety. Both
+                              lines are driven by what the response actually
+                              carries, not by `audience`: the server is the one
+                              that decides which of the two a caller may see
+                              (reports.SUPPLIER_HIDDEN_PLOT_STATUS), so the
+                              table can never show a column the response left
+                              out — or hide one it sent. */}
                           {r.currentVariety && <div className="text-xs text-gray-400">{r.currentVariety}</div>}
+                          {isSupplierView && (
+                            <div className="text-xs text-gray-400">P.Code {r.pCode || '—'}</div>
+                          )}
                           {r.currentStage && <div className="text-xs text-gray-400">{r.currentStage}</div>}
                         </>
                       ) : (

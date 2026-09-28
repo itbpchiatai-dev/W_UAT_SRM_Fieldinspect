@@ -25,7 +25,13 @@ export interface PlotStatusRow {
   activeCycleNo: number | null;
   activeCycleStatus: 'active' | null;
   currentCrop: string | null;
-  currentVariety: string | null;
+  // Round 30 — OPTIONAL, not merely nullable: the Supplier copy of this report
+  // omits the key entirely (reports.SUPPLIER_HIDDEN_PLOT_STATUS), so `undefined`
+  // is a real value here and the type has to admit it. pCode is the column
+  // shown in its place — the response has always carried it; only the type and
+  // the table were missing it.
+  currentVariety?: string | null;
+  pCode?: string | null;
   currentStage: string | null;
   currentYieldPct: string | number | null;
   expectedYieldFull: string | number | null;
@@ -137,7 +143,10 @@ export interface CycleYieldRow {
   cycleLabel: string | null;
   cycleStatus: 'active' | 'harvested' | 'cancelled';
   crop: string | null;
-  variety: string | null;
+  // Round 30 — optional for the same reason as PlotStatusRow.currentVariety:
+  // the Supplier copy omits it (reports.SUPPLIER_HIDDEN_CYCLE_YIELD) and reads
+  // the P.Code below instead.
+  variety?: string | null;
   // PO / P.Code + lot source (round 8-5B) — this row's OWN cycle values.
   poNumber?: string | null;
   pCode?: string | null;

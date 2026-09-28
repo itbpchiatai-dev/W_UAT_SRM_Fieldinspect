@@ -434,13 +434,21 @@ async def export_cycle_yield_report(
 # on UAT: a supplier-scoped session sees only its own plots). What each variant
 # decides for itself is its COLUMNS.
 #
-# Nothing is hidden yet, by decision: Oracle Invoice in particular is shared
-# deliberately, so a Supplier can reconcile against it. When a column should go,
-# its field name goes in the set below and it leaves the JSON response AND the
-# workbook together — one edit, both surfaces, no way to hide it from the screen
-# while it stays in the downloaded file.
-SUPPLIER_HIDDEN_PLOT_STATUS: frozenset[str] = frozenset()
-SUPPLIER_HIDDEN_CYCLE_YIELD: frozenset[str] = frozenset()
+# A field name in the set below leaves the JSON response AND the workbook
+# together — one edit, both surfaces, no way to hide it from the screen while it
+# stays in the downloaded file.
+#
+# Oracle Invoice is deliberately NOT hidden, so a Supplier can reconcile against
+# it.
+#
+# Round 30 — the variety is hidden and the P.Code shown in its place. They name
+# the same thing at different resolutions: since round Y the variety is a DETAIL
+# of the P.Code (master data's crop → variety → p_code chain), so a Supplier
+# reading "CTT-507" is reading the variety, by the name the purchase order and
+# the Lot No already use. Both reports carry p_code as a column of their own
+# already, so nothing has to be added for it to appear — only the variety goes.
+SUPPLIER_HIDDEN_PLOT_STATUS: frozenset[str] = frozenset({"current_variety"})
+SUPPLIER_HIDDEN_CYCLE_YIELD: frozenset[str] = frozenset({"variety"})
 
 
 @router.get(

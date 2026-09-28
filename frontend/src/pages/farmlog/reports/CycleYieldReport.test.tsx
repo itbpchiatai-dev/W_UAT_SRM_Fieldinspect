@@ -57,11 +57,11 @@ function row(overrides: Partial<CycleYieldRow> = {}): CycleYieldRow {
   };
 }
 
-function renderReport() {
+function renderReport(audience: 'internal' | 'supplier' = 'internal') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter><CycleYieldReport /></MemoryRouter>
+      <MemoryRouter><CycleYieldReport audience={audience} /></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -532,5 +532,44 @@ describe('CycleYieldReport — invoice search (round X)', () => {
     renderReport();
     expect(await screen.findByText('INV-2026-0001')).toBeTruthy();
     expect(screen.getByRole('columnheader', { name: 'Invoice' })).toBeTruthy();
+  });
+});
+
+/**
+ * Round 30 — the Supplier reads the P.Code where the internal reader reads the
+ * variety. This table already printed the P.Code on its own line, so the
+ * Supplier copy needed nothing but the server dropping the variety key (see
+ * reports.SUPPLIER_HIDDEN_CYCLE_YIELD) and a header that stops promising it.
+ */
+describe('CycleYieldReport — P.Code in place of the variety for a Supplier (round 30)', () => {
+  function supplierRow() {
+    const { variety: _dropped, ...rest } = row({ pCode: 'CTT-507' });
+    return rest as CycleYieldRow;
+  }
+
+  it('shows the P.Code and no variety on the Supplier copy', async () => {
+    listMock.mockResolvedValue([supplierRow()]);
+    renderReport('supplier');
+
+    expect(await screen.findByText(/P\.Code CTT-507/)).toBeTruthy();
+    expect(screen.queryByText('พริกขี้หนู')).toBeNull();
+    expect(screen.getByText('พริก')).toBeTruthy();
+  });
+
+  it('names the column after what the Supplier actually gets', async () => {
+    listMock.mockResolvedValue([supplierRow()]);
+    renderReport('supplier');
+    await screen.findByText(/P\.Code CTT-507/);
+
+    expect(screen.getByRole('columnheader', { name: 'พืช/P.Code/Lot' })).toBeTruthy();
+    expect(screen.queryByRole('columnheader', { name: 'พืช/พันธุ์/Lot' })).toBeNull();
+  });
+
+  it('leaves the internal copy showing the variety', async () => {
+    listMock.mockResolvedValue([row({ pCode: 'CTT-507' })]);
+    renderReport();
+
+    expect(await screen.findByText('พริกขี้หนู')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'พืช/พันธุ์/Lot' })).toBeTruthy();
   });
 });

@@ -72,6 +72,10 @@ function lotSourceLabel(source: CycleYieldRow['lotNoSource']): string | null {
 export function CycleYieldReport({ audience = 'internal' }: {
   audience?: ReportAudience;
 } = {}) {
+  // Round 30 — see PlotStatusReport. This table already prints the P.Code on
+  // its own line, so hiding the variety is all the Supplier copy needs; only
+  // the header still named a column that is no longer there.
+  const cropColumnHeader = audience === 'supplier' ? 'พืช/P.Code/Lot' : 'พืช/พันธุ์/Lot';
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterCrop, setFilterCrop] = useState('');
   const [filterStatus, setFilterStatus] = useState('closed');
@@ -228,7 +232,7 @@ export function CycleYieldReport({ audience = 'internal' }: {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                {['Supplier / แปลง', 'รอบปลูก', 'Invoice', 'พืช/พันธุ์/Lot', 'เป้าผลิต', 'สถานะ / ปิดรอบ', 'สรุปผลผลิต'].map((h) => (
+                {['Supplier / แปลง', 'รอบปลูก', 'Invoice', cropColumnHeader, 'เป้าผลิต', 'สถานะ / ปิดรอบ', 'สรุปผลผลิต'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     {h}
                   </th>

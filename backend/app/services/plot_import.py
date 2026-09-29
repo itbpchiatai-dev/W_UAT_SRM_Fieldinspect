@@ -201,6 +201,67 @@ def _one_time_column_error(field: str, stored: str | None) -> str:
         "ถ้าข้อมูลเดิมผิด ให้ยกเลิกรอบปลูกแล้วสร้างแปลงใหม่"
     )
 
+# Round 31 — the three ACTUAL-harvest columns, and the Excel column each one
+# is called. Read together everywhere: the DB stores them all-or-none
+# (ck_plot_cycles_actual_harvest_all_or_none), so a rule that applied to one
+# and not the others would produce a set the database refuses.
+_HARVEST_FIELD_COLUMNS: dict[str, str] = {
+    "harvest_yield": "harvestYield",
+    "final_yield_after_clean": "finalYieldAfterClean",
+    "harvest_date": "harvestDate",
+}
+_HARVEST_LABELS: dict[str, str] = {
+    "harvest_yield": "ผลผลิตตอนเก็บเกี่ยว",
+    "final_yield_after_clean": "ผลผลิตหลังทำความสะอาด",
+    "harvest_date": "วันที่เก็บเกี่ยว",
+}
+
+
+def _harvest_read_only_error(field: str, reported: object | None) -> str:
+    """A row that is NOT closing the cycle changed a harvest figure.
+
+    Round 31 put the field team's reported figures INTO the downloaded file so
+    an admin can see them without opening the report. That makes the cells
+    non-blank, so "did the user type something here" stopped being a usable
+    question — the answer is now yes on every exported row. The question that
+    still means something is "did the user change it", which is exactly how the
+    orange one-time columns already behave (_one_time_column_error).
+
+    So: leave the exported figure alone, or clear the cell, and the row is fine.
+    Put a DIFFERENT number in it and the row is refused, naming the value it has
+    to be and the one action that may change it. Silently dropping the number —
+    what happened before this round — is the one option not on the table: the
+    file said 82 and the system kept 78 with nothing on screen to say so."""
+    column = _HARVEST_FIELD_COLUMNS[field]
+    label = _HARVEST_LABELS[field]
+    shown = f"'{reported}'" if reported is not None else "ว่าง"
+    return (
+        f"{column} ({label}) แก้ไม่ได้ในแถวนี้ — ตัวเลขผลผลิตมาจากบันทึกการตรวจของภาคสนาม "
+        f"ค่าที่รายงานไว้คือ {shown}: ใส่ค่าเดิมหรือเว้นว่าง "
+        f"ถ้าต้องการแก้ตัวเลขจริง ให้เปลี่ยน action เป็น {ACTION_FINAL} (ปิดรอบปลูก)"
+    )
+
+
+def _harvest_differs_warning(differing: list[str]) -> str:
+    """NON-BLOCKING, and only on a final_plot row: the figures in the file are
+    not the ones the field team currently reports.
+
+    A closing row is allowed to overrule the field report — that is the whole
+    point of being able to type the numbers. But the file may simply be old: it
+    was downloaded with the figures of the day, and a corrected report can have
+    landed since. Nothing on screen would otherwise say so, and the stale number
+    would win silently.
+
+    Never an error. The admin decides; this only makes sure they decide
+    knowingly."""
+    return (
+        "ตัวเลขผลผลิตในไฟล์ไม่ตรงกับที่ภาคสนามรายงานล่าสุด ("
+        + " · ".join(differing)
+        + ") — ไฟล์นี้อาจถูกดาวน์โหลดไว้ก่อนมีการรายงานแก้ไข "
+        "ถ้ายืนยันตามไฟล์ ระบบจะใช้ตัวเลขในไฟล์"
+    )
+
+
 # New-cycle actions that require pCode nonblank (round 8-13A: poNumber is no
 # longer required here — see the check below) and are subject to the Auto Lot
 # length pre-check.
@@ -1618,7 +1679,103 @@ async def _validate_all(
     await _apply_cycle_label_history_checks(db, states)
     await _apply_credential_status(db, states)
     await _apply_master_data_crop_variety_checks(db, states)
+    await _apply_reported_harvest_checks(db, states)
     return states
+
+
+async def _apply_reported_harvest_checks(
+    db: AsyncSession, states: list["_RowState"],
+) -> None:
+    """Round 31 — the harvest figures are the field team's to report, and this
+    is the pass that says so.
+
+    The template now exports what the field team reported into harvestYield /
+    finalYieldAfterClean / harvestDate, so an admin sees the numbers in the file
+    instead of having to open the report. Two rules follow from that, and both
+    are decided HERE against ONE batched read of the same source record the
+    close itself will use (plot_cycle_repository.get_actual_harvest_source_
+    records_for_cycles — the query the plot-status report already runs, never
+    one per row):
+
+      * a row that is NOT final_plot may repeat the exported figure or clear the
+        cell, but may not change it — those rows do not write a harvest, and
+        before this round they accepted a number and dropped it in silence.
+
+      * a final_plot row MAY change it (that is what closing is for) and gets a
+        non-blocking warning when it disagrees with the current report, because
+        the likeliest reason for a disagreement is a file downloaded before a
+        corrected report landed.
+
+    A create row has no cycle and no field report at all, so any harvest figure
+    on one is refused outright — there is nothing it could describe.
+
+    Errored rows are skipped: they already block the whole file, and a second
+    message about a cell would only be noise.
+    """
+    candidates = [
+        s for s in states
+        if not s.errors and any(
+            getattr(s.parsed, field) is not None for field in _HARVEST_FIELD_COLUMNS
+        )
+    ]
+    if not candidates:
+        return
+
+    # Only rows that HAVE an active cycle can have a field report to compare
+    # against. One query for all of them.
+    cycle_ids = [s.active_cycle_id for s in candidates if s.active_cycle_id is not None]
+    sources = (
+        await plot_cycle_repo.get_actual_harvest_source_records_for_cycles(db, cycle_ids)
+        if cycle_ids else {}
+    )
+
+    for state in candidates:
+        p = state.parsed
+        filled = {
+            field: getattr(p, field)
+            for field in _HARVEST_FIELD_COLUMNS
+            if getattr(p, field) is not None
+        }
+        if state.active_cycle_id is None:
+            # create_plot_with_cycle (or a row whose cycle could not be
+            # resolved): nothing reported, nothing to compare, nothing this row
+            # could ever write.
+            for field in filled:
+                state.errors.append(_harvest_read_only_error(field, None))
+            continue
+
+        reported = plot_cycle_repo.actual_harvest_from_record(
+            sources.get(state.active_cycle_id)
+        )
+        differing = [
+            field for field, value in filled.items() if value != reported[field]
+        ]
+        if not differing:
+            continue
+
+        if p.action == ACTION_FINAL:
+            # Allowed, and said out loud — but only against a report that
+            # actually exists. When the field team has reported nothing, the
+            # admin typing the figures IS the normal way to close the cycle and
+            # there is no disagreement to point at; warning there would put a
+            # notice on every hand-entered close, which is how warnings stop
+            # being read.
+            contradicted = [f for f in differing if reported[f] is not None]
+            if not contradicted:
+                continue
+            # Appended to whatever warning the row already carries (the
+            # after-clean > harvest check) rather than replacing it — both are
+            # worth reading.
+            note = _harvest_differs_warning([
+                f"{_HARVEST_FIELD_COLUMNS[f]} รายงานไว้ {reported[f]}"
+                for f in contradicted
+            ])
+            state.final_warning = (
+                f"{state.final_warning} · {note}" if state.final_warning else note
+            )
+        else:
+            for field in differing:
+                state.errors.append(_harvest_read_only_error(field, reported[field]))
 
 
 async def _apply_credential_status(db: AsyncSession, states: list["_RowState"]) -> None:

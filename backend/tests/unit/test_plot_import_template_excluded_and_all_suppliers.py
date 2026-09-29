@@ -159,6 +159,11 @@ async def test_all_suppliers_mode_excluded_plots_are_reported_not_rendered() -> 
         # retired finalInspectionRecordId column, so a template download no
         # longer queries for it at all.
         credential_status={},   # round 8-9B.1 — batch-loaded, never per plot
+        # Round 31 — the field team's reported harvest figures, batch-loaded
+        # the same way so the sheet can print them in harvestYield/
+        # finalYieldAfterClean/harvestDate. Empty here: these fixture plots
+        # have no records.
+        reported_harvest={},
     )
     assert mk_excluded.call_args.kwargs["supplier_id"] is None
     assert resp.headers[_EXCLUDED_COUNT_HEADER] == "3"

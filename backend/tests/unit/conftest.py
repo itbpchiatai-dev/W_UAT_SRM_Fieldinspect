@@ -23,6 +23,37 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _default_no_reported_harvest(request: pytest.FixtureRequest):
+    """Round 31 — default "the field team has reported nothing" for every unit
+    test, unless it opts out with `@pytest.mark.nodefault_reported_harvest`.
+
+    Same rationale as the crop/variety default below. The plot importer now
+    reads each cycle's harvest source record to decide whether a harvest figure
+    in the file was CHANGED, and dozens of pre-existing plot_import tests pass a
+    bare mock as `db` — a real query errors there rather than finding nothing.
+    None of those tests are about this rule.
+
+    Returning {} means "no cycle has a usable field report", which is the state
+    every one of those fixtures was implicitly written against. Tests that
+    exercise the rule patch the resolver themselves with the exact report they
+    want (test_plot_import_reported_harvest_round_31.py).
+    """
+    if "nodefault_reported_harvest" in request.keywords:
+        yield
+        return
+
+    async def _fake_sources(db, cycle_ids):
+        return {}
+
+    with patch(
+        "app.repositories.plot_cycle_repository."
+        "get_actual_harvest_source_records_for_cycles",
+        side_effect=_fake_sources,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _default_permissive_crop_variety(request: pytest.FixtureRequest):
     if "nodefault_crop_variety" in request.keywords:
         yield

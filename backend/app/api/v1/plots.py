@@ -675,8 +675,51 @@ def _plot_access_phone_fields(plot: Plot) -> tuple[str | None, str | None]:
     )
 
 
+async def _reported_harvest_for_plots(
+    db: AsyncSession, plots: list[Plot],
+) -> dict[UUID, dict]:
+    """What the field team has reported for each ACTIVE plot's active cycle,
+    keyed by PLOT id so the sheet builder can look it up without touching a
+    cycle (round 31).
+
+    ONE query for the whole sheet — the same batched resolver the plot-status
+    report already uses (get_actual_harvest_source_records_for_cycles), so the
+    figures a template shows and the figures that report shows are the same
+    figures, found by the same rule, and a template download costs one more
+    query rather than one per plot.
+
+    Read-only, and blank is a normal answer: a cycle whose records carry no
+    harvest figure is simply absent, and its row exports the three cells empty —
+    round D's "use whatever is reported at commit time" meaning, unchanged."""
+    by_cycle = {
+        p.active_cycle.id: p.id
+        for p in plots
+        if p.is_active and p.active_cycle is not None
+    }
+    if not by_cycle:
+        return {}
+    sources = await plot_cycle_repo.get_actual_harvest_source_records_for_cycles(
+        db, list(by_cycle),
+    )
+    return {
+        by_cycle[cycle_id]: plot_cycle_repo.actual_harvest_from_record(record)
+        for cycle_id, record in sources.items()
+    }
+
+
+def _num_cell(value: object | None) -> str | None:
+    """A Decimal harvest figure as the text the sheet carries, or None.
+
+    Round 31 — str(Decimal) keeps the stored scale, so the cell reads "78.00",
+    the same figure the plot-status report shows. The importer's round-trip
+    check compares Decimals numerically, so a user who retypes it as "78" is
+    still leaving it unchanged; the scale is for the reader, not the check."""
+    return None if value is None else str(value)
+
+
 def _update_cycle_row_values(
     plot: Plot, *, password_configured: bool = False,
+    reported_harvest: dict | None = None,
 ) -> dict[str, str | None]:
     """Sheet 1 row for one existing, ACTIVE Plot (round E).
 
@@ -697,12 +740,28 @@ def _update_cycle_row_values(
     back to a closed/historical cycle, so stale data can't be re-imported by
     accident.
 
-    The final_plot columns (harvestYield / finalYieldAfterClean / harvestDate)
-    are exported BLANK on purpose: round D fills them from the field team's own
-    inspection records when the row is committed, so an admin closing a cycle
-    types nothing at all in the common case.
+    Round 31 — the final_plot columns (harvestYield / finalYieldAfterClean /
+    harvestDate) now carry what the FIELD TEAM has reported for this cycle,
+    where round D exported them blank.
+
+    Blank was correct and unreadable. Round D's rule is that a blank cell means
+    "use what the field team reported", so an admin closing a cycle typed
+    nothing — but they also SAW nothing, and had to open the plot-status report
+    in another tab to find out whether there were figures to confirm at all. The
+    numbers are the whole point of the row; the file was hiding them.
+
+    They stay editable only on a final_plot row. Everywhere else the importer
+    accepts the exported value back unchanged (or blank) and refuses a different
+    one — plot_import._apply_reported_harvest_checks, the same repeat-or-blank
+    rule the orange one-time columns use.
+
+    `reported_harvest` is the caller's batched lookup for THIS plot's active
+    cycle (plot_cycle_repository.actual_harvest_from_record's dict, or None when
+    the cycle has no usable field report). Never queried here — the sheet builds
+    hundreds of rows.
     """
     cycle = plot.active_cycle
+    reported = reported_harvest or {}
     primary_phone, additional_phones = _plot_access_phone_fields(plot)
     return {
         "action": plot_import.ACTION_UPDATE,
@@ -748,6 +807,16 @@ def _update_cycle_row_values(
         ),
         "expectedYieldUnit": cycle.expected_yield_unit if cycle is not None else None,
         "currentPlotStatus": _CURRENT_PLOT_STATUS_ACTIVE_LABEL,
+        # Round 31 — what the field team reported, ready to confirm on a
+        # final_plot row. Blank where they have reported nothing (or nothing
+        # usable): blank keeps round D's meaning exactly, "use whatever the
+        # field team has reported by the time this file is committed".
+        "harvestYield": _num_cell(reported.get("harvest_yield")),
+        "finalYieldAfterClean": _num_cell(reported.get("final_yield_after_clean")),
+        "harvestDate": (
+            reported["harvest_date"].isoformat()
+            if reported.get("harvest_date") is not None else None
+        ),
         # ALWAYS blank — a downloaded template must never carry an existing
         # password (or anything derived from one) back out of the server.
         "newInspectionPassword": None,
@@ -822,8 +891,12 @@ def _new_cycle_sheet(
     plots: list[Plot],
     latest_cycles: dict[UUID, PlotCycle] | None = None,
     credential_status: dict[UUID, tuple[bool, int]] | None = None,
+    reported_harvest: dict[UUID, dict] | None = None,
 ) -> list[list[Cell]]:
     latest_cycles = latest_cycles or {}
+    # Round 31 — keyed by PLOT id, batch-loaded by the caller exactly like
+    # credential_status below: one query for the whole sheet, never per plot.
+    reported_harvest = reported_harvest or {}
     # Round 8-9B.1 — batch-loaded by the caller (one query for the whole sheet,
     # never per plot). Only the boolean is ever read here; the version is
     # deliberately never exported.
@@ -844,7 +917,10 @@ def _new_cycle_sheet(
         # one place, next to the row it governs.
         if not plot.is_active:
             continue
-        values = _update_cycle_row_values(plot, password_configured=configured)
+        values = _update_cycle_row_values(
+            plot, password_configured=configured,
+            reported_harvest=reported_harvest.get(plot.id),
+        )
         rows.append([StyledCell(values.get(col), _cell_style(col)) for col in _PLOT_TEMPLATE_HEADERS])
     return rows
 
@@ -870,6 +946,7 @@ def _contextual_plot_template_workbook(
     plots: list[Plot],
     latest_cycles: dict[UUID, PlotCycle] | None = None,
     credential_status: dict[UUID, tuple[bool, int]] | None = None,
+    reported_harvest: dict[UUID, dict] | None = None,
 ) -> bytes:
     """Build the contextual template (rounds 8-6A/8-6G/8-6J/8-7A). Sheet
     order is load-bearing: excel_reader.read_first_sheet only ever reads
@@ -899,7 +976,8 @@ def _contextual_plot_template_workbook(
     """
     supplier_code = plots[0].supplier.code if plots and plots[0].supplier is not None else "SUP001"
     return _template_workbook(
-        _new_cycle_sheet(plots, latest_cycles, credential_status), supplier_code,
+        _new_cycle_sheet(plots, latest_cycles, credential_status, reported_harvest),
+        supplier_code,
     )
 
 
@@ -1371,8 +1449,10 @@ async def download_plot_import_template(
     credential_status = await credential_repo.get_credential_status_for_plots(
         db, [p.id for p in plots],
     )
+    reported_harvest = await _reported_harvest_for_plots(db, plots)
     content = _contextual_plot_template_workbook(
         plots, latest_cycles=latest_cycles, credential_status=credential_status,
+        reported_harvest=reported_harvest,
     )
     return _template_response(content, excluded_count=excluded_count)
 
@@ -1409,8 +1489,10 @@ async def _all_suppliers_template_response(db: AsyncSession, *, plot_status: str
     credential_status = await credential_repo.get_credential_status_for_plots(
         db, [p.id for p in plots],
     )
+    reported_harvest = await _reported_harvest_for_plots(db, plots)
     content = _contextual_plot_template_workbook(
         plots, latest_cycles=latest_cycles, credential_status=credential_status,
+        reported_harvest=reported_harvest,
     )
     return _template_response(content, excluded_count=excluded_count)
 

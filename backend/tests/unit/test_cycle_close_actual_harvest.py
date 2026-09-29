@@ -105,6 +105,10 @@ def test_a_plain_harvest_report_leaves_the_after_cleaning_gap_visible() -> None:
     assert figures["final_yield_after_clean"] is None
 
 
+# Round 31 — this test IS the harvest-source resolver, so it opts out of
+# conftest's default stub of it (which exists for the many tests that
+# merely pass through it with a mock db).
+@pytest.mark.nodefault_reported_harvest
 def test_the_source_query_prefers_a_final_yield_report_without_matching_stage_names() -> None:
     """Source-level guard. The backend must find the ผลผลิตสุดท้าย report by
     the DATA it carries (a non-null final_yield_after_clean), never by matching

@@ -334,6 +334,10 @@ async def test_plot_status_invoice_matches_the_open_cycle_only_and_combines() ->
     assert supplier in params.values()                  # combined with the other filters
 
 
+# Round 31 — this test IS the harvest-source resolver, so it opts out of
+# conftest's default stub of it (which exists for the many tests that
+# merely pass through it with a mock db).
+@pytest.mark.nodefault_reported_harvest
 async def test_the_batched_harvest_lookup_prefers_a_final_yield_report_then_newest() -> None:
     db = _empty_db()
     from app.repositories import plot_cycle_repository as cycle_repo

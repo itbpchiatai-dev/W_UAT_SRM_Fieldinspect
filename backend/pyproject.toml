@@ -90,6 +90,7 @@ testpaths = ["tests"]
 addopts = ["--cov=app", "--cov-report=term-missing", "--cov-fail-under=80"]
 markers = [
     "nodefault_crop_variety: opt out of tests/unit/conftest.py's permissive crop/variety Master Data default (round 8-15D)",
+    "nodefault_reported_harvest: opt out of tests/unit/conftest.py's \"no field harvest report\" default (round 31)",
 ]
 
 # Round M — the 80% gate above was failing at 79.4%, and the reason was not

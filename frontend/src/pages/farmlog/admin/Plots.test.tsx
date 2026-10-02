@@ -161,7 +161,7 @@ function renderPlotsPage(
   initialEntry = '/farmlog/admin/plots',
   qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
@@ -172,6 +172,18 @@ function renderPlotsPage(
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  // Round 32 — the page now opens with ONE search box and the other ten
+  // filters folded behind "ตัวกรองเพิ่มเติม". Every test below this line was
+  // written about what those filters DO, not about where they live, so the
+  // helper opens the panel and they keep reading as they did.
+  //
+  // Deliberately not a per-test click: making sixty tests say "open the panel
+  // first" would bury what each is actually asserting. The panel's own
+  // behaviour — that it starts shut, that it counts the filters it hides, that
+  // it keeps applying them while shut — is tested on its own, in the round 32
+  // block at the end of this file, which renders WITHOUT this helper.
+  fireEvent.click(screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ }));
+  return result;
 }
 
 // Captures the query string the "ตรวจแปลง" action navigated with, so the
@@ -4418,5 +4430,216 @@ describe('Plots — a closed season shows its real numbers (round R)', () => {
 
     expect(await screen.findByText(/80% → 800 kg \/ 1,000 kg/)).toBeTruthy();
     expect(screen.queryByText('ปิดรอบแล้ว')).toBeNull();
+  });
+});
+
+/**
+ * Round 32 — the page opens on ONE box.
+ *
+ * Ten filters greeted every visit, and almost every visit is someone looking
+ * for a plot by its name or its code. The other nine answer narrower questions,
+ * so they fold behind "ตัวกรองเพิ่มเติม".
+ *
+ * These tests render WITHOUT renderPlotsPage's helper click, because the thing
+ * under test is the shut state itself. The risk a collapsed panel introduces is
+ * a list narrowed by something nobody can see, so most of what follows is about
+ * a hidden filter still being visible AS A FACT: counted on the button, still
+ * applied to the query, and still cleared by ล้างค่า.
+ */
+describe('Plots list — one search box, the rest behind ตัวกรองเพิ่มเติม (round 32)', () => {
+  function renderCollapsed() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/farmlog/admin/plots']}>
+          <Routes>
+            <Route path="/farmlog/admin/plots" element={<Plots />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  function toggle() {
+    return screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ });
+  }
+
+  const INVOICE_BOX = /ค้นหาบางส่วนได้ · ค้นรอบที่ปิดแล้วด้วย/;
+
+  it('shows the name/code box and hides the rest until asked', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+
+    expect(await screen.findByText('ชื่อแปลงหรือรหัสแปลง')).toBeTruthy();
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByText('เลขที่ Invoice').closest('[hidden]')).toBeTruthy();
+    expect(screen.getByLabelText('กรองจังหวัด').closest('[hidden]')).toBeTruthy();
+  });
+
+  it('reveals them on click and folds them away again', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('กรองจังหวัด').closest('[hidden]')).toBeNull();
+
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByLabelText('กรองจังหวัด').closest('[hidden]')).toBeTruthy();
+  });
+
+  it('carries no count before anything is filtered', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    // สถานะแปลง and สถานะรอบ both START on a non-empty value ('active' /
+    // 'unfinished'). Counting those as filters would greet every visit with
+    // a "2" the user did not ask for.
+    expect(toggle().textContent).not.toMatch(/\d/);
+  });
+
+  it('counts the filters it is hiding', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    listPlotProvincesMock.mockResolvedValue(['เชียงใหม่']);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByPlaceholderText(INVOICE_BOX), { target: { value: 'INV-26' } });
+    await selectProvinceFilter('เชียงใหม่');
+
+    fireEvent.click(toggle());   // fold it away again
+    expect(toggle().textContent).toContain('2');
+  });
+
+  it('keeps applying a filter while it is hidden', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByPlaceholderText(INVOICE_BOX), { target: { value: 'INV-26' } });
+    await waitFor(() => expect(hasListPlotsCallContaining({ invoice: 'INV-26' })).toBe(true));
+
+    fireEvent.click(toggle());   // collapsing is a display change, not a reset
+    listPlotsMock.mockClear();
+
+    // Collapsing on its own must NOT re-query — nothing about the request
+    // changed, and a refetch per toggle would be pure waste.
+    expect(listPlotsMock).not.toHaveBeenCalled();
+
+    // The next query still carries it, which is the real point: the filter is
+    // out of sight, not out of effect. Searching by name/code from the one box
+    // that IS on screen is how a user would actually reach that next query.
+    fireEvent.change(screen.getByPlaceholderText(/ค้นหาบางส่วนได้ เช่น 002/), {
+      target: { value: 'P00' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /ค้นหา/ }));
+
+    await waitFor(() => expect(hasListPlotsCallContaining({ q: 'P00' })).toBe(true));
+    expect(
+      listPlotsMock.mock.calls.every(([p]) => (p as Record<string, unknown>).invoice === 'INV-26'),
+    ).toBe(true);
+  });
+
+  it('ล้างค่า clears the invoice filter — it never did before this round', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByPlaceholderText(INVOICE_BOX), { target: { value: 'INV-26' } });
+    await waitFor(() => expect(hasListPlotsCallContaining({ invoice: 'INV-26' })).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: /ล้างค่า/ }));
+
+    // Same reasoning as the สถานะรอบ test below: asserted on the box and on
+    // the count, never on a request that clearing may legitimately not make.
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText(INVOICE_BOX) as HTMLInputElement).value).toBe('');
+    });
+    expect(toggle().textContent).not.toMatch(/\d/);
+  });
+
+  it('ล้างค่า resets สถานะรอบ to its default — it never did before this round', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByLabelText('กรองสถานะรอบปลูก'), { target: { value: 'all' } });
+    await waitFor(() => expect(hasListPlotsCallContaining({ cycleStatus: 'all' })).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: /ล้างค่า/ }));
+
+    // Asserted on the CONTROL, not on a request. Clearing puts the query key
+    // back to the one the page opened with, so react-query answers from cache
+    // and may make no new call at all — "the latest call says unfinished" is
+    // then a race, and "some call says unfinished" is true from the first load
+    // whether or not the reset happened. The dropdown's own value is neither.
+    await waitFor(() => {
+      expect((screen.getByLabelText('กรองสถานะรอบปลูก') as HTMLSelectElement).value)
+        .toBe('unfinished');
+    });
+  });
+
+  it('enables ล้างค่า for a hidden filter, so it can always be undone', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    expect((screen.getByRole('button', { name: /ล้างค่า/ }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByPlaceholderText(INVOICE_BOX), { target: { value: 'INV-26' } });
+    fireEvent.click(toggle());
+
+    expect((screen.getByRole('button', { name: /ล้างค่า/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('leaves ค้นหา and ล้างค่า on screen while the panel is shut', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    expect(screen.getByRole('button', { name: /ค้นหา/ }).closest('[hidden]')).toBeNull();
+    expect(screen.getByRole('button', { name: /ล้างค่า/ }).closest('[hidden]')).toBeNull();
+  });
+
+  it('reports an access-number search even though its box is hidden', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    searchPlotsByPhoneMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.click(toggle());
+    fireEvent.change(screen.getByPlaceholderText(/ค้นหาบางส่วนได้ 4-10 หลัก/), {
+      target: { value: '5552' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /ค้นหา/ }));
+    fireEvent.click(toggle());   // fold the box away
+
+    // The notice lives OUTSIDE the panel on purpose: a number search quietly
+    // narrowing the list would otherwise have nothing on screen to explain it.
+    expect(await screen.findByText(/กำลังค้นหาแปลงที่หมายเลขที่ระบุเข้าตรวจได้/)).toBeTruthy();
+    // …and it still never echoes the digits.
+    expect(screen.queryByText(/5552/)).toBeNull();
+  });
+
+  it('shows the name/code guard message with the panel shut', async () => {
+    listPlotsMock.mockResolvedValue([]);
+    renderCollapsed();
+    await screen.findByText('ชื่อแปลงหรือรหัสแปลง');
+
+    fireEvent.change(screen.getByPlaceholderText(/ค้นหาบางส่วนได้ เช่น 002/), {
+      target: { value: 'a' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /ค้นหา/ }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.closest('[hidden]')).toBeNull();
   });
 });

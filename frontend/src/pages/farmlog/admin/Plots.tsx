@@ -26,6 +26,7 @@ import {
   Printer,
   QrCode,
   Search,
+  SlidersHorizontal,
   Sprout,
   Unlock,
   Upload,
@@ -806,6 +807,13 @@ export function Plots() {
   // (see PlotListParams.invoice). Its own box, never folded into `q` — round
   // 8-18B removed จังหวัด from q for exactly that reason.
   const [filterInvoice, setFilterInvoice] = useState<string>('');
+  // Round 32 — the page opens on ONE box (ชื่อแปลงหรือรหัสแปลง) and keeps the
+  // other ten filters behind a toggle. Everyone finds a plot by its name or its
+  // code; the rest answer narrower questions and were costing a wall of
+  // controls on every visit. Collapsed is only a display choice: a hidden
+  // filter still applies, still counts on the button (advancedFilterCount), and
+  // is still cleared by ล้างค่า.
+  const [showAdvanced, setShowAdvanced] = useState(false);
   // Round 8-17A.2 Part C/D — secure access-number search. Set only by
   // applySearch(); null means "not currently searching by number" (plain
   // q/text search, or no search at all). Round 8-18B.1 — this now holds a
@@ -1016,11 +1024,38 @@ export function Plots() {
   // Round 8-17A.2 Part B — DEFAULT_PLOT_STATUS ('active') is the baseline,
   // so it is no longer counted as an "extra" filter (matches filterProvince
   // === '' etc. above, each compared against ITS OWN unfiltered baseline).
+  // Round 32 — filterInvoice and filterCycleStatus were missing here (and from
+  // clearFilters). Harmless while every control was on screen: the user could
+  // see the invoice they had typed. Now that both live behind ตัวกรองเพิ่มเติม,
+  // a filter that ล้างค่า refuses to clear is a filter nobody can get rid of.
   const hasActiveFilters = q.trim() !== '' || searchText.trim() !== '' || phoneText.trim() !== ''
     || filterSupplier !== ''
     || filterProvince !== '' || filterCrop !== '' || filterVariety !== '' || filterCycleLabel !== ''
-    || filterPlantingDateFrom !== '' || filterPlantingDateTo !== ''
-    || filterPlotStatus !== DEFAULT_PLOT_STATUS || phoneSearchDigits !== null;
+    || filterPlantingDateFrom !== '' || filterPlantingDateTo !== '' || filterInvoice.trim() !== ''
+    || filterPlotStatus !== DEFAULT_PLOT_STATUS || filterCycleStatus !== DEFAULT_CYCLE_STATUS
+    || phoneSearchDigits !== null;
+
+  // Round 32 — how many of the HIDDEN filters are doing something, so the
+  // collapsed panel can say so on its own button. Without it a narrowed list
+  // would have no visible cause: the only thing on screen would be a name/code
+  // box the user may not even have typed in.
+  //
+  // Each is compared against its OWN unfiltered baseline, which for the two
+  // status dropdowns is their default rather than empty — the page opens on
+  // "ใช้งาน" + "ยังไม่ปิดรอบ", so counting those as filters would show "2"
+  // before the user has touched anything.
+  const advancedFilterCount = [
+    filterInvoice.trim() !== '',
+    phoneText.trim() !== '' || phoneSearchDigits !== null,
+    filterSupplier !== '',
+    filterPlotStatus !== DEFAULT_PLOT_STATUS,
+    filterCycleStatus !== DEFAULT_CYCLE_STATUS,
+    filterProvince !== '',
+    filterCrop !== '',
+    filterVariety !== '',
+    filterCycleLabel !== '',
+    filterPlantingDateFrom !== '' || filterPlantingDateTo !== '',
+  ].filter(Boolean).length;
 
   function applySearch() {
     const nameCode = searchText.trim();
@@ -1093,6 +1128,11 @@ export function Plots() {
     setFilterPlantingDateFrom('');
     setFilterPlantingDateTo('');
     setFilterPlotStatus(DEFAULT_PLOT_STATUS);
+    // Round 32 — both were missed here. See hasActiveFilters: behind the
+    // collapsed panel, a filter ล้างค่า does not clear is one the user cannot
+    // find and cannot undo.
+    setFilterInvoice('');
+    setFilterCycleStatus(DEFAULT_CYCLE_STATUS);
     setSupplierPrintError('');
     setTemplateError(null);
   }
@@ -1466,6 +1506,76 @@ export function Plots() {
               />
             </span>
           </label>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={applySearch}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+            >
+              <Search className="h-4 w-4" />
+              ค้นหา
+            </button>
+            <button
+              type="button"
+              onClick={clearFilters}
+              disabled={!hasActiveFilters}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary disabled:opacity-60"
+            >
+              <X className="h-4 w-4" />
+              ล้างค่า
+            </button>
+            {/* Round 32 — the one control that reveals the other ten. The
+                count is the whole point of the button existing in this state:
+                collapsed, it is the only thing on screen that can explain a
+                list narrowed by a filter the user cannot see. */}
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((open) => !open)}
+              aria-expanded={showAdvanced}
+              aria-controls="plot-advanced-filters"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              ตัวกรองเพิ่มเติม
+              {advancedFilterCount > 0 && (
+                <span className="rounded-full bg-primary px-1.5 py-0.5 text-xs font-semibold leading-none text-primary-foreground">
+                  {advancedFilterCount}
+                </span>
+              )}
+              <ChevronDown
+                className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+        </div>
+
+        {/* Round 32 — these three report on the search that is CURRENTLY
+            applied, so they stay outside the collapsible panel. Two of them
+            describe the access-number box, which is now inside it: a malformed
+            number, or a number search quietly narrowing the list, would
+            otherwise be invisible exactly when the panel is shut. */}
+        {/* Round 8-18B.1 — identity box guard: too short to be a useful
+            search. Nothing is sent. */}
+        {nameCodeError && (
+          <p role="alert" className="mt-2 text-sm text-destructive">{nameCodeError}</p>
+        )}
+        {/* Round 8-17A.2 Part D item 6 — malformed number: a generic Thai
+            message, NOTHING sent (never a fallback to GET q, which would
+            leak the entered digits into the URL/access log). */}
+        {phoneSearchError && (
+          <p role="alert" className="mt-2 text-sm text-destructive">{phoneSearchError}</p>
+        )}
+        {phoneSearchDigits && !phoneSearchError && (
+          // Deliberately does NOT echo the searched digits — a full 10-digit
+          // entry would otherwise render a complete phone number on screen.
+          <p className="mt-2 text-sm text-muted-foreground">
+            กำลังค้นหาแปลงที่หมายเลขที่ระบุเข้าตรวจได้
+            (ค้นทั้งเบอร์หลักและเบอร์เสริม){q ? ` และตรงกับ "${q}"` : ''}
+          </p>
+        )}
+        <div id="plot-advanced-filters" hidden={!showAdvanced}>
+        <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end">
           {/* Round O — "เลขที่ Invoice". Its own box for the same reason the
               two boxes beside it are separate: round 8-18B folded จังหวัด into
               the free-text search and the box then disagreed with the จังหวัด
@@ -1521,45 +1631,7 @@ export function Plots() {
               />
             </span>
           </label>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={applySearch}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-            >
-              <Search className="h-4 w-4" />
-              ค้นหา
-            </button>
-            <button
-              type="button"
-              onClick={clearFilters}
-              disabled={!hasActiveFilters}
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary disabled:opacity-60"
-            >
-              <X className="h-4 w-4" />
-              ล้างค่า
-            </button>
-          </div>
         </div>
-        {/* Round 8-18B.1 — identity box guard: too short to be a useful
-            search. Nothing is sent. */}
-        {nameCodeError && (
-          <p role="alert" className="mt-2 text-sm text-destructive">{nameCodeError}</p>
-        )}
-        {/* Round 8-17A.2 Part D item 6 — malformed number: a generic Thai
-            message, NOTHING sent (never a fallback to GET q, which would
-            leak the entered digits into the URL/access log). */}
-        {phoneSearchError && (
-          <p role="alert" className="mt-2 text-sm text-destructive">{phoneSearchError}</p>
-        )}
-        {phoneSearchDigits && !phoneSearchError && (
-          // Deliberately does NOT echo the searched digits — a full 10-digit
-          // entry would otherwise render a complete phone number on screen.
-          <p className="mt-2 text-sm text-muted-foreground">
-            กำลังค้นหาแปลงที่หมายเลขที่ระบุเข้าตรวจได้
-            (ค้นทั้งเบอร์หลักและเบอร์เสริม){q ? ` และตรงกับ "${q}"` : ''}
-          </p>
-        )}
         {/* Round 8-25G — 6 filters (Supplier + สถานะ + จังหวัด + ชนิดพืช +
             พันธุ์ + รอบปลูก) at their min-widths add up to 1200px+; without
             flex-wrap they overflowed the card sideways on narrower screens
@@ -1721,6 +1793,7 @@ export function Plots() {
             />
           </div>
         </div>
+        </div>{/* /plot-advanced-filters */}
       </div>
 
       {loadErrorMessage && (

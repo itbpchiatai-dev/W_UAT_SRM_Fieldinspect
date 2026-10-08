@@ -32,6 +32,30 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
+    # Round 33 — MEMORY. glibc hands every thread that contends for the main
+    # heap its own 64 MiB arena and never returns it to the OS. The two
+    # threaded jobs on the request path (bcrypt cost 12, and Pillow decode and
+    # resize, both via asyncio.to_thread) left each worker parked on arenas it
+    # had long finished with. Measured on UAT: 7 such arenas per worker, 523 MB
+    # RSS for a worker whose freshly-started sibling held 93 MB, and 1.25 GB for
+    # the container — the largest on a box shared with ~37 containers from other
+    # projects, with no swap.
+    #
+    # This is NOT a leak fix; there is no leak. A 9-day-old worker and a
+    # 19-hour-old one both sat at exactly 523 MB, so the heap plateaus instead
+    # of climbing. What the cap removes is the high-water mark being held
+    # forever. Two arenas is the usual choice for a memory-bound server — more
+    # arenas only buy malloc concurrency, which is not this app's bottleneck.
+    environment:
+      MALLOC_ARENA_MAX: "2"
+    # Round 33 — the image's CMD asks for 4 workers. Workers share almost no
+    # memory (measured PSS == RSS == Private_Dirty: CPython's refcounts dirty
+    # every page, so copy-on-write buys nothing), which makes the worker count a
+    # straight multiplier on the figures above. Overridden here rather than in
+    # the Dockerfile so the image stays promotable UAT -> PROD and each host
+    # picks its own number: set UVICORN_WORKERS in the deploy host's compose env
+    # file to raise it.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "${UVICORN_WORKERS:-2}"]
     expose:
       - "8000"
     volumes:

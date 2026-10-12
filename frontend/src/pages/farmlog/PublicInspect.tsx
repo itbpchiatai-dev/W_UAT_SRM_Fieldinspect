@@ -92,6 +92,7 @@ import {
   clearOfflinePublicAccessCache,
 } from '../../lib/offline-inspection-store';
 import { extractOfflineErrorCode, describeOfflineErrorCode } from '../../lib/offline-submission-errors';
+import { isUploadTimeout, largeUploadWarning, UPLOAD_TIMEOUT_MESSAGE } from '../../lib/photo-upload-budget';
 
 // Round 8-4H.1 — Offline inspection creation is temporarily disabled;
 // /public/inspect is Online-only until offline is redeveloped. See module
@@ -545,8 +546,30 @@ export function PublicInspect() {
   // "never rely on disabled alone" rationale.
   const [photoProcessing, setPhotoProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Round 35 — percentage of upload BYTES SENT, or -1 when there is nothing to
+  // report (idle, no photos, or a body whose length the browser cannot
+  // measure). It reaches 100 while the backend is still re-encoding, so the
+  // label below switches to "กำลังบันทึก" rather than claiming the save is done.
+  const [uploadPercent, setUploadPercent] = useState(-1);
+  // Round 35 — the acknowledgement for an unusually large payload. Only ever
+  // consulted while largeUploadWarning() returns something.
+  const [largeUploadAck, setLargeUploadAck] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitNotice, setSubmitNotice] = useState('');
+
+  // Round 35 — null for an ordinary submit, so the warning and its checkbox
+  // never appear on the great majority of them. Keyed on the total SIZE of the
+  // chosen files rather than on whether compression fell back: size is what
+  // decides whether the request finishes, and it needs nothing from
+  // PhotoSlotPicker beyond the (File | null)[] its onChange already hands up.
+  const uploadWarning = useMemo(() => largeUploadWarning(photos), [photos]);
+
+  // Changing the photos invalidates the acknowledgement — otherwise a user who
+  // accepted a 9 MB payload and then added two more photos would sail past the
+  // warning for a payload they never saw.
+  useEffect(() => {
+    setLargeUploadAck(false);
+  }, [uploadWarning]);
 
   // --- Success ---------------------------------------------------------------
   const [submittedRecord, setSubmittedRecord] = useState<PublicRecordCreateResult | null>(null);
@@ -1117,6 +1140,7 @@ export function PublicInspect() {
       }
 
       setSubmitting(true);
+      setUploadPercent(-1);
       setSubmitError('');
       setSubmitNotice('');
       try {
@@ -1125,7 +1149,7 @@ export function PublicInspect() {
         // page left open across midnight).
         const payload = buildOfflinePublicRecordPayload(inspectionSessionToken, bangkokToday(), fields, identity);
         const result = selectedPhotos.length > 0
-          ? await createPublicRecordWithPhotos(payload, selectedPhotos)
+          ? await createPublicRecordWithPhotos(payload, selectedPhotos, setUploadPercent)
           : await createPublicInspectionRecord(payload);
         // 201 (server created it) or 200 (idempotent replay of an earlier
         // attempt) both land here — axios only throws for a non-2xx status.
@@ -1141,6 +1165,21 @@ export function PublicInspect() {
         const isAxios = axios.isAxiosError(err);
         const status = isAxios ? err.response?.status : undefined;
         const hasResponse = isAxios ? !!err.response : false;
+
+        // Round 35 — a client-side timeout also arrives with no response, and
+        // was being reported as a network failure to users whose network was
+        // fine. It is checked FIRST so the no-response branch below keeps
+        // meaning what it says. Everything that branch guarantees still holds
+        // here: the form and photos stay put and the idempotency identity is
+        // unchanged, so the user's own retry replays instead of duplicating.
+        //
+        // Gated on there actually being photos, because the message names them
+        // as the likely cause. A photoless JSON submit that times out really is
+        // a network problem, and deserves the message below instead.
+        if (selectedPhotos.length > 0 && isUploadTimeout(err)) {
+          setSubmitError(UPLOAD_TIMEOUT_MESSAGE);
+          return;
+        }
 
         if (isAxios && !hasResponse) {
           // Round 8-4H.1 — a network error with NO response mid-request: the
@@ -1182,6 +1221,7 @@ export function PublicInspect() {
         }
       } finally {
         setSubmitting(false);
+        setUploadPercent(-1);
       }
     } finally {
       submitInFlightRef.current = false;
@@ -1644,7 +1684,48 @@ export function PublicInspect() {
             {submitNotice && <p role="alert" className="text-sm text-amber-600">{submitNotice}</p>}
             {submitError && <p role="alert" className="text-sm text-red-600">{submitError}</p>}
 
-            <button type="submit" disabled={submitting || photoProcessing} className={primaryBtnCls}>
+            {/* Round 35 — shown only for an unusually large payload, and placed
+                beside the button rather than in a dialog so it cannot be
+                dismissed without being read. The checkbox gates the submit so
+                a long wait is never a surprise; it is NOT what makes the
+                upload work (lib/photo-upload-budget.ts's timeout is). */}
+            {uploadWarning && !submitting && (
+              <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                <p className="text-sm text-amber-800">{uploadWarning}</p>
+                <label className="flex items-start gap-2 text-sm font-medium text-amber-900">
+                  <input
+                    type="checkbox"
+                    checked={largeUploadAck}
+                    onChange={(e) => setLargeUploadAck(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-amber-600"
+                  />
+                  <span>รับทราบ และต้องการส่ง</span>
+                </label>
+              </div>
+            )}
+
+            {/* Round 35 — the wait is only tolerable because it is visible.
+                uploadPercent is -1 until the first progress event, and 100
+                while the server is still re-encoding, hence the two labels. */}
+            {submitting && uploadPercent >= 0 && (
+              <div aria-live="polite" className="space-y-1">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                  <div
+                    className="h-full rounded-full bg-green-600 transition-all"
+                    style={{ width: `${uploadPercent}%` }}
+                  />
+                </div>
+                <p className="text-center text-sm text-gray-600">
+                  {uploadPercent < 100 ? `กำลังส่งรูป ${uploadPercent}%` : 'ส่งรูปครบแล้ว กำลังบันทึก...'}
+                </p>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={submitting || photoProcessing || (!!uploadWarning && !largeUploadAck)}
+              className={primaryBtnCls}
+            >
               {(submitting || photoProcessing) && <Loader2 className="h-5 w-5 animate-spin" />} บันทึกการตรวจแปลง
             </button>
             <button type="button" onClick={handleBackToList} className={secondaryBtnCls}>กลับรายการแปลง</button>

@@ -15,6 +15,7 @@
  * this flow never has.
  */
 import axios from 'axios';
+import { PHOTO_UPLOAD_TIMEOUT_MS, uploadPercent } from '../lib/photo-upload-budget';
 
 // Exported (round 19.1) so api/publicMasterdata.ts can reuse the exact same
 // no-auth instance instead of creating a near-duplicate one — same
@@ -114,14 +115,33 @@ export function buildPublicRecordWithPhotosFormData(
   return formData;
 }
 
+/**
+ * Round 35 — the per-request `timeout` is the whole point of this override.
+ * publicApiClient's 15 s default is correct for every other unauthenticated
+ * call and far too short for a multipart upload of up to five photos, which is
+ * why a submit from the field was aborted CLIENT-side and then reported to the
+ * user as a network failure. lib/photo-upload-budget.ts carries the reasoning
+ * and the arithmetic.
+ *
+ * `onUploadProgress` reports the percentage of BYTES SENT — it reaches 100
+ * while the backend is still re-encoding each photo to WebP, so the caller
+ * must not treat 100 as "saved".
+ */
 export async function createPublicRecordWithPhotos(
   payload: PublicRecordCreatePayload,
   photos: File[],
+  onUploadProgress?: (percentSent: number) => void,
 ): Promise<PublicRecordCreateResult> {
   const formData = buildPublicRecordWithPhotosFormData(payload, photos);
   const res = await publicApiClient.post<PublicRecordCreateResult>(
     '/api/v1/public/records/with-photos',
     formData,
+    {
+      timeout: PHOTO_UPLOAD_TIMEOUT_MS,
+      onUploadProgress: onUploadProgress
+        ? (event) => onUploadProgress(uploadPercent(event.loaded, event.total))
+        : undefined,
+    },
   );
   return res.data;
 }

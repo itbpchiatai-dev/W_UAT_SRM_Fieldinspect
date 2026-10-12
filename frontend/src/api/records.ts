@@ -2,6 +2,7 @@
  * Records API — FarmLog field inspection records (Step 12.5: yield/list-driven)
  */
 import { apiClient } from './client';
+import { PHOTO_UPLOAD_TIMEOUT_MS, uploadPercent } from '../lib/photo-upload-budget';
 
 export interface RecordSummary {
   id: string;
@@ -215,9 +216,31 @@ export function buildRecordWithPhotosFormData(payload: RecordCreatePayload, phot
   return formData;
 }
 
-export const createRecordWithPhotos = (payload: RecordCreatePayload, photos: File[]) => {
+/**
+ * Round 35 — `timeout` and `onUploadProgress` are both set HERE rather than on
+ * apiClient, because apiClient's 15 s default is right for every other call it
+ * makes and wrong only for this one. See lib/photo-upload-budget.ts for why
+ * 15 s could never have been enough for a multipart upload of up to five
+ * photos, and why the ceiling is finite rather than removed.
+ *
+ * `onUploadProgress` reports the percentage of BYTES SENT, so it reaches 100
+ * while the server is still re-encoding the photos. The caller is expected to
+ * switch its label at that point rather than claim the save is done.
+ */
+export const createRecordWithPhotos = (
+  payload: RecordCreatePayload,
+  photos: File[],
+  onUploadProgress?: (percentSent: number) => void,
+) => {
   const formData = buildRecordWithPhotosFormData(payload, photos);
-  return apiClient.post<RecordDetail>('/api/v1/records/with-photos', formData).then(r => r.data);
+  return apiClient
+    .post<RecordDetail>('/api/v1/records/with-photos', formData, {
+      timeout: PHOTO_UPLOAD_TIMEOUT_MS,
+      onUploadProgress: onUploadProgress
+        ? (event) => onUploadProgress(uploadPercent(event.loaded, event.total))
+        : undefined,
+    })
+    .then(r => r.data);
 };
 
 // Round 8.0.5 append-only lock — there is deliberately no updateRecord/PATCH

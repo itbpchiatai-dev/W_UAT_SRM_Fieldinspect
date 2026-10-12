@@ -3271,3 +3271,103 @@ describe('PublicInspect — Oracle reference fields never appear (round 8-21B)',
     expect(screen.queryByPlaceholderText('เช่น ACC-0001')).toBeNull();
   });
 });
+
+describe('PublicInspect — round 35: an upload that outran its own clock', () => {
+  const TIMEOUT_ERROR = { isAxiosError: true, response: undefined, code: 'ECONNABORTED' };
+
+  it('tells the user the send ran out of time — never that the network failed', async () => {
+    mockGeolocation('denied');
+    createWithPhotosMock.mockRejectedValueOnce(TIMEOUT_ERROR);
+    await goToFormStep();
+    await pickPhotoAndWait(0, jpegFile('a.jpg'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
+
+    expect(await screen.findByText(/ส่งข้อมูลไม่ทันเวลา/)).toBeTruthy();
+    expect(screen.queryByText('เชื่อมต่อเครือข่ายไม่สำเร็จ กรุณาลองใหม่')).toBeNull();
+  });
+
+  it('keeps the form and never claims success after a timeout', async () => {
+    mockGeolocation('denied');
+    createWithPhotosMock.mockRejectedValueOnce(TIMEOUT_ERROR);
+    await goToFormStep();
+    await pickPhotoAndWait(0, jpegFile('a.jpg'));
+    fireEvent.change(screen.getByLabelText('หมายเหตุ'), { target: { value: 'keep me' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
+
+    await screen.findByText(/ส่งข้อมูลไม่ทันเวลา/);
+    expect((screen.getByLabelText('หมายเหตุ') as HTMLTextAreaElement).value).toBe('keep me');
+    expect(screen.queryByText('บันทึกสำเร็จ')).toBeNull();
+  });
+
+  it('a PHOTOLESS submit that times out still reads as a network failure', async () => {
+    // The timeout copy blames the photos, so it must not appear when there
+    // were none — a JSON submit that times out really is a network problem.
+    mockGeolocation('denied');
+    createJsonMock.mockRejectedValueOnce(TIMEOUT_ERROR);
+    await goToFormStep();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
+
+    expect(await screen.findByText('เชื่อมต่อเครือข่ายไม่สำเร็จ กรุณาลองใหม่')).toBeTruthy();
+    expect(screen.queryByText(/ส่งข้อมูลไม่ทันเวลา/)).toBeNull();
+  });
+});
+
+describe('PublicInspect — round 35: warning before an unusually large send', () => {
+  function compressTo(bytes: number) {
+    prepareInspectionPhotoMock.mockImplementation(async (file: File, outputName: string) => {
+      const out = new File([file], outputName, { type: 'image/webp' });
+      Object.defineProperty(out, 'size', { value: bytes });
+      return { file: out, compressed: true, originalBytes: bytes, outputBytes: bytes, fallbackUsed: false, warning: null };
+    });
+  }
+
+  function submitButton() {
+    return screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }) as HTMLButtonElement;
+  }
+
+  it('says nothing about an ordinary payload', async () => {
+    mockGeolocation('denied');
+    createWithPhotosMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });
+    await goToFormStep();
+    await pickPhotoAndWait(0, jpegFile('a.jpg'));
+
+    expect(screen.queryByLabelText('รับทราบ และต้องการส่ง')).toBeNull();
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('warns and blocks the submit until the warning is acknowledged', async () => {
+    mockGeolocation('denied');
+    compressTo(9 * 1024 * 1024);
+    createWithPhotosMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });
+    await goToFormStep();
+    await pickPhotoAndWait(0, jpegFile('a.jpg'));
+
+    expect(await screen.findByText(/รูป 1 ใบ รวม 9\.0 MB/)).toBeTruthy();
+    expect(submitButton().disabled).toBe(true);
+
+    fireEvent.click(screen.getByLabelText('รับทราบ และต้องการส่ง'));
+
+    expect(submitButton().disabled).toBe(false);
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(createWithPhotosMock).toHaveBeenCalledOnce());
+  });
+
+  it('withdraws the acknowledgement when the photos change', async () => {
+    mockGeolocation('denied');
+    compressTo(9 * 1024 * 1024);
+    createWithPhotosMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });
+    await goToFormStep();
+    await pickPhotoAndWait(0, jpegFile('a.jpg'));
+    fireEvent.click(screen.getByLabelText('รับทราบ และต้องการส่ง'));
+    expect(submitButton().disabled).toBe(false);
+
+    // A second photo makes it a payload the user never agreed to.
+    await pickPhotoAndWait(1, jpegFile('b.jpg'));
+
+    expect(await screen.findByText(/รูป 2 ใบ รวม 18\.0 MB/)).toBeTruthy();
+    expect(submitButton().disabled).toBe(true);
+  });
+});

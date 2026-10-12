@@ -56,6 +56,7 @@ import {
   yieldQuantityLabel,
 } from '../../lib/inspection-stages';
 import { canViewVariety } from '../../lib/variety-visibility';
+import { isUploadTimeout, UPLOAD_TIMEOUT_MESSAGE } from '../../lib/photo-upload-budget';
 
 interface FormState {
   supplierId: string;
@@ -113,6 +114,10 @@ const emptyText = '—';
  * unhelpful and jarring in an otherwise all-Thai form. Every other status
  * keeps the generic HTTP+detail format unchanged. */
 function describeSubmitError(error: unknown): string {
+  // Round 35 — a photo upload that outran its own clock is not "เชื่อมต่อไม่ได้".
+  // It reaches here with no status, so without this it fell into the generic
+  // branch below and blamed the connection; see lib/photo-upload-budget.ts.
+  if (isUploadTimeout(error)) return UPLOAD_TIMEOUT_MESSAGE;
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 409) {

@@ -1,10 +1,59 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { apiClient } from './client';
+import { listSuppliers } from './suppliers';
 import type {
   SupplierCreatePayload,
   SupplierDetail,
   SupplierSummary,
   SupplierUpdatePayload,
 } from './suppliers';
+
+// Regression: FastAPI's list_suppliers declares `active_only` (snake_case).
+// Sending `activeOnly` left it silently ignored, so the endpoint's own
+// default of False applied and INACTIVE suppliers came back -- a closed
+// Supplier (reported on code 17288) stayed selectable in the Supplier filter
+// on Plots, RecordForm, RecordList, both Supplier reports and Users. Same
+// class of bug the plots/records query params already carry a guard for.
+describe('supplier query params', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('listSuppliers sends active_only as snake_case', async () => {
+    const getSpy = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: [] });
+
+    await listSuppliers({ activeOnly: true, limit: 200 });
+
+    expect(getSpy).toHaveBeenCalledWith('/api/v1/suppliers', {
+      params: {
+        limit: 200,
+        offset: undefined,
+        q: undefined,
+        active_only: true,
+      },
+    });
+  });
+
+  it('never puts a camelCase activeOnly key on the wire', async () => {
+    const getSpy = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: [] });
+
+    await listSuppliers({ activeOnly: true });
+
+    const sent = (getSpy.mock.calls[0]?.[1] as { params: Record<string, unknown> }).params;
+    expect(sent).not.toHaveProperty('activeOnly');
+    expect(sent.active_only).toBe(true);
+  });
+
+  it('leaves active_only undefined when the caller omits it, keeping the endpoint default', async () => {
+    const getSpy = vi.spyOn(apiClient, 'get').mockResolvedValue({ data: [] });
+
+    await listSuppliers({ q: 'ใบข้าว' });
+
+    const sent = (getSpy.mock.calls[0]?.[1] as { params: Record<string, unknown> }).params;
+    expect(sent.active_only).toBeUndefined();
+    expect(sent.q).toBe('ใบข้าว');
+  });
+});
 
 describe('Supplier types — inspectionCode retirement (round 8-3G)', () => {
   it('rejects inspectionCode on SupplierCreatePayload', () => {

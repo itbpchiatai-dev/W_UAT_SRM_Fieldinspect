@@ -59,7 +59,22 @@ export interface SupplierUpdatePayload {
 }
 
 export async function listSuppliers(params: SupplierListParams = {}): Promise<SupplierSummary[]> {
-  const res = await apiClient.get<SupplierSummary[]>('/api/v1/suppliers', { params });
+  // camelCase -> snake_case: FastAPI's list_suppliers declares `active_only`
+  // (api/v1/suppliers.py), so an `activeOnly` key is silently ignored and the
+  // endpoint falls back to its own default of False -- which returns INACTIVE
+  // suppliers too. That put closed suppliers in every dropdown that asks for
+  // active-only: Plots, RecordForm, RecordList, both Supplier reports and
+  // Users. Same class of bug as listPlots (api/plots.ts) and listRecords
+  // (api/records.ts), both already converted. Omit undefined so an unset
+  // param keeps the endpoint's own default.
+  const res = await apiClient.get<SupplierSummary[]>('/api/v1/suppliers', {
+    params: {
+      limit: params.limit,
+      offset: params.offset,
+      q: params.q,
+      active_only: params.activeOnly,
+    },
+  });
   return res.data;
 }
 

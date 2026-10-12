@@ -504,28 +504,37 @@ describe('PublicInspect — plot selection screen', () => {
 
     expect(screen.getByRole('button', { name: /P001/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /P002/ })).toBeTruthy();
-    expect(screen.getByText(/Supplier One/)).toBeTruthy();
-    expect(screen.getByText(/Supplier Two/)).toBeTruthy();
+    // Round 36 — the Supplier line no longer prints on the card: a real
+    // plotCode OPENS with the supplier code, so it restated it. Nothing became
+    // unfindable — the search box still matches supplierCode and supplierName.
+    expect(screen.queryByText(/Supplier One/)).toBeNull();
+    expect(screen.queryByText(/Supplier Two/)).toBeNull();
   });
 
-  it('round 8-3K: shows Lot No. and planting date on the card before the plot is selected', async () => {
+  it('round 36: the card carries one identity line — the season and the Lot, nothing else', async () => {
     lookupMock.mockResolvedValue(lookupResult([
       plotItem({ lotNo: 'LOT-09', plantingDate: '2026-06-01' }),
     ]));
     renderPublicInspect();
     await enterPhoneAndLookup();
 
-    expect(screen.getByText('Lot: LOT-09 · ปลูก: 1 มิ.ย. 2569')).toBeTruthy();
+    expect(await screen.findByText('jun2026 · Lot: LOT-09')).toBeTruthy();
+    // Dropped in round 36 — all of it is on the record form after selection.
+    expect(screen.queryByText(/ปลูก:/)).toBeNull();
+    expect(screen.queryByText(/พริกขี้หนู/)).toBeNull();
+    expect(screen.queryByText(/Supplier One/)).toBeNull();
   });
 
-  it('round 8-3K: omits only the missing part (lot without a planting date)', async () => {
+  it('round 36: the planting date no longer changes that line at all', async () => {
+    // The old card appended "· ปลูก: <date>", so this same fixture used to
+    // render differently from the one above. It must not any more.
     lookupMock.mockResolvedValue(lookupResult([
       plotItem({ lotNo: 'LOT-09', plantingDate: null }),
     ]));
     renderPublicInspect();
     await enterPhoneAndLookup();
 
-    expect(screen.getByText('Lot: LOT-09')).toBeTruthy();
+    expect(await screen.findByText('jun2026 · Lot: LOT-09')).toBeTruthy();
     expect(screen.queryByText(/ปลูก:/)).toBeNull();
   });
 

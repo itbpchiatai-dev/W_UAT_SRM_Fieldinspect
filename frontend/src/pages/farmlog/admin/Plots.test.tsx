@@ -477,7 +477,7 @@ describe('Plots list — yield summary column (round 17, warning states round 18
     expect(await screen.findByText('ยังไม่ระบุจำนวนต้น/จำนวนปลูก')).toBeTruthy();
   });
 
-  it('shows a labelled two-line planting-cycle block (crop/variety, then lot/planting date) under the plot name (round 8-3K)', async () => {
+  it('round 36: the cycle block under the plot name is only รอบ + P.Code — crop/variety, PO, lot and planting date are gone', async () => {
     listPlotsMock.mockResolvedValue([
       {
         id: 'plot-4', supplierId: 'sup-1', plotCode: 'SUP001-P004', name: 'แปลงทดสอบ',
@@ -490,9 +490,14 @@ describe('Plots list — yield summary column (round 17, warning states round 18
 
     renderPlotsPage();
 
-    expect(await screen.findByText('พืช: พริก / พริกขี้หนู')).toBeTruthy();
-    expect(screen.getByText('PO: — · P.Code: — · Lot ระบบ: LOT-01')).toBeTruthy();
-    expect(screen.getByText('ปลูก: 1 มิ.ย. 2569')).toBeTruthy();
+    expect(await screen.findByText('P.Code: —')).toBeTruthy();
+    // Everything the row used to carry and no longer does. It all still lives
+    // on the plot's own page; the table is for finding a row.
+    expect(screen.queryByText(/พืช:/)).toBeNull();
+    expect(screen.queryByText(/PO:/)).toBeNull();
+    expect(screen.queryByText(/Lot ระบบ/)).toBeNull();
+    expect(screen.queryByText(/ปลูก:/)).toBeNull();
+    expect(screen.queryByText(/LOT-01/)).toBeNull();
   });
 
   it('shows a plain dash for the planting-cycle line when nothing is set', async () => {
@@ -636,9 +641,12 @@ describe('Plots list — yield/identity sourced from active cycle (round 7.4)', 
 
     renderPlotsPage();
 
-    expect(await screen.findByText('พืช: ทุเรียน / หมอนทอง')).toBeTruthy();
-    expect(await screen.findByText('PO: PO25009 · P.Code: Melon-I · Lot ระบบ: LOT-09')).toBeTruthy();
-    expect(screen.getByText('ปลูก: 1 มิ.ย. 2569')).toBeTruthy();
+    expect(await screen.findByText('P.Code: Melon-I')).toBeTruthy();
+    // The active cycle's P.Code wins; the stale mirror never appears. Round 36
+    // removed the rest of the block rather than the read-model fix behind it.
+    expect(screen.queryByText(/ทุเรียน/)).toBeNull();
+    expect(screen.queryByText(/LOT-09/)).toBeNull();
+    expect(screen.queryByText(/PO25009/)).toBeNull();
     expect(screen.queryByText(/พริกเก่า/)).toBeNull();
     expect(screen.queryByText(/LOT-OLD/)).toBeNull();
   });
@@ -669,7 +677,7 @@ describe('Plots list — yield/identity sourced from active cycle (round 7.4)', 
     expect(screen.queryByText(/LOT-SUP010-02/)).toBeNull();
   });
 
-  it('round 8-3K: omits only the missing part (no planting date) instead of a dangling separator', async () => {
+  it('round 36: a cycle with no label and no P.Code still renders the P.Code dash, never an empty cell', async () => {
     listPlotsMock.mockResolvedValue([{
       ...cyclePlot(),
       activeCycleId: 'cycle-1', activeCycleStatus: 'active', activeCycleNo: 1,
@@ -679,8 +687,9 @@ describe('Plots list — yield/identity sourced from active cycle (round 7.4)', 
 
     renderPlotsPage();
 
-    expect(await screen.findByText('PO: — · P.Code: — · Lot ระบบ: LOT-05')).toBeTruthy();
+    expect(await screen.findByText('P.Code: —')).toBeTruthy();
     expect(screen.queryByText(/ปลูก:/)).toBeNull();
+    expect(screen.queryByText(/LOT-05/)).toBeNull();
   });
 
   it('round 8-3K: an active cycle with no crop/variety/lot/planting-date/label shows a dash, never "null"/"undefined"', async () => {

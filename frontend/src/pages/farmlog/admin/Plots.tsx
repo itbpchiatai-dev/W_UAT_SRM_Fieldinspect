@@ -252,11 +252,18 @@ function YieldCell({ plot, onPlanClick }: { plot: PlotSummary; onPlanClick?: () 
  * fix: a plot with no active cycle was showing its stale pre-cycle
  * crop/variety/lot/planting-date here even though its status badge correctly
  * said "รอเริ่มรอบปลูก"/"ปิดแล้ว") — shows that same label here instead.
- * Line 1: "รอบ: <name> · พืช: <crop> / <variety>"
- * Line 2: "Lot: <lotNo> · ปลูก: <วันที่ไทย>"
- * Either line — or a whole part within a line — is omitted (not "null") when
- * unset; "—" only when there's genuinely nothing to show at all. */
-function PlantingCycleCell({ plot, canSeeVariety }: { plot: PlotSummary; canSeeVariety: boolean }) {
+ * Round 36 — this cell is now just two lines, "รอบ: <name>" and
+ * "P.Code: <code>". It used to carry five: crop/variety, PO, Lot ระบบ,
+ * Supplier Lot and the planting date, which made every row of the list four
+ * to five lines tall for detail almost nobody was scanning the TABLE for.
+ * All of it is still on the plot's own page; this column exists to let
+ * someone find a row, and a name, a season and a P.Code are what they match
+ * on. Dropping the variety also happens to retire the canSeeVariety gate
+ * here (round 8-25O) — what is never rendered cannot leak.
+ *
+ * The cycle line is omitted when there is no label or number; P.Code keeps
+ * its "—" fallback so the column never collapses to nothing. */
+function PlantingCycleCell({ plot }: { plot: PlotSummary }) {
   if (!plot.isActive) {
     // Round 8-6I.1 Part D — never say "รอเริ่มรอบปลูก" for an inactive
     // plot: that phrasing implies the user can start a cycle whenever
@@ -276,49 +283,17 @@ function PlantingCycleCell({ plot, canSeeVariety }: { plot: PlotSummary; canSeeV
     return <div className="text-xs text-muted-foreground">รอเริ่มรอบปลูก</div>;
   }
 
-  const hasReadModel = plot.activeCycleId !== undefined;
-  const crop = hasReadModel ? plot.activeCycleCrop : plot.currentCrop;
-  const variety = hasReadModel ? plot.activeCycleVariety : plot.currentVariety;
-  const lotNo = hasReadModel ? plot.activeCycleLotNo : plot.currentLotNo;
-  // Round 8-5B — PO / P.Code of the active cycle (denormalized read mirror).
-  const poNumber = plot.activeCyclePoNumber;
-  const pCode = plot.activeCyclePCode;
-  const plantingDate = hasReadModel ? plot.activeCyclePlantingDate : plot.currentPlantingDate;
   // Round 8.0 — lead with the admin-chosen season name (activeCycleLabel, e.g.
   // "jun2026"); fall back to "รอบที่ <activeCycleNo>" when there's no label.
   const cycleName = plot.activeCycleLabel?.trim()
     || (plot.activeCycleNo != null ? `รอบที่ ${plot.activeCycleNo}` : null);
-  // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only; a Supplier-side
-  // caller never sees it here, even joined into this one identity string.
-  const identity = [crop, canSeeVariety ? variety : null].filter(Boolean).join(' / ');
-  const plantingDateLabel = plantingDate
-    ? new Date(plantingDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })
-    : null;
-
-  const line1 = [
-    cycleName ? `รอบ: ${cycleName}` : null,
-    identity ? `พืช: ${identity}` : null,
-  ].filter((p): p is string => !!p);
-  // Round 8-5B compact PO · P.Code · Lot line (— fallback per field).
-  // Round 8-12B — "Lot ระบบ" now that a cycle can also carry a supplier lot.
-  const line2 = `PO: ${poNumber || '—'} · P.Code: ${pCode || '—'} · Lot ระบบ: ${lotNo || '—'}`;
-  // Round 8-12B — the SUPPLIER's own lot, on its own line and ONLY when the
-  // active cycle actually has one: a "—" line on every row would cost height
-  // on the majority of plots to say nothing. Read straight from the active-
-  // cycle read model (backend truth) — there is no plot mirror for it, and the
-  // no-active-cycle cases already returned above, so a stale value from an
-  // older cycle can never appear here.
-  const supplierLotNo = plot.activeCycleSupplierLotNo?.trim() || null;
-  const line3 = plantingDateLabel ? `ปลูก: ${plantingDateLabel}` : null;
+  // Round 8-5B — P.Code of the active cycle (denormalized read mirror).
+  const pCode = plot.activeCyclePCode;
 
   return (
     <div className="text-xs text-muted-foreground">
-      {line1.length > 0 && <div>{line1.join(' · ')}</div>}
-      <div className="font-mono text-[11px]">{line2}</div>
-      {supplierLotNo && (
-        <div className="font-mono text-[11px]">Supplier Lot: {supplierLotNo}</div>
-      )}
-      {line3 && <div>{line3}</div>}
+      {cycleName && <div>รอบ: {cycleName}</div>}
+      <div className="font-mono text-[11px]">P.Code: {pCode || '—'}</div>
     </div>
   );
 }
@@ -1924,7 +1899,7 @@ export function Plots() {
                           ปิดใช้งาน
                         </span>
                       )}
-                      <PlantingCycleCell plot={p} canSeeVariety={canSeeVariety} />
+                      <PlantingCycleCell plot={p} />
                     </td>
                     <td className="hidden px-4 py-2 text-muted-foreground sm:table-cell">{p.province ?? '—'}</td>
                     <td className="hidden px-4 py-2 text-xs sm:table-cell">

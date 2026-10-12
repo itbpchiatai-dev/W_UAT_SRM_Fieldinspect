@@ -332,29 +332,24 @@ function PlotCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-semibold text-gray-900">{plot.plotCode} — {plot.plotName}</p>
-          <p className="truncate text-xs text-gray-500">{plot.supplierCode} — {plot.supplierName}</p>
         </div>
         {selecting && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-green-600" />}
       </div>
+      {/* Round 36 — one identity line: the season, and the Lot when the active
+          cycle has one.
+          Gone from this card: the Supplier line (plotCode already OPENS with
+          the supplier code — "TESTSUP01-2610-001" — so it restated it), the
+          crop/variety, and the planting date. A field user picking between a
+          handful of plots matches on the name and the season; the rest was
+          height spent on a phone screen to answer questions nobody asks at
+          this step, and all of it is on the record form after selection.
+          The status badge and the "ตรวจล่าสุด" line below deliberately STAY:
+          they are what stops the same plot being inspected twice in a day,
+          which is function, not detail. */}
       <p className="mt-1.5 text-xs text-gray-500">
         {plot.cycleLabel || (plot.cycleNo != null ? `รอบที่ ${plot.cycleNo}` : 'ยังไม่มีรอบปลูก')}
-        {plot.crop ? ` · ${plot.crop}` : ''}{plot.variety ? ` (${plot.variety})` : ''}
+        {plot.lotNo ? ` · Lot: ${plot.lotNo}` : ''}
       </p>
-      {/* Round 8-3K — Lot/planting-date, compact "Lot:" label (see docs/human
-          or the round report for the full-page "เลขล็อต (Lot No.)" label used
-          elsewhere). Sourced from the active cycle only (never re-derived);
-          the whole line is omitted (not a dangling "—") when the plot has no
-          active cycle at all, since PlotStatusBadge below already says so. */}
-      {(plot.lotNo || plot.plantingDate) && (
-        <p className="mt-0.5 text-xs text-gray-500">
-          {[
-            plot.lotNo ? `Lot: ${plot.lotNo}` : null,
-            plot.plantingDate
-              ? `ปลูก: ${new Date(plot.plantingDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}`
-              : null,
-          ].filter(Boolean).join(' · ')}
-        </p>
-      )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <PlotStatusBadge plot={plot} />
         {isQrMatch && (

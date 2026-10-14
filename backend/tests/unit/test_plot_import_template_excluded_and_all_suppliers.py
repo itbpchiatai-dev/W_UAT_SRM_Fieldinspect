@@ -164,6 +164,10 @@ async def test_all_suppliers_mode_excluded_plots_are_reported_not_rendered() -> 
         # finalYieldAfterClean/harvestDate. Empty here: these fixture plots
         # have no records.
         reported_harvest={},
+        # Round 39 — the 77 master_data provinces, for the Excel dropdown on
+        # the province column. Empty here: conftest defaults the lookup away
+        # for every template test that is not about the dropdown.
+        provinces=[],
     )
     assert mk_excluded.call_args.kwargs["supplier_id"] is None
     assert resp.headers[_EXCLUDED_COUNT_HEADER] == "3"

@@ -1679,6 +1679,7 @@ async def _validate_all(
     await _apply_cycle_label_history_checks(db, states)
     await _apply_credential_status(db, states)
     await _apply_master_data_crop_variety_checks(db, states)
+    await _apply_province_checks(db, states)
     await _apply_reported_harvest_checks(db, states)
     return states
 
@@ -1822,6 +1823,50 @@ async def _apply_credential_status(db: AsyncSession, states: list["_RowState"]) 
         s.credential_change = (
             CREDENTIAL_CHANGE_REPLACE if s.credential_configured else CREDENTIAL_CHANGE_SET
         )
+
+
+async def _apply_province_checks(db: AsyncSession, states: list["_RowState"]) -> None:
+    """Round 39 — normalise the province cell, then require it to be a real
+    master_data province.
+
+    Until this existed the column was only length-checked (_check_length
+    below), so the Excel path accepted anything while the web form was
+    restricted to a 77-value dropdown. The result, measured on UAT, was one
+    province stored two ways: 217 rows of "จ.ขอนแก่น" and 64 of "ขอนแก่น".
+    That split the Dashboard province filter into two entries, each hiding
+    most of the province, and round 38 had to normalise on READ to draw a map
+    at all.
+
+    NORMALISE FIRST, then validate. "จ.ขอนแก่น" is not a mistake worth
+    refusing — it is how people write — so it is accepted and STORED as
+    "ขอนแก่น". Only a value that survives normalisation without matching any
+    province is an error. That way the file a user already has keeps working,
+    and the data gets cleaner every time one is re-imported.
+
+    Batched like its neighbours: ONE query for the distinct provinces in the
+    whole file, never one per row.
+    """
+    relevant = [
+        s for s in states
+        if master_data_validation.normalize_province_name(s.parsed.province)
+    ]
+    if not relevant:
+        return
+    normalized_by_state = {
+        id(s): master_data_validation.normalize_province_name(s.parsed.province)
+        for s in relevant
+    }
+    lookup = await master_data_validation.load_province_lookup(
+        db, {v for v in normalized_by_state.values() if v},
+    )
+    for s in relevant:
+        normalized = normalized_by_state[id(s)]
+        errors = master_data_validation.province_errors(lookup, normalized)
+        if errors:
+            s.errors.extend(errors)
+            continue
+        # Store the canonical spelling, not what was typed.
+        s.parsed.province = normalized
 
 
 async def _apply_master_data_crop_variety_checks(db: AsyncSession, states: list["_RowState"]) -> None:

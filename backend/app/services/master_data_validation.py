@@ -41,6 +41,7 @@ from app.services.p_code_master import P_CODE_TYPE
 
 CROP_TYPE = "crop"
 VARIETY_TYPE = "variety"
+PROVINCE_TYPE = "province"
 
 # PlotCycle.variety is String(100) while master_data.value allows 255, so a
 # variety name can be legal in Master Data and still too long to store on a
@@ -210,3 +211,67 @@ async def assert_crop_p_code_valid(
     if errors:
         raise HTTPException(status_code=422, detail="; ".join(errors))
     return variety_for_p_code(lookup, p_code)
+
+# --- Province (round 39) ------------------------------------------------------
+#
+# The Plots web form writes a master_data value through a dropdown. The Excel
+# import never did: plot_import only LENGTH-checked the cell, so whatever was
+# typed was stored. By 2026-10-14 that had produced, on UAT, the same province
+# spelled two ways in one table — 217 rows of "จ.ขอนแก่น" beside 64 of
+# "ขอนแก่น" — which split the Dashboard province filter in two and had to be
+# worked around when reading. These two functions close the door the data came
+# through.
+
+PROVINCE_PREFIXES = ("จังหวัด", "จ.", "จ ")
+
+# Short forms that are not prefixes. Only Bangkok earns one: it is the one
+# province Thai writing routinely abbreviates. A wider guess list would risk
+# resolving a typo onto a real province, which is worse than refusing the row.
+PROVINCE_ALIASES: dict[str, str] = {
+    "กรุงเทพ": "กรุงเทพมหานคร",
+    "กรุงเทพฯ": "กรุงเทพมหานคร",
+    "กทม": "กรุงเทพมหานคร",
+    "กทม.": "กรุงเทพมหานคร",
+}
+
+
+def normalize_province_name(value: str | None) -> str | None:
+    """Strip a known prefix and surrounding whitespace, so "จ.ขอนแก่น" and
+    "ขอนแก่น" become one value. Mirrors normalizeProvinceName in
+    frontend/src/components/farmlog/provinceLocator.ts, which does the same job
+    for rows already stored.
+
+    It corrects nothing else. A misspelling must stay a misspelling here, so
+    the caller reports it rather than silently filing the row under whichever
+    real province looked closest.
+    """
+    if value is None:
+        return None
+    cleaned = " ".join(value.split())
+    for prefix in PROVINCE_PREFIXES:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            break
+    cleaned = PROVINCE_ALIASES.get(cleaned, cleaned)
+    return cleaned or None
+
+
+async def load_province_lookup(db: AsyncSession, values: set[str]) -> dict[str, MasterData]:
+    """ONE query for every province a file mentions, keyed by value — the same
+    batched shape as load_crop_p_code_lookup. Callers pass NORMALISED values."""
+    rows = await master_data_repo.list_by_type_values(db, PROVINCE_TYPE, values)
+    return {row.value: row for row in rows}
+
+
+def province_errors(lookup: dict[str, MasterData], normalized: str | None) -> list[str]:
+    """Empty list when the province is blank (the column is optional) or known
+    and active. Otherwise one Thai message naming the value that was rejected,
+    so the row can be found in a file of thousands."""
+    if normalized is None:
+        return []
+    row = lookup.get(normalized)
+    if row is None:
+        return [f'ไม่พบจังหวัด "{normalized}" ใน Master Data']
+    if not row.active:
+        return [f'จังหวัด "{normalized}" ถูกปิดใช้งาน กรุณาเปิดใช้งานใน Master Data ก่อน']
+    return []

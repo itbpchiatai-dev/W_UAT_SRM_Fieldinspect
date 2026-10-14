@@ -1,14 +1,14 @@
 """Public (unauthenticated) master-data endpoint — round 19.1.
 
 Read-only dropdown options for the /public/inspect field-assistant flow
-(crop, growth_stage, weather) so free text there doesn't drift
+(growth_stage, weather) so free text there doesn't drift
 from the same taxonomy the logged-in RecordForm/Plot admin forms already
 use (round 19). No login, no RLS (master_data carries no supplier/user
 scope — see migration 0019), and no mutation route in this router at all.
 
 Security (round 19.1's brief):
   - `type` is a Literal allowlist, not a free string — FastAPI/Pydantic
-    rejects anything outside {crop, growth_stage, weather} with a
+    rejects anything outside {growth_stage, weather} with a
     422 before this function body even runs. No manual "if type not in
     ..." check to get wrong, and no way to reach master_data rows of an
     internal-only type (e.g. level/severity/irrigation/fertilizer, which
@@ -41,14 +41,14 @@ from app.schemas.master_data import PublicMasterDataItem
 
 router = APIRouter(tags=["public"])
 
-# Round 37 — "variety" removed. It let anyone unauthenticated page the whole
-# พันธุ์ taxonomy out of master_data, which is Chiatai-internal (round 8-25O),
-# and the public form never asked for it: PublicInspect only ever renders
-# PublicMasterDataButtons for growth_stage and weather, and round 20.2 already
-# made crop/variety plot MASTER data that the public flow cannot edit. "crop"
-# is likewise unused by that form and is left here only because narrowing it
-# was not part of this round — it is dead surface and should go next.
-PublicMasterDataType = Literal["crop", "growth_stage", "weather"]
+# Round 37 removed "variety"; round 39 removes "crop" for the same reason and
+# finishes the job. Neither was ever requested by the public form — PublicInspect
+# renders PublicMasterDataButtons for growth_stage and weather and nothing else,
+# and round 20.2 had already made crop/variety plot MASTER data that this flow
+# cannot edit. An unauthenticated endpoint that serves a taxonomy nobody asks
+# for is surface with no purpose, and surface nobody uses is surface nobody
+# watches.
+PublicMasterDataType = Literal["growth_stage", "weather"]
 
 
 @router.get("/masterdata", response_model=list[PublicMasterDataItem])

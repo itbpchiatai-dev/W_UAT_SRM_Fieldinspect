@@ -63,7 +63,7 @@ def test_type_allowlist_contains_exactly_the_intended_categories() -> None:
     import typing
 
     args = typing.get_args(public_masterdata_module.PublicMasterDataType)
-    assert set(args) == {"crop", "growth_stage", "weather"}
+    assert set(args) == {"growth_stage", "weather"}
     # Internal-only categories (MasterData.tsx admin still manages these)
     # must never be reachable unauthenticated.
     for internal_only in ("level", "severity", "irrigation", "fertilizer"):
@@ -86,6 +86,20 @@ def test_variety_is_not_reachable_unauthenticated() -> None:
 
     args = typing.get_args(public_masterdata_module.PublicMasterDataType)
     assert "variety" not in args
+
+
+def test_crop_is_not_reachable_unauthenticated() -> None:
+    """Round 39 — the other half of round 37.
+
+    The public form never asked for the crop taxonomy either: it renders
+    PublicMasterDataButtons for growth_stage and weather only, and round 20.2
+    made crop plot MASTER data the public flow cannot edit. Serving the whole
+    crop list to anyone who knows the URL bought nothing.
+    """
+    import typing
+
+    args = typing.get_args(public_masterdata_module.PublicMasterDataType)
+    assert "crop" not in args
 
 
 def test_active_only_is_hardcoded_true_not_a_request_parameter() -> None:

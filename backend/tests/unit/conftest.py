@@ -97,3 +97,63 @@ def _default_permissive_crop_variety(request: pytest.FixtureRequest):
         ),
     ):
         yield
+
+@pytest.fixture(autouse=True)
+def _default_permissive_province(request: pytest.FixtureRequest):
+    """Round 39 — same rationale as the crop/variety default above, for the new
+    province-vs-Master-Data check.
+
+    Dozens of plot_import tests pass arbitrary province strings and a bare
+    sentinel for `db`; a real lookup query would raise rather than simply find
+    nothing. Tests that exercise the validation itself opt out with
+    `@pytest.mark.nodefault_province`.
+
+    normalize_province_name is deliberately NOT stubbed. It touches no
+    database, and the importer rewrites the stored value with its result — a
+    test that silently skipped it would stop covering the half of this round
+    that cleans the data.
+    """
+    if "nodefault_province" in request.keywords:
+        yield
+        return
+
+    async def _fake_lookup(db, values):
+        return {}
+
+    def _fake_errors(lookup, normalized):
+        return []
+
+    with (
+        patch(
+            "app.services.master_data_validation.load_province_lookup",
+            side_effect=_fake_lookup,
+        ),
+        patch(
+            "app.services.master_data_validation.province_errors",
+            side_effect=_fake_errors,
+        ),
+    ):
+        yield
+
+@pytest.fixture(autouse=True)
+def _default_no_template_provinces(request: pytest.FixtureRequest):
+    """Round 39 — default "no province list" for the import-template builders.
+
+    The template now offers the 77 master_data provinces as an Excel dropdown,
+    which means reading them from the database. The template tests predate that
+    and pass a MagicMock for `db`, so the read raises rather than returning
+    nothing. They are about excluded counts, headers and plot_status forwarding
+    — not about the dropdown — so the default keeps them untouched.
+
+    Tests that exercise the dropdown opt out with
+    `@pytest.mark.nodefault_template_provinces` and supply their own list.
+    """
+    if "nodefault_template_provinces" in request.keywords:
+        yield
+        return
+
+    async def _fake_provinces(db):
+        return []
+
+    with patch("app.api.v1.plots._template_provinces", side_effect=_fake_provinces):
+        yield

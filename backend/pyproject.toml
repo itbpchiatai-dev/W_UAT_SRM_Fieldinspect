@@ -90,6 +90,8 @@ testpaths = ["tests"]
 addopts = ["--cov=app", "--cov-report=term-missing", "--cov-fail-under=80"]
 markers = [
     "nodefault_crop_variety: opt out of tests/unit/conftest.py's permissive crop/variety Master Data default (round 8-15D)",
+    "nodefault_province: opt out of tests/unit/conftest.py's permissive province Master Data default (round 39)",
+    "nodefault_template_provinces: opt out of tests/unit/conftest.py's empty import-template province list (round 39)",
     "nodefault_reported_harvest: opt out of tests/unit/conftest.py's \"no field harvest report\" default (round 31)",
 ]
 

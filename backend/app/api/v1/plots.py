@@ -1,6 +1,8 @@
 """Plots CRUD + user assignment — FarmLog field/แปลง management."""
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import asyncio
 from datetime import date, datetime, time, timezone
 from typing import Literal
@@ -37,6 +39,7 @@ from app.db.models.plot_assignment import PlotAssignment
 from app.db.models.supplier import Supplier
 from app.db.models.user import User
 from app.db.session import DbDep
+from app.repositories import master_data_repository
 from app.repositories import plot_access_credential_repository as credential_repo
 from app.repositories import plot_access_phone_repository as phone_repo
 from app.repositories import plot_cycle_repository as plot_cycle_repo
@@ -77,7 +80,14 @@ from app.schemas.plot_import import (
     PlotImportPreviewState,
 )
 from app.services import master_data_validation, plot_import, plot_import_report
-from app.services.excel_workbook import Cell, CellStyle, StyledCell, build_xlsx
+from app.services.excel_workbook import (
+    Cell,
+    CellStyle,
+    DataValidationRule,
+    DefinedName,
+    StyledCell,
+    build_xlsx,
+)
 from app.services.lot_number import AutoLotMissingComponentError, LotNumberTooLongError
 from app.services.plot_code import (
     PlotCodeSupplierCodeUnusableError,
@@ -431,7 +441,21 @@ def _template_example_rows(supplier_code: str) -> list[dict[str, str]]:
     ]
 
 
-def _plot_template_workbook(suppliers: list[Supplier]) -> bytes:
+async def _template_provinces(db: AsyncSession) -> list[str]:
+    """Round 39 — the 77 ACTIVE provinces, for the import template dropdown.
+
+    Read from master_data rather than hard-coded, because an admin can retire
+    one there and the template must not keep offering it. Active-only for the
+    same reason the importer refuses an inactive province.
+    """
+    rows = await master_data_repository.list_items(db, type="province", active_only=True)
+    return [row.value for row in rows]
+
+
+def _plot_template_workbook(
+    suppliers: list[Supplier],
+    provinces: Sequence[str] = (),
+) -> bytes:
     """The BLANK template — same two-sheet shape as the filtered one below,
     just with no plot rows on Sheet 1.
 
@@ -451,7 +475,9 @@ def _plot_template_workbook(suppliers: list[Supplier]) -> bytes:
          never reads.
     """
     supplier_code = suppliers[0].code if suppliers else "SUP001"
-    return _template_workbook([_header_row(), _description_row()], supplier_code)
+    return _template_workbook(
+        [_header_row(), _description_row()], supplier_code, provinces,
+    )
 
 
 # --- Round 8-6A: filter-aware contextual template (Backend foundation) -----
@@ -647,17 +673,66 @@ def _legend_sheet() -> list[list[Cell]]:
     return rows
 
 
-def _template_workbook(sheet1: list[list[Cell]], supplier_code: str) -> bytes:
+# Round 39 — the province column, as a spreadsheet column letter. province is
+# index 9 of IMPORT_COLUMNS, so J. A data-validation sqref is POSITIONAL, so
+# this has to move whenever the column order does; asserted in the tests
+# against IMPORT_COLUMNS rather than hard-trusted here.
+_PROVINCE_COLUMN_LETTER = "J"
+_SHEET_PROVINCE_REF = "_provinces"
+_PROVINCE_DEFINED_NAME = "ProvinceOptions"
+
+
+def _template_workbook(
+    sheet1: list[list[Cell]],
+    supplier_code: str,
+    provinces: Sequence[str] = (),
+) -> bytes:
     """The one template shape (round 8-27E), with the legend sheet round V
     added. Sheet order is load-bearing: excel_reader.read_first_sheet reads
-    only the FIRST sheet, so the import sheet must stay first."""
+    only the FIRST sheet, so the import sheet must stay first.
+
+    Round 39 — the province cell becomes a dropdown off a hidden sheet. 77 Thai
+    names are far past the ~255-character cap on an inline list formula, so this
+    takes the defined-name route that master_data_crop_variety_import already
+    uses. show_error_message=True because province IS a closed set: every value
+    the importer will accept is in this list, so letting someone type a
+    seventy-eighth one would only move the rejection to upload time.
+
+    An empty list skips the dropdown entirely — an empty named range is invalid
+    OOXML, and a template that fails to open is worse than one without a
+    convenience.
+    """
+    sheets: list[tuple[str, list[list[Cell]]]] = [
+        (_SHEET_NEW_CYCLE, sheet1 + _blank_input_rows()),
+        (_SHEET_LEGEND, _legend_sheet()),
+        (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
+    ]
+    hidden_sheets: set[str] = set()
+    defined_names: list[DefinedName] = []
+    validations: dict[str, list[DataValidationRule]] = {}
+
+    if provinces:
+        sheets.append((_SHEET_PROVINCE_REF, [[name] for name in provinces]))
+        hidden_sheets.add(_SHEET_PROVINCE_REF)
+        defined_names.append(DefinedName(
+            name=_PROVINCE_DEFINED_NAME,
+            ref=f"'{_SHEET_PROVINCE_REF}'!$A$1:$A${len(provinces)}",
+        ))
+        col = _PROVINCE_COLUMN_LETTER
+        validations[_SHEET_NEW_CYCLE] = [
+            DataValidationRule(
+                sqref=f"{col}3:{col}5000",
+                formula1=_PROVINCE_DEFINED_NAME,
+                show_error_message=True,
+            ),
+        ]
+
     return build_xlsx(
-        [
-            (_SHEET_NEW_CYCLE, sheet1 + _blank_input_rows()),
-            (_SHEET_LEGEND, _legend_sheet()),
-            (_SHEET_EXAMPLES, _examples_sheet(supplier_code)),
-        ],
+        sheets,
+        validations,
         column_widths={_SHEET_LEGEND: [22, 70, 110]},
+        hidden_sheets=hidden_sheets,
+        defined_names=defined_names,
     )
 
 
@@ -947,6 +1022,7 @@ def _contextual_plot_template_workbook(
     latest_cycles: dict[UUID, PlotCycle] | None = None,
     credential_status: dict[UUID, tuple[bool, int]] | None = None,
     reported_harvest: dict[UUID, dict] | None = None,
+    provinces: Sequence[str] = (),
 ) -> bytes:
     """Build the contextual template (rounds 8-6A/8-6G/8-6J/8-7A). Sheet
     order is load-bearing: excel_reader.read_first_sheet only ever reads
@@ -978,6 +1054,7 @@ def _contextual_plot_template_workbook(
     return _template_workbook(
         _new_cycle_sheet(plots, latest_cycles, credential_status, reported_harvest),
         supplier_code,
+        provinces,
     )
 
 
@@ -1373,7 +1450,9 @@ async def download_plot_import_template(
     has_filter = any(v is not None for v in (supplier_id, province, crop, variety, cycle_label, q))
     if not has_filter:
         suppliers = await _template_suppliers(db, current_user)
-        return _template_response(_plot_template_workbook(suppliers))
+        return _template_response(
+            _plot_template_workbook(suppliers, await _template_provinces(db)),
+        )
 
     if supplier_id is None:
         raise HTTPException(
@@ -1452,7 +1531,7 @@ async def download_plot_import_template(
     reported_harvest = await _reported_harvest_for_plots(db, plots)
     content = _contextual_plot_template_workbook(
         plots, latest_cycles=latest_cycles, credential_status=credential_status,
-        reported_harvest=reported_harvest,
+        reported_harvest=reported_harvest, provinces=await _template_provinces(db),
     )
     return _template_response(content, excluded_count=excluded_count)
 
@@ -1492,7 +1571,7 @@ async def _all_suppliers_template_response(db: AsyncSession, *, plot_status: str
     reported_harvest = await _reported_harvest_for_plots(db, plots)
     content = _contextual_plot_template_workbook(
         plots, latest_cycles=latest_cycles, credential_status=credential_status,
-        reported_harvest=reported_harvest,
+        reported_harvest=reported_harvest, provinces=await _template_provinces(db),
     )
     return _template_response(content, excluded_count=excluded_count)
 

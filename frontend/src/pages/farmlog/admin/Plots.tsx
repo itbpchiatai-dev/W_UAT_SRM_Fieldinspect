@@ -19,6 +19,7 @@ import {
   Loader2,
   Lock,
   MapPin,
+  MoreVertical,
   Pencil,
   Phone,
   PowerOff,
@@ -473,23 +474,47 @@ const FULL_SCOPE_ROLE_NAMES = new Set([
   'internal:super_admin', 'internal:admin', 'farmlog:supervisor',
 ]);
 
-/** "ดาวน์โหลด Excel" split-button + dropdown (round 8-6G Part E) — replaces
- * the old single "Excel ตามตัวกรอง" button. Same open/outside-click/Escape
- * pattern as SupplierFilterCombobox above (no portal/library). The
- * "ทุก Supplier" item only renders for a full-scope caller (see
- * FULL_SCOPE_ROLE_NAMES); a Supplier Owner/Field Officer never sees it at
- * all, on top of the backend's own 403 if it were ever reached directly. */
-function DownloadTemplateMenu({
-  onFiltered,
-  onAllSuppliers,
-  showAllSuppliers,
-  pending,
-}: {
-  onFiltered: () => void;
-  onAllSuppliers: () => void;
-  showAllSuppliers: boolean;
-  pending: boolean;
-}) {
+/** Round 40 — one "⋮" menu for every secondary action on this page.
+ *
+ * There were five buttons in a row here (two Excel, two QR, one link out).
+ * On a 360px phone they stacked into roughly 300px of chrome before the
+ * search box, and the page title above them wrapped onto three lines. They
+ * were not much better on a wide screen: five equal-weight outline buttons
+ * beside the one primary action read as five equally important things.
+ *
+ * Collapsed at EVERY width, not just on phones. None of these is a
+ * per-minute action — importing a workbook, printing a sheet of QR codes —
+ * so one extra click is a fair price for a header that reads at a glance,
+ * and a single layout is one thing to keep working rather than two.
+ *
+ * The old "ดาวน์โหลด Excel" split-button had a submenu of its own. Its two
+ * choices are flattened into this one list instead: a menu inside a menu is
+ * unusable on a touch screen, and the nesting bought nothing.
+ *
+ * An action the caller may not take is not rendered at all (permissions are
+ * decided by the parent). An action that is merely unavailable RIGHT NOW
+ * stays visible and disabled with the reason underneath — a user who cannot
+ * find the button assumes it is gone, and asks.
+ */
+interface PlotActionItem {
+  key: string;
+  label: string;
+  description?: string;
+  icon: React.ReactNode;
+  onSelect?: () => void;
+  href?: string;
+  disabled?: boolean;
+}
+
+interface PlotActionGroup {
+  title: string;
+  items: PlotActionItem[];
+  /** Optional footnote under the group — for something true of the whole
+   * group rather than of one item (what the downloaded file contains, say). */
+  note?: string;
+}
+
+function PlotActionsMenu({ groups, busy }: { groups: PlotActionGroup[]; busy: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -509,66 +534,85 @@ function DownloadTemplateMenu({
     };
   }, [open]);
 
+  const visible = groups.filter((g) => g.items.length > 0);
+  if (visible.length === 0) return null;
+
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        disabled={pending}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary disabled:opacity-60"
+        aria-label="การทำงานเพิ่มเติม"
+        title="การทำงานเพิ่มเติม"
+        className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary"
       >
-        {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-        ดาวน์โหลด Excel
-        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+        <span className="sm:hidden">เพิ่มเติม</span>
       </button>
 
       {open ? (
         <div
           role="menu"
-          aria-label="ดาวน์โหลด Excel"
-          className="absolute right-0 z-20 mt-1 w-72 max-w-[90vw] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
+          aria-label="การทำงานเพิ่มเติม"
+          className="absolute right-0 z-20 mt-1 w-80 max-w-[90vw] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
         >
-          <button
-            type="button"
-            role="menuitem"
-            // Explicit aria-label: without it, the accessible name is the
-            // concatenation of BOTH spans below (label + description) per
-            // the "name from content" rule — a screen reader would read one
-            // long run-on sentence, and `getByRole(..., {name: 'ตามตัวกรอง
-            // ปัจจุบัน'})` wouldn't match. aria-label overrides content-derived
-            // naming entirely, so the name stays just the short label.
-            aria-label="ตามตัวกรองปัจจุบัน"
-            onClick={() => { setOpen(false); onFiltered(); }}
-            className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-secondary"
-          >
-            <span className="text-sm font-medium text-foreground">ตามตัวกรองปัจจุบัน</span>
-            <span className="text-xs text-muted-foreground">
-              ดาวน์โหลดแปลงที่ใช้งานอยู่ตาม Supplier และตัวกรองปัจจุบัน
-            </span>
-          </button>
-          {showAllSuppliers && (
-            <button
-              type="button"
-              role="menuitem"
-              aria-label="ทุก Supplier"
-              onClick={() => { setOpen(false); onAllSuppliers(); }}
-              className="flex w-full flex-col items-start gap-0.5 border-t border-border px-3 py-2 text-left hover:bg-secondary"
-            >
-              <span className="text-sm font-medium text-foreground">ทุก Supplier</span>
-              <span className="text-xs text-muted-foreground">
-                ดาวน์โหลดแปลงที่ใช้งานอยู่ของทุก Supplier ที่คุณมีสิทธิ์ดู
-              </span>
-            </button>
-          )}
-          {/* Round 8-27E — the "รายการที่ไม่รวม" sheet is gone; anything left
-              out of the file is reported on screen after the download instead
-              (see templateExcludedCount). */}
-          <div className="border-t border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
-            ไฟล์มี 2 ชีต: &quot;นำเข้ารอบใหม่&quot; (ชีตที่ระบบอ่าน) และ &quot;ตัวอย่าง&quot;
-            — ถ้ามีแปลงที่ไม่ได้อยู่ในไฟล์ ระบบจะแจ้งหลังดาวน์โหลด
-          </div>
+          {visible.map((group, gi) => (
+            <div key={group.title} className={gi > 0 ? 'border-t border-border' : undefined}>
+              <div className="bg-secondary/40 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {group.title}
+              </div>
+              {group.items.map((item) => {
+                const body = (
+                  <>
+                    <span className="mt-0.5 shrink-0 text-muted-foreground">{item.icon}</span>
+                    <span className="flex min-w-0 flex-col items-start gap-0.5">
+                      <span className="text-sm font-medium text-foreground">{item.label}</span>
+                      {item.description && (
+                        <span className="text-xs text-muted-foreground">{item.description}</span>
+                      )}
+                    </span>
+                  </>
+                );
+                const shared = 'flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent';
+                if (item.href) {
+                  return (
+                    <a
+                      key={item.key}
+                      role="menuitem"
+                      href={item.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={item.label}
+                      onClick={() => setOpen(false)}
+                      className={shared}
+                    >
+                      {body}
+                    </a>
+                  );
+                }
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="menuitem"
+                    aria-label={item.label}
+                    disabled={item.disabled}
+                    onClick={() => { setOpen(false); item.onSelect?.(); }}
+                    className={shared}
+                  >
+                    {body}
+                  </button>
+                );
+              })}
+              {group.note && (
+                <div className="border-t border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
+                  {group.note}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       ) : null}
     </div>
@@ -1284,85 +1328,118 @@ export function Plots() {
           <p className="mt-1 text-sm text-muted-foreground">จัดการข้อมูลแปลงและรอบปลูก</p>
         </div>
 
-        {/* Primary action (เพิ่มแปลง) stands apart from the secondary group
-            below it — round 20: one clear "main" action instead of every
-            button carrying equal visual weight. */}
-        <div className="flex flex-col gap-2 sm:items-end">
+        {/* Round 20 kept one clear "main" action instead of every button
+            carrying equal weight; round 40 reduced the rest to a single menu.
+            With only two controls left there is no reason to stack them —
+            round 40.1 puts them on ONE row, which is both tidier and one less
+            row of chrome above the search box on a phone.
+
+            The hierarchy is still obvious without the stacking: เพิ่มแปลง is
+            filled and takes the space, the menu is an outline button sized to
+            its content. */}
+        <div className="flex items-center gap-2 sm:justify-end">
           {canCreate && (
             <button
               type="button"
               onClick={() => { setEditingId(null); setCreating(true); }}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+              // flex-1 on a phone so the primary action fills the row beside
+              // the menu; natural width from sm up, where the row is wide
+              // enough that stretching it would look odd.
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 sm:flex-none"
             >
               <Plus className="h-4 w-4" />
               เพิ่มแปลง
             </button>
           )}
-          <div className="flex flex-wrap gap-2 sm:justify-end">
-            {/* Round 8-25P — the Excel download/import share ONE column
-                layout with the import parser (plot_import.py), so the
-                variety column can't be safely dropped just for this file
-                without risking that shared contract. Simpler and safe:
-                hide both entry points from a Supplier-side caller entirely,
-                same canSeeVariety gate as the rest of round 8-25O. */}
-            {canSeeVariety && (
-              <DownloadTemplateMenu
-                onFiltered={handleDownloadTemplate}
-                onAllSuppliers={handleDownloadAllSuppliers}
-                showAllSuppliers={hasFullSupplierScope}
-                pending={templateM.isPending}
-              />
-            )}
-            {canSeeVariety && (canCreate || canUpdate) && (
-              <button
-                type="button"
-                onClick={() => setImporting(true)}
-                title="นำเข้าแปลงและรอบปลูกจากไฟล์ Excel"
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary"
-              >
-                <Upload className="h-4 w-4" />
-                นำเข้า Excel
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setPrintItems(printableItems)}
-              disabled={printableItems.length === 0}
-              title="พิมพ์ QR ของแปลงทั้งหมดที่แสดงอยู่"
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary disabled:opacity-60"
-            >
-              <Printer className="h-4 w-4" />
-              พิมพ์ QR รายการนี้
-            </button>
-            <button
-              type="button"
-              onClick={handlePrintBySupplier}
-              disabled={!filterSupplier || supplierPrintLoading}
-              title="พิมพ์ QR ทุกแปลงที่ใช้งานอยู่ของ Supplier ที่เลือก (ทุกหน้า)"
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary disabled:opacity-60"
-            >
-              {supplierPrintLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
-              พิมพ์ QR ทั้ง Supplier
-            </button>
-            {/* Round 8-25I — shortcut to the PUBLIC (no-login) inspection
-                entry point, for admins who want to open/demo it without a
-                phone. Relative path so it resolves correctly in every
-                environment (dev/UAT/prod) without hardcoding a domain.
-                Opens in a new tab: this leaves the authenticated admin app
-                entirely, and text/icon deliberately differ from the other
-                buttons here (which all act ON this page's own data) to
-                signal that. */}
-            <a
-              href="/public/inspect"
-              target="_blank"
-              rel="noopener noreferrer"
-              title="เปิดหน้าตรวจแปลงสำหรับ Field Officer (ไม่ต้อง login) ในแท็บใหม่"
-              className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm transition-colors hover:bg-secondary hover:text-foreground"
-            >
-              <ExternalLink className="h-4 w-4" />
-              เปิดหน้าตรวจแปลง (Public)
-            </a>
-          </div>
+          {/* Round 40 — the five secondary buttons that used to sit here are
+              now one menu; see PlotActionsMenu for why, including at desktop
+              width. Permission gates are unchanged, just moved: an item the
+              caller may not use is never put in the list. */}
+          <PlotActionsMenu
+            busy={templateM.isPending || supplierPrintLoading}
+            groups={[
+              {
+                title: 'ไฟล์ Excel',
+                // Round 8-27E — the "รายการที่ไม่รวม" sheet is gone; anything
+                // left out is reported on screen after the download instead
+                // (templateExcludedCount). Kept here, on the group, because it
+                // is true of both download items.
+                note: 'ไฟล์มี 2 ชีต: "นำเข้ารอบใหม่" (ชีตที่ระบบอ่าน) และ "ตัวอย่าง" — ถ้ามีแปลงที่ไม่ได้อยู่ในไฟล์ ระบบจะแจ้งหลังดาวน์โหลด',
+                items: [
+                  // Round 8-25P — download and import share ONE column layout
+                  // with plot_import.py, so the variety column cannot be
+                  // dropped just for this file. Both entry points stay hidden
+                  // from a Supplier-side caller instead.
+                  ...(canSeeVariety ? [{
+                    key: 'dl-filtered',
+                    label: 'ดาวน์โหลด Excel (ตามตัวกรอง)',
+                    description: 'แปลงที่ใช้งานอยู่ตาม Supplier และตัวกรองปัจจุบัน',
+                    icon: <Download className="h-4 w-4" />,
+                    onSelect: handleDownloadTemplate,
+                    disabled: templateM.isPending,
+                  }] : []),
+                  ...(canSeeVariety && hasFullSupplierScope ? [{
+                    key: 'dl-all',
+                    label: 'ดาวน์โหลด Excel (ทุก Supplier)',
+                    description: 'แปลงที่ใช้งานอยู่ของทุก Supplier ที่คุณมีสิทธิ์ดู',
+                    icon: <Download className="h-4 w-4" />,
+                    onSelect: handleDownloadAllSuppliers,
+                    disabled: templateM.isPending,
+                  }] : []),
+                  ...(canSeeVariety && (canCreate || canUpdate) ? [{
+                    key: 'import',
+                    label: 'นำเข้า Excel',
+                    description: 'นำเข้าแปลงและรอบปลูกจากไฟล์',
+                    icon: <Upload className="h-4 w-4" />,
+                    onSelect: () => setImporting(true),
+                  }] : []),
+                ],
+              },
+              {
+                title: 'QR Code',
+                items: [
+                  {
+                    key: 'qr-list',
+                    label: 'พิมพ์ QR รายการนี้',
+                    description: printableItems.length === 0
+                      ? 'ไม่มีแปลงในรายการที่แสดงอยู่'
+                      : `แปลงทั้งหมดที่แสดงอยู่ (${printableItems.length})`,
+                    icon: <Printer className="h-4 w-4" />,
+                    onSelect: () => setPrintItems(printableItems),
+                    disabled: printableItems.length === 0,
+                  },
+                  {
+                    key: 'qr-supplier',
+                    label: 'พิมพ์ QR ทั้ง Supplier',
+                    description: filterSupplier
+                      ? 'ทุกแปลงที่ใช้งานอยู่ของ Supplier ที่เลือก (ทุกหน้า)'
+                      : 'เลือก Supplier ก่อน',
+                    icon: supplierPrintLoading
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Printer className="h-4 w-4" />,
+                    onSelect: handlePrintBySupplier,
+                    disabled: !filterSupplier || supplierPrintLoading,
+                  },
+                ],
+              },
+              {
+                title: 'อื่นๆ',
+                items: [
+                  {
+                    // Round 8-25I — the PUBLIC (no-login) entry point, for an
+                    // admin who wants to open it without a phone. Relative
+                    // path so it resolves in every environment; opens in a new
+                    // tab because it leaves the authenticated app entirely.
+                    key: 'public',
+                    label: 'เปิดหน้าตรวจแปลง (Public)',
+                    description: 'สำหรับ Field Officer ไม่ต้อง login — เปิดแท็บใหม่',
+                    icon: <ExternalLink className="h-4 w-4" />,
+                    href: '/public/inspect',
+                  },
+                ],
+              },
+            ]}
+          />
         </div>
       </header>
 
@@ -1370,17 +1447,14 @@ export function Plots() {
           the FULL explanation (Sheet-by-sheet walkthrough, etc.) lives in
           PlotImportModal instead of repeating it here at length. */}
       <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-        {/* Round O — this line described "เริ่มรอบถัดไป" and "เปิดแปลงพร้อม
-            เริ่มรอบใหม่", the two things round E's "one plot, one cycle"
-            policy took away (lib/plot-lifecycle.ts: canRolloverCycle and
-            canReactivateWithCycle both return false, and the importer refuses
-            the matching actions). The page was telling people to do what the
-            system now rejects. Replaced with what the template actually
-            offers. */}
-        <p>
-          เทมเพลตมี 3 แบบ: สร้างแปลง+รอบปลูก · แก้รอบปลูกปัจจุบัน · ปิดรอบ (final) ·
-          1 แปลง = 1 รอบปลูก — ฤดูถัดไปให้สร้างแปลงใหม่
-        </p>
+        {/* Round 40.1 — the "เทมเพลตมี 3 แบบ…" line was removed. It explained
+            the import template to everyone who opened the Plots page, while
+            the template itself is now one item inside the ⋮ menu and already
+            ships its own "วิธีกรอก" sheet with the same three actions spelled
+            out at length. Standing guidance for an action most visits never
+            take cost four lines on a phone, directly above the search box
+            people actually came for. The import modal (PlotImportModal) still
+            carries the full explanation at the moment it is needed. */}
         {templateFilterSummary && (
           <p className="flex flex-wrap items-baseline gap-x-1">
             <span className="font-medium text-foreground">กำลังจะดาวน์โหลด:</span>
@@ -1511,7 +1585,16 @@ export function Plots() {
               className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-secondary"
             >
               <SlidersHorizontal className="h-4 w-4" />
-              ตัวกรองเพิ่มเติม
+              {/* Round 40.1 — shortened from "ตัวกรองเพิ่มเติม": at 412px the
+                  three buttons share one flex row and the long label was the
+                  only reason this one wrapped to a second line.
+                  "ตัวกรอง" rather than "เพิ่มเติม", which was the first choice:
+                  the actions menu at the top of the page already shows
+                  "เพิ่มเติม" at phone width, and two buttons with the same name
+                  doing unrelated things is worse than a longer word. The tests
+                  found it immediately — getByRole matched both. This is one
+                  character shorter AND says which of the two it is. */}
+              ตัวกรอง
               {advancedFilterCount > 0 && (
                 <span className="rounded-full bg-primary px-1.5 py-0.5 text-xs font-semibold leading-none text-primary-foreground">
                   {advancedFilterCount}

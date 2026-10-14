@@ -182,7 +182,7 @@ function renderPlotsPage(
   // behaviour — that it starts shut, that it counts the filters it hides, that
   // it keeps applying them while shut — is tested on its own, in the round 32
   // block at the end of this file, which renders WITHOUT this helper.
-  fireEvent.click(screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ }));
+  fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง/ }));
   return result;
 }
 
@@ -1593,8 +1593,8 @@ describe('Plots list — searchable province/crop/variety filters (round 8-18A)'
     await selectCropFilter('พริก');
     await selectVarietyFilter('พริกขี้หนู');
 
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
 
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1690,8 +1690,8 @@ describe('Plots list — "รอบปลูกปัจจุบัน" filter 
 
     expect(await screen.findByText(/รอบปลูก: jun2026/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
 
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalledWith(
       expect.objectContaining({ cycleLabel: 'jun2026' }),
@@ -1797,8 +1797,8 @@ describe('Plots list — "วันที่เริ่ม...ถึง" plantin
     fireEvent.change(screen.getByLabelText('วันที่เริ่ม (จาก)'), { target: { value: '2026-08-01' } });
     await waitFor(() => expect(hasListPlotsCallContaining({ plantingDateFrom: '2026-08-01' })).toBe(true));
 
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
 
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalled());
     const call = downloadPlotImportTemplateMock.mock.calls[0][0] as Record<string, unknown>;
@@ -2248,7 +2248,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   // clickFilteredDownload() opens the menu and picks that one item, exactly
   // reproducing what clicking the old standalone button used to do.
   function downloadTrigger() {
-    return screen.getByRole('button', { name: 'ดาวน์โหลด Excel' });
+    return screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' });
   }
 
   function openDownloadMenu() {
@@ -2256,7 +2256,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
   }
 
   function filteredMenuItem() {
-    return screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' });
+    return screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' });
   }
 
   function clickFilteredDownload() {
@@ -2270,14 +2270,14 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
 
   it('renders the "ดาวน์โหลด Excel" trigger, with "ตามตัวกรองปัจจุบัน" as a menu option (item 11)', async () => {
     renderPlotsPage();
-    expect(await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' })).toBeTruthy();
     openDownloadMenu();
     expect(filteredMenuItem()).toBeTruthy();
   });
 
   it('clicking without a Supplier selected never calls the API (item 12)', async () => {
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
 
     clickFilteredDownload();
 
@@ -2286,7 +2286,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
 
   it('clicking without a Supplier selected shows the Thai guidance message (item 13)', async () => {
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
 
     clickFilteredDownload();
 
@@ -2402,11 +2402,16 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
     await selectSupplierFilter('SUP001');
 
     clickFilteredDownload();
-    // Round 8-6G — pending state now disables the TRIGGER (it shows the
-    // spinner), not a menu item (the menu already auto-closed once
-    // "ตามตัวกรองปัจจุบัน" was clicked, same as any other menu).
-    await waitFor(() => expect((downloadTrigger() as HTMLButtonElement).disabled).toBe(true));
-    fireEvent.click(downloadTrigger()); // disabled -> no-op, menu can't even reopen
+    // Round 40 — the trigger stays live while a download is pending: it now
+    // opens every other action too, and disabling it would block printing a
+    // QR sheet because an unrelated file is still generating. What prevents
+    // the double submit is the ITEM, which is disabled until the download
+    // settles. The trigger shows the spinner.
+    // Reopen ONCE, then poll the DOM. Clicking inside waitFor would retoggle
+    // the menu on every retry and never settle.
+    openDownloadMenu();
+    await waitFor(() => expect((filteredMenuItem() as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(filteredMenuItem()); // disabled -> no-op
 
     resolveDownload(new Blob(['x']));
     await waitFor(() => expect((downloadTrigger() as HTMLButtonElement).disabled).toBe(false));
@@ -2443,7 +2448,7 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
       { id: 'sup-2', code: 'SUP002', name: 'Supplier Two', isActive: true, contactName: null, contactEmail: null },
     ]);
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     clickFilteredDownload(); // no supplier yet -> error
     await screen.findByText('กรุณาเลือก Supplier ก่อนดาวน์โหลด Excel ตามตัวกรอง');
 
@@ -2512,21 +2517,31 @@ describe('Excel ตามตัวกรอง download (round 8-6B)', () => {
     listSuppliersMock.mockResolvedValue([]);
     downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     // No supplier is selectable, so directly exercise the filename builder's
     // fallback via the "no Supplier resolvable" shape: skip UI selection and
     // rely on the guard that requires filterSupplier before mutate() anyway —
     // covered structurally by item 12's test. This test instead confirms the
     // helper text guidance items below don't assume a resolvable supplier.
-    // Round O — this line used to advertise "เริ่มรอบถัดไป" and "เปิดแปลง
-    // พร้อมเริ่มรอบใหม่", the two actions round E's "one plot, one cycle"
-    // policy removed; it now names the three the template really offers.
-    expect(await screen.findByText(/สร้างแปลง\+รอบปลูก/)).toBeTruthy();
+    // Round 40.1 — this used the "เทมเพลตมี 3 แบบ…" banner as its anchor; the
+    // banner is gone (see below). The page itself is the anchor now.
+    expect(await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' })).toBeTruthy();
   });
 
-  it('the helper copy states the one-plot-one-cycle rule (item 28, reworded round O)', async () => {
+  it('round 40.1: the page carries no standing template guidance any more', async () => {
+    // The "เทมเพลตมี 3 แบบ… 1 แปลง = 1 รอบปลูก…" paragraph explained the import
+    // template to every visitor, four lines deep on a phone, directly above
+    // the search box people came for — while the template is now one item
+    // inside the ⋮ menu.
+    //
+    // The RULE itself is not lost, which is the only reason removing the copy
+    // is safe: it is stated at each moment it binds — PlotImportModal while
+    // importing, PlotCycleModals while closing a cycle, and PlotDetail on a
+    // plot whose cycle is already closed.
     renderPlotsPage();
-    expect(await screen.findByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
+    expect(screen.queryByText(/เทมเพลตมี 3 แบบ/)).toBeNull();
+    expect(screen.queryByText(/1 แปลง = 1 รอบปลูก/)).toBeNull();
   });
 
   it('the guidance points at the yellow cells to check (item 29, reworded round O)', async () => {
@@ -2575,7 +2590,7 @@ describe('Excel ตามตัวกรอง — request-state race + error cl
   // Round 8-6G — same helper set as the "round 8-6B" describe block above
   // (duplicated per this file's existing per-describe-block convention).
   function downloadTrigger() {
-    return screen.getByRole('button', { name: 'ดาวน์โหลด Excel' });
+    return screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' });
   }
 
   function openDownloadMenu() {
@@ -2583,7 +2598,7 @@ describe('Excel ตามตัวกรอง — request-state race + error cl
   }
 
   function filteredMenuItem() {
-    return screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' });
+    return screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' });
   }
 
   function clickFilteredDownload() {
@@ -2770,7 +2785,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
   }
 
   function downloadTrigger() {
-    return screen.getByRole('button', { name: 'ดาวน์โหลด Excel' });
+    return screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' });
   }
 
   function openDownloadMenu() {
@@ -2778,11 +2793,11 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
   }
 
   function filteredMenuItem() {
-    return screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' });
+    return screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' });
   }
 
   function allSuppliersMenuItem() {
-    return screen.getByRole('menuitem', { name: 'ทุก Supplier' });
+    return screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ทุก Supplier)' });
   }
 
   beforeEach(() => {
@@ -2794,7 +2809,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
   it('a full-scope Admin sees both download options (item 1)', async () => {
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     expect(filteredMenuItem()).toBeTruthy();
     expect(allSuppliersMenuItem()).toBeTruthy();
@@ -2803,7 +2818,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
   it('farmlog:supervisor also counts as full scope, matching backend _FULL_ACCESS_ROLES', async () => {
     useAuthStore.setState({ user: userWithRoles('farmlog:supervisor') });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     expect(allSuppliersMenuItem()).toBeTruthy();
   });
@@ -2819,14 +2834,26 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     useAuthStore.setState({ user: userWithRoles('supplier:owner') });
     renderPlotsPage();
     await screen.findByText('ไม่พบข้อมูล');
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
+    // Round 40 — the "⋮" trigger itself is always present now: it also holds
+    // the QR actions and the public-page link, which these roles may use. The
+    // gate that matters is that NEITHER download item is in the menu.
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    expect(screen.queryByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'ดาวน์โหลด Excel (ทุก Supplier)' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'นำเข้า Excel' })).toBeNull();
   });
 
   it('a Field Officer never sees "ดาวน์โหลด Excel" at all (item 3)', async () => {
     useAuthStore.setState({ user: userWithRoles('farmlog:field_officer') });
     renderPlotsPage();
     await screen.findByText('ไม่พบข้อมูล');
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
+    // Round 40 — the "⋮" trigger itself is always present now: it also holds
+    // the QR actions and the public-page link, which these roles may use. The
+    // gate that matters is that NEITHER download item is in the menu.
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    expect(screen.queryByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'ดาวน์โหลด Excel (ทุก Supplier)' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'นำเข้า Excel' })).toBeNull();
   });
 
   it('no user loaded yet -> "ดาวน์โหลด Excel" fails closed, not open', async () => {
@@ -2836,7 +2863,13 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     useAuthStore.setState({ user: null });
     renderPlotsPage();
     await screen.findByText('ไม่พบข้อมูล');
-    expect(screen.queryByRole('button', { name: 'ดาวน์โหลด Excel' })).toBeNull();
+    // Round 40 — the "⋮" trigger itself is always present now: it also holds
+    // the QR actions and the public-page link, which these roles may use. The
+    // gate that matters is that NEITHER download item is in the menu.
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    expect(screen.queryByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'ดาวน์โหลด Excel (ทุก Supplier)' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'นำเข้า Excel' })).toBeNull();
   });
 
   it('a Supplier Owner never sees "นำเข้า Excel" either, even holding plots.update', async () => {
@@ -2893,7 +2926,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
     downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     fireEvent.click(allSuppliersMenuItem());
 
@@ -2912,7 +2945,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     let resolveDownload: (blob: Blob) => void = () => {};
     downloadPlotImportTemplateMock.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     fireEvent.click(allSuppliersMenuItem());
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalledTimes(1));
@@ -2934,7 +2967,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
       Object.assign(new Error('ไม่มีสิทธิ์ดาวน์โหลด Excel ทุก Supplier'), { status: 403 }),
     );
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     fireEvent.click(allSuppliersMenuItem());
 
@@ -2948,7 +2981,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
       Object.assign(new Error('ไม่สามารถระบุ Supplier หรือตัวกรองอื่นพร้อมกับการดาวน์โหลดทุก Supplier ได้'), { status: 422 }),
     );
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     fireEvent.click(allSuppliersMenuItem());
 
@@ -2964,7 +2997,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
   // the 2-sheet file and points at the on-screen notice instead.
   it('the menu describes the 2-sheet file and the after-download notice (item 11)', async () => {
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     expect(screen.getByText(/2 ชีต/)).toBeTruthy();
     expect(screen.getByText(/ระบบจะแจ้งหลังดาวน์โหลด/)).toBeTruthy();
@@ -2975,9 +3008,9 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   it('pressing Escape closes the download menu (keyboard support, item 12)', async () => {
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
-    expect(screen.getByRole('menu', { name: 'ดาวน์โหลด Excel' })).toBeTruthy();
+    expect(screen.getByRole('menu', { name: 'การทำงานเพิ่มเติม' })).toBeTruthy();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
@@ -2986,12 +3019,12 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
 
   it('the menu is capped to the viewport width so it cannot force horizontal overflow on mobile (item 12)', async () => {
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     // jsdom has no real layout engine — this asserts the responsive class is
     // present rather than a measured pixel width (see Final Report's Browser
     // QA section for the honest limitation this implies).
-    expect(screen.getByRole('menu', { name: 'ดาวน์โหลด Excel' }).className).toContain('max-w-[90vw]');
+    expect(screen.getByRole('menu', { name: 'การทำงานเพิ่มเติม' }).className).toContain('max-w-[90vw]');
   });
 
   // --- item 13: download never reaches preview/commit ----------------------
@@ -3000,7 +3033,7 @@ describe('ดาวน์โหลด Excel — "ทุก Supplier" all-supplie
     useAuthStore.setState({ user: userWithRoles('internal:admin') });
     downloadPlotImportTemplateMock.mockResolvedValue({ blob: new Blob(['x']), excludedCount: 0 });
     renderPlotsPage();
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     openDownloadMenu();
     fireEvent.click(allSuppliersMenuItem());
     await waitFor(() => expect(downloadBlobMock).toHaveBeenCalled());
@@ -3651,8 +3684,8 @@ describe('Plots list — secure phone search (round 8-17A.2)', () => {
     // instead of claiming "ตัวกรองอื่นที่เลือกไว้ทั้งหมด".
     expect(await screen.findByText(/Template ใช้ตัวกรอง.*ไม่ใช้หมายเลขสำหรับเข้าตรวจ/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalled());
     const call = downloadPlotImportTemplateMock.mock.calls[0][0] as Record<string, unknown>;
     expect(JSON.stringify(call)).not.toContain('0812345678');
@@ -3858,8 +3891,8 @@ describe('Plots list — split identity/access-number search (round 8-18B)', () 
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา' }));
     await waitFor(() => expect(searchPlotsByPhoneMock).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
 
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalled());
     const call = downloadPlotImportTemplateMock.mock.calls[0][0] as Record<string, unknown>;
@@ -4125,8 +4158,8 @@ describe('Plots list — partial identity/access-number search (round 8-18B.1)',
     fireEvent.click(screen.getByRole('button', { name: 'ค้นหา' }));
     await waitFor(() => expect(searchPlotsByPhoneMock).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
 
     await waitFor(() => expect(downloadPlotImportTemplateMock).toHaveBeenCalled());
     const call = downloadPlotImportTemplateMock.mock.calls[0][0] as Record<string, unknown>;
@@ -4150,7 +4183,11 @@ describe('Plots list — public inspect shortcut (round 8-25I)', () => {
     renderPlotsPage();
     await screen.findByText('SUP001-P001');
 
-    const link = screen.getByRole('link', { name: /เปิดหน้าตรวจแปลง \(Public\)/ });
+    // Round 40 — moved into the "⋮" menu, so it carries role="menuitem"
+    // (correct ARIA inside a menu) rather than the implicit link role. It is
+    // still an <a>, and the attributes below are what actually matter.
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    const link = screen.getByRole('menuitem', { name: /เปิดหน้าตรวจแปลง \(Public\)/ });
     expect(link.getAttribute('href')).toBe('/public/inspect');
     expect(link.getAttribute('target')).toBe('_blank');
     // rel="noopener noreferrer" — a target="_blank" link without it lets the
@@ -4161,8 +4198,8 @@ describe('Plots list — public inspect shortcut (round 8-25I)', () => {
 
 describe('Plots — round 8-27E: excluded plots are reported on screen, not in a sheet', () => {
   function clickFilteredDownload() {
-    fireEvent.click(screen.getByRole('button', { name: 'ดาวน์โหลด Excel' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ตามตัวกรองปัจจุบัน' }));
+    fireEvent.click(screen.getByRole('button', { name: 'การทำงานเพิ่มเติม' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'ดาวน์โหลด Excel (ตามตัวกรอง)' }));
   }
 
   async function download() {
@@ -4172,7 +4209,7 @@ describe('Plots — round 8-27E: excluded plots are reported on screen, not in a
     // selected (round 8-6B item 12), so pick one first.
     fireEvent.click(await screen.findByRole('button', { name: 'กรอง Supplier' }));
     await clickOptionContaining('SUP001');
-    await screen.findByRole('button', { name: 'ดาวน์โหลด Excel' });
+    await screen.findByRole('button', { name: 'การทำงานเพิ่มเติม' });
     clickFilteredDownload();
   }
 
@@ -4344,9 +4381,12 @@ describe('Plots — cycle status column and filter (round O)', () => {
     renderPlotsPage();
     await screen.findByText('SUP001-P001');
 
+    // The guarantee round O added: this page must never again advertise the
+    // two actions "one plot, one cycle" took away. Still true, and now
+    // trivially so — round 40.1 removed the paragraph that carried both the
+    // retired wording and its replacement.
     expect(screen.queryByText(/เริ่มรอบถัดไป/)).toBeNull();
     expect(screen.queryByText(/เปิดแปลงพร้อมเริ่มรอบใหม่/)).toBeNull();
-    expect(screen.getByText(/1 แปลง = 1 รอบปลูก/)).toBeTruthy();
   });
 });
 
@@ -4470,7 +4510,7 @@ describe('Plots list — one search box, the rest behind ตัวกรอง�
   }
 
   function toggle() {
-    return screen.getByRole('button', { name: /ตัวกรองเพิ่มเติม/ });
+    return screen.getByRole('button', { name: /ตัวกรอง/ });
   }
 
   const INVOICE_BOX = /ค้นหาบางส่วนได้ · ค้นรอบที่ปิดแล้วด้วย/;

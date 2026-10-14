@@ -24,7 +24,11 @@ export function TopBar() {
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b-2 border-accent bg-card px-4 shadow-sm sm:px-6">
-      <div className="flex items-center gap-2">
+      {/* min-w-0 lets the app name below shrink instead of forcing the row
+          wider than the viewport. Without it a flex child refuses to go below
+          its content width, which is what pushed "SRM FieldInspect UAT" onto
+          three lines on a 360px phone. */}
+      <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"
           onClick={toggleMobileNav}
@@ -45,7 +49,10 @@ export function TopBar() {
             ? <PanelLeftOpen className="h-5 w-5" />
             : <PanelLeftClose className="h-5 w-5" />}
         </button>
-        <span className="text-lg font-semibold text-primary">{APP_NAME}</span>
+        {/* truncate, never wrap: a long APP_NAME (UAT and PROD carry different
+            ones) must cost one line and an ellipsis, not three lines of a
+            14px-tall bar. One step smaller on phones to delay that ellipsis. */}
+        <span className="truncate text-base font-semibold text-primary sm:text-lg">{APP_NAME}</span>
       </div>
       <div className="flex items-center gap-1">
         <button

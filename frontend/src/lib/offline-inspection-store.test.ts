@@ -83,11 +83,11 @@ afterEach(() => {
 });
 
 describe('openOfflineInspectionDb', () => {
-  it('opens/creates the database at version 3 with the documented store + indexes (round 8-4H)', async () => {
+  it('opens/creates the database at version 4 with the documented store + indexes (round 8-4H, bumped round 37)', async () => {
     const db = await openOfflineInspectionDb();
     expect(db.name).toBe(OFFLINE_DB_NAME);
-    expect(db.version).toBe(3);
-    expect(OFFLINE_DB_VERSION).toBe(3);
+    expect(db.version).toBe(4);
+    expect(OFFLINE_DB_VERSION).toBe(4);
     expect(db.objectStoreNames.contains(OFFLINE_STORE_NAME)).toBe(true);
 
     const tx = db.transaction(OFFLINE_STORE_NAME, 'readonly');
@@ -635,7 +635,7 @@ function accessPlot(overrides: Partial<PublicPhoneAccessPlot> = {}): PublicPhone
     supplierId: 'sup-1', supplierCode: 'SUP001', supplierName: 'Supplier One',
     accessType: 'primary', canInspect: true, unavailableReason: null,
     plotCycleId: 'cycle-1', cycleNo: 2, cycleLabel: 'jun2026',
-    crop: 'พริก', variety: 'พริกขี้หนู', inspectedToday: false,
+    crop: 'พริก', inspectedToday: false,
     lastInspectionDate: null, lastInspectedAt: null,
     lotNo: 'LOT-01', plantingDate: '2026-01-01',
     plantCount: 100, expectedYieldFull: '500', expectedYieldUnit: 'กก.',
@@ -856,6 +856,10 @@ describe('Round 8-4H security — no forbidden field ever appears in a serialize
       phone: REAL_PHONE_FOR_TEST,
       phoneAccessSessionToken: 'phone-tok-should-not-persist',
       qrKey: 'qr-secret-should-not-persist',
+      // Round 37 — simulate a server that still sends พันธุ์ (an older
+      // deployment, or a regression). The cache builder must drop it on the
+      // way to disk regardless of what arrives.
+      variety: 'พริกขี้หนู',
     } as unknown as PublicPhoneAccessPlot;
 
     const cache = buildOfflinePublicAccessCache({
@@ -868,8 +872,13 @@ describe('Round 8-4H security — no forbidden field ever appears in a serialize
       'crop', 'currentStage', 'currentYieldPct', 'cycleLabel', 'cycleNo',
       'expectedYieldFull', 'expectedYieldUnit', 'inspectedToday', 'lastInspectedAt',
       'lotNo', 'plantCount', 'plantingDate', 'plotCode', 'plotCycleId', 'plotId',
-      'plotName', 'supplierCode', 'supplierId', 'supplierName', 'variety',
+      'plotName', 'supplierCode', 'supplierId', 'supplierName',
     ].sort());
+    // Round 37 — พันธุ์ must never be written to a device again. It is listed
+    // separately from the allowlist above so a future edit that re-adds it
+    // fails on a line that says why.
+    expect(keys).not.toContain('variety');
+    expect(JSON.stringify(cache)).not.toContain('พริกขี้หนู');
     const raw = JSON.stringify(cache);
     expect(raw).not.toContain(REAL_PHONE_FOR_TEST);
     expect(raw).not.toContain('phone-tok-should-not-persist');
@@ -920,7 +929,7 @@ describe('V2 -> V3 migration (round 8-4H)', () => {
 
     const db = await openOfflineInspectionDb();
 
-    expect(db.version).toBe(3);
+    expect(db.version).toBe(4);
     expect(db.objectStoreNames.contains(OFFLINE_STORE_NAME)).toBe(true);
     expect(db.objectStoreNames.contains(OFFLINE_PUBLIC_ACCESS_CACHE_STORE_NAME)).toBe(true);
     const tx = db.transaction(OFFLINE_STORE_NAME, 'readonly');
@@ -929,9 +938,9 @@ describe('V2 -> V3 migration (round 8-4H)', () => {
     expect(await countOfflineInspectionDrafts()).toBe(1);
   });
 
-  it('a fresh (never-opened) database lands directly on V3 with both stores present', async () => {
+  it('a fresh (never-opened) database lands directly on the current version with both stores present', async () => {
     const db = await openOfflineInspectionDb();
-    expect(db.version).toBe(3);
+    expect(db.version).toBe(4);
     expect(db.objectStoreNames.contains(OFFLINE_STORE_NAME)).toBe(true);
     expect(db.objectStoreNames.contains(OFFLINE_PUBLIC_ACCESS_CACHE_STORE_NAME)).toBe(true);
   });

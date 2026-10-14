@@ -1653,9 +1653,10 @@ export function Plots() {
           {/* Round O — the SEASON axis, next to the plot-service axis above.
               Two dropdowns that sound alike, so both keep their prefix in
               every option: "สถานะแปลง" is whether the plot is in service,
-              "สถานะรอบ" is where its season stands. (Prefixed "สถานะรอบ", not
-              "รอบปลูก", so the option text cannot be mistaken for a row's
-              "ปลูก: <date>" cell by a text query.) */}
+              "สถานะรอบ" is where its season stands. (The prefix was also
+              chosen so the option text could not be mistaken, by a text query,
+              for the row's old "ปลูก: <date>" cell — round 36 removed that
+              cell, so only the first reason still applies.) */}
           <select
             aria-label="กรองสถานะรอบปลูก"
             value={filterCycleStatus}

@@ -59,7 +59,10 @@ import type { InspectionProtocolResponse } from '../api/inspectionProtocols';
 import type { PublicMasterDataItem } from '../api/publicMasterdata';
 
 export const OFFLINE_DB_NAME = 'srm-fieldinspect-offline';
-export const OFFLINE_DB_VERSION = 3;
+// Round 37 — bumped to 4 to drop the cached พันธุ์ from devices that already
+// hold it. A type change alone would not do that: the rows are already on
+// disk. See the V3 -> V4 branch in openDb.
+export const OFFLINE_DB_VERSION = 4;
 export const OFFLINE_STORE_NAME = 'inspection_drafts';
 /** Round 8-4H — second object store in the SAME database (see module
  * docstring). Independent of inspection_drafts: clearing one never touches
@@ -300,6 +303,24 @@ function openDatabase(): Promise<IDBDatabase> {
       // blocked draft survives byte-for-byte across this upgrade.
       if (!db.objectStoreNames.contains(OFFLINE_PUBLIC_ACCESS_CACHE_STORE_NAME)) {
         db.createObjectStore(OFFLINE_PUBLIC_ACCESS_CACHE_STORE_NAME, { keyPath: 'id' });
+      }
+
+      // Round 37 — V3 -> V4: the cached plot list used to carry `variety`, so
+      // every device that has opened this flow is holding Chiatai-internal
+      // data in IndexedDB. Dropping the field from the TYPE would not remove
+      // what is already written, so the cache is cleared outright.
+      //
+      // Clearing is safe here and ONLY here: public_access_cache is a
+      // refetchable snapshot, rebuilt on the next online lookup. The cost is
+      // one online fetch. inspection_drafts is deliberately NOT touched — it
+      // holds records the user has captured and not yet sent, and losing
+      // those to a privacy cleanup would be a far worse bug than the one
+      // being fixed. Old drafts keep their own `variety` on disk; nothing
+      // reads or sends it any more (round 20.2 keeps it out of the payload,
+      // and round 37 removed the last place that printed it).
+      if (event.oldVersion > 0 && event.oldVersion < 4
+          && db.objectStoreNames.contains(OFFLINE_PUBLIC_ACCESS_CACHE_STORE_NAME)) {
+        request.transaction!.objectStore(OFFLINE_PUBLIC_ACCESS_CACHE_STORE_NAME).clear();
       }
     };
 
@@ -687,7 +708,6 @@ export interface OfflineCachedPlot {
   cycleNo: number;
   cycleLabel: string | null;
   crop: string | null;
-  variety: string | null;
   lotNo: string | null;
   plantingDate: string | null;
   plantCount: number | null;
@@ -775,7 +795,6 @@ export function buildOfflinePublicAccessCache(input: {
       cycleNo: p.cycleNo as number,
       cycleLabel: p.cycleLabel,
       crop: p.crop,
-      variety: p.variety,
       lotNo: p.lotNo,
       plantingDate: p.plantingDate,
       plantCount: p.plantCount,

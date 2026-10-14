@@ -128,7 +128,14 @@ BK=/opt/uat_SRM_backup_\$STAMP
 mkdir -p "\$BK"
 E=${UAT_DIR}/backend/.env
 
-# LESSON 1 — read keys, never `source`: values contain spaces.
+# LESSON 1 — read keys, never "source": values contain spaces.
+# (Round 37: those two words used to be wrapped in BACKTICKS. This heredoc
+#  is unquoted, so the local shell expands it before the host ever sees it
+#  — and it does that inside comments too. Every deploy therefore ran a
+#  bare 'source' on the DEPLOYER'S machine and printed
+#  "line 124: source: filename argument required". Harmless as written,
+#  and a loaded gun the day someone puts a real command in one of these
+#  comments. No backticks anywhere between <<REMOTE and REMOTE.)
 g() { grep -m1 "^\$1=" "\$E" | cut -d= -f2- ; }
 DB_HOST=\$(g DB_HOST); DB_PORT=\$(g DB_PORT); DB_NAME=\$(g DB_NAME)
 OWNER=\$(g DB_USER);   OWNER_PW=\$(g DB_PASSWORD)
@@ -377,3 +384,29 @@ post_deploy_checks
 say "DONE — $SHA is live"
 echo "rollback with:  ./deploy-uat.sh rollback"
 echo "backup dir   :  /opt/uat_SRM_backup_${STAMP}"
+
+# ---------------------------------------------------------- housekeeping --
+# Round 37 — this script tags a rollback image and writes a backup directory on
+# EVERY run and has never removed either, so both grow without bound: by
+# 2026-10-12 that was 46 image tags back to 7 Sep and 30 backup folders, while
+# rollback only ever goes ONE step. Our images were the second-largest consumer
+# on a shared box purely on tag count.
+#
+# This REPORTS and does not delete, deliberately. A deploy script is the worst
+# possible place to discover an over-eager `docker rmi`, and the one directory
+# here that cannot be regenerated is a backup. Read the numbers, then prune by
+# hand when they bother you.
+housekeeping_report() {
+    say "HOUSEKEEPING (report only — nothing is deleted)"
+    sshu bash -s <<'REMOTE' || true
+set -uo pipefail
+backups=$(ls -d /opt/uat_SRM_backup_* 2>/dev/null | wc -l)
+oldest=$(ls -d /opt/uat_SRM_backup_* 2>/dev/null | sort | head -1)
+size=$(du -shc /opt/uat_SRM_backup_* 2>/dev/null | tail -1 | cut -f1)
+tags=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -c '^uat_srm-.*:rollback_' || true)
+printf '           backup dirs : %s (%s, oldest %s)\n' "$backups" "${size:-?}" "${oldest:-none}"
+printf '           rollback tags: %s\n' "$tags"
+printf '           disk         : %s\n' "$(df -h / | awk 'NR==2 {print $4" free of "$2" ("$5" used)"}')"
+REMOTE
+}
+housekeeping_report

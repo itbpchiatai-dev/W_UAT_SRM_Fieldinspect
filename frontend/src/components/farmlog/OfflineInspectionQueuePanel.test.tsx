@@ -72,13 +72,16 @@ describe('OfflineInspectionQueuePanel — list', () => {
     expect(await screen.findByText('ไม่มีรายการรอส่ง')).toBeTruthy();
   });
 
-  it('lists a draft with plotCode/plotName, cycle, crop/variety, lot, captured time, photo count, and a "รอส่ง" badge', async () => {
+  it('lists a draft with plotCode/plotName, cycle, crop, lot, captured time, photo count, and a "รอส่ง" badge', async () => {
     await putOfflineInspectionDraft(draftFor());
     render(<OfflineInspectionQueuePanel isOnline={true} onClose={() => {}} onQueueChanged={() => {}} />);
 
     expect(await screen.findByText('PLOT001 — Plot One')).toBeTruthy();
     expect(screen.getByText(/jun2026/)).toBeTruthy();
-    expect(screen.getByText(/พริก \(พริกขี้หนู\)/)).toBeTruthy();
+    expect(screen.getByText(/พริก/)).toBeTruthy();
+    // Round 37 — the queue used to print "พริก (พริกขี้หนู)". A draft captured
+    // before this round still has the variety on disk; it must not be shown.
+    expect(document.body.textContent).not.toContain('พริกขี้หนู');
     expect(screen.getByText('Lot: LOT-01')).toBeTruthy();
     expect(screen.getByText(/0 รูป/)).toBeTruthy();
     expect(screen.getByText('รอส่ง')).toBeTruthy();

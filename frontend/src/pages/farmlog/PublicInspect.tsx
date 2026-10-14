@@ -662,7 +662,6 @@ export function PublicInspect() {
         || p.supplierName.toLowerCase().includes(q)
         || (p.cycleLabel ?? '').toLowerCase().includes(q)
         || (p.crop ?? '').toLowerCase().includes(q)
-        || (p.variety ?? '').toLowerCase().includes(q)
         || (p.lotNo ?? '').toLowerCase().includes(q)
       ))
       : [...base];
@@ -1498,16 +1497,15 @@ export function PublicInspect() {
                   <dt className="text-xs text-gray-400">ชนิดพืช</dt>
                   <dd className="text-gray-700">{plotInfo?.currentCrop || emptyText}</dd>
                 </div>
-                {/* Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only.
-                    This flow has no login/roles at all — inspectorType is
-                    the self-declared stand-in ("เข้าตรวจในฐานะ" above), so
-                    the gate is simply "chiatai" vs anything else. */}
-                {selectedInspectorType === 'chiatai' && (
-                  <div>
-                    <dt className="text-xs text-gray-400">พันธุ์/สายพันธุ์</dt>
-                    <dd className="text-gray-700">{plotInfo?.currentVariety || emptyText}</dd>
-                  </div>
-                )}
+                {/* Round 37 — พันธุ์/สายพันธุ์ is gone from this flow entirely.
+                    It used to render behind `selectedInspectorType === 'chiatai'`,
+                    which reads like a gate and is not one: "เข้าตรวจในฐานะ" is
+                    three buttons the visitor picks for themselves on an
+                    unauthenticated page, so anyone who wanted the variety only
+                    had to choose Chiatai. The backend no longer sends it
+                    either, so there is nothing left to gate. The logged-in
+                    admin web is the only place it is readable (round 8-25O's
+                    canViewVariety, which IS backed by roles). */}
                 <div>
                   <dt className="text-xs text-gray-400">เลขล็อต (Lot No.)</dt>
                   <dd className="text-gray-700">{plotInfo?.currentLotNo || emptyText}</dd>

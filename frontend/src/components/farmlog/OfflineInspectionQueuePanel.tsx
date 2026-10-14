@@ -337,7 +337,7 @@ export function OfflineInspectionQueuePanel({ onClose, onQueueChanged, isOnline 
                         <p className="truncate font-semibold text-gray-900">{d.plotCode} — {d.plotName}</p>
                         <p className="truncate text-xs text-gray-500">
                           {cycleName(d)}
-                          {d.crop ? ` · ${d.crop}` : ''}{d.variety ? ` (${d.variety})` : ''}
+                          {d.crop ? ` · ${d.crop}` : ''}
                         </p>
                         {d.lotNo && <p className="text-xs text-gray-500">Lot: {d.lotNo}</p>}
                         <p className="mt-1 text-xs text-gray-400">

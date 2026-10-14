@@ -112,7 +112,7 @@ function plotItem(overrides: Partial<PublicPhoneAccessPlot> = {}): PublicPhoneAc
     supplierId: 'sup-1', supplierCode: 'SUP001', supplierName: 'Supplier One',
     accessType: 'primary', canInspect: true, unavailableReason: null,
     plotCycleId: 'cycle-1', cycleNo: 2, cycleLabel: 'jun2026',
-    crop: 'พริก', variety: 'พริกขี้หนู', inspectedToday: false,
+    crop: 'พริก', inspectedToday: false,
     lastInspectionDate: null, lastInspectedAt: null,
     lotNo: null, plantingDate: null,
     plantCount: 100, expectedYieldFull: '500', expectedYieldUnit: 'กก.',
@@ -131,7 +131,7 @@ function selectResult(overrides: Partial<PublicSelectPlotResult> = {}): PublicSe
     plotId: 'plot-1', plotCode: 'PLOT001', plotName: 'Plot One',
     supplierId: 'sup-1', supplierCode: 'SUP001', supplierName: 'Supplier One',
     plotCycleId: 'cycle-1', cycleNo: 2, cycleLabel: 'jun2026',
-    currentCrop: 'พริก', currentVariety: 'พริกขี้หนู', currentLotNo: 'LOT-01',
+    currentCrop: 'พริก', currentLotNo: 'LOT-01',
     currentPlantingDate: '2026-01-01', plantCount: 100,
     // Round 8-8B — must be the real "kg" unit literal (backend's
     // _KG_FACTOR/frontend's KG_FACTOR only recognise "kg"/"g"/"ตัน"), not
@@ -893,11 +893,7 @@ describe('PublicInspect — QR entry', () => {
 // --- Form step (Part F) ------------------------------------------------------
 
 describe('PublicInspect — inspection form (read-only Plot/Cycle, phone hidden)', () => {
-  it('shows read-only Supplier/Plot/Cycle/crop/variety/lot/planting-date/yield-plan', async () => {
-    // Round 8-25O — พันธุ์/สายพันธุ์ is Chiatai-internal-only; this test
-    // asserts it IS shown, so it must go through as "Chiatai" specifically
-    // (goToFormStep's default role is "เกษตรกร", which now hides it — see
-    // the dedicated hide test below).
+  it('shows read-only Supplier/Plot/Cycle/crop/lot/planting-date/yield-plan', async () => {
     renderPublicInspect();
     await enterPhoneAndLookup();
     await pickRoleAndPlot('Chiatai');
@@ -906,18 +902,32 @@ describe('PublicInspect — inspection form (read-only Plot/Cycle, phone hidden)
     expect(screen.getByText(/PLOT001 — Plot One/)).toBeTruthy();
     expect(screen.getByText('jun2026')).toBeTruthy();
     expect(screen.getByText('พริก')).toBeTruthy();
-    expect(screen.getByText('พริกขี้หนู')).toBeTruthy();
     expect(screen.getByText('LOT-01')).toBeTruthy();
     expect(screen.getByText('2026-01-01')).toBeTruthy();
     expect(screen.getByText(/500\.00/)).toBeTruthy();
   });
 
-  it('hides พันธุ์/สายพันธุ์ for เกษตรกร/บริษัทผู้ผลิต — only Chiatai sees it', async () => {
+  it('round 37: hides พันธุ์/สายพันธุ์ from EVERY role, Chiatai included', async () => {
+    // This used to read "only Chiatai sees it", gated on
+    // selectedInspectorType === 'chiatai'. That is not a gate: "เข้าตรวจในฐานะ"
+    // is three buttons an anonymous visitor picks for themselves, so anyone
+    // who wanted the variety only had to choose Chiatai. It is now absent for
+    // all three, and the backend does not send it either.
+    renderPublicInspect();
+    await enterPhoneAndLookup();
+    await pickRoleAndPlot('Chiatai');
+
+    expect(screen.getByText('พริก')).toBeTruthy();
+    expect(screen.queryByText('พันธุ์/สายพันธุ์')).toBeNull();
+    expect(document.body.textContent).not.toContain('พริกขี้หนู');
+  });
+
+  it('round 37: hides it for เกษตรกร too', async () => {
     await goToFormStep(); // default role is "เกษตรกร"
 
     expect(screen.getByText('พริก')).toBeTruthy();
-    expect(screen.queryByText('พริกขี้หนู')).toBeNull();
     expect(screen.queryByText('พันธุ์/สายพันธุ์')).toBeNull();
+    expect(document.body.textContent).not.toContain('พริกขี้หนู');
   });
 
   it('round 8-3K: labels the Lot No. field clearly as "เลขล็อต (Lot No.)"', async () => {
@@ -2159,7 +2169,7 @@ describe('PublicInspect — PublicInspectionPlotContext has no token field (roun
       plotId: 'plot-1', plotCode: 'PLOT001', plotName: 'Plot One',
       supplierId: 'sup-1', supplierCode: 'SUP001', supplierName: 'Supplier One',
       plotCycleId: 'cycle-1', cycleNo: 1, cycleLabel: null,
-      currentCrop: null, currentVariety: null, currentLotNo: null, currentPlantingDate: null,
+      currentCrop: null, currentLotNo: null, currentPlantingDate: null,
       plantCount: null, expectedYieldFull: null, expectedYieldUnit: null,
       currentYieldPct: null, currentStage: null, lastInspectedAt: null,
     };

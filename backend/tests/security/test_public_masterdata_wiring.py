@@ -59,15 +59,33 @@ def test_endpoint_is_rate_limited() -> None:
     assert "from app.core.rate_limit import limiter" in src
 
 
-def test_type_allowlist_contains_exactly_the_four_intended_categories() -> None:
+def test_type_allowlist_contains_exactly_the_intended_categories() -> None:
     import typing
 
     args = typing.get_args(public_masterdata_module.PublicMasterDataType)
-    assert set(args) == {"crop", "variety", "growth_stage", "weather"}
+    assert set(args) == {"crop", "growth_stage", "weather"}
     # Internal-only categories (MasterData.tsx admin still manages these)
     # must never be reachable unauthenticated.
     for internal_only in ("level", "severity", "irrigation", "fertilizer"):
         assert internal_only not in args
+
+
+def test_variety_is_not_reachable_unauthenticated() -> None:
+    """Round 37 — พันธุ์/สายพันธุ์ is Chiatai-internal (round 8-25O).
+
+    It used to sit in this allowlist, which let anyone page the entire variety
+    taxonomy out of master_data with one unauthenticated GET. The public form
+    never wanted it: PublicInspect renders PublicMasterDataButtons only for
+    growth_stage and weather, and round 20.2 had already made crop/variety
+    plot MASTER data the public flow cannot edit.
+
+    Asserted on the Literal itself, so FastAPI rejects `?type=variety` with a
+    422 before the handler body runs — there is no code path left to audit.
+    """
+    import typing
+
+    args = typing.get_args(public_masterdata_module.PublicMasterDataType)
+    assert "variety" not in args
 
 
 def test_active_only_is_hardcoded_true_not_a_request_parameter() -> None:

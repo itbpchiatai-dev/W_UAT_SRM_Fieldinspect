@@ -62,7 +62,10 @@ export interface PublicPhoneAccessPlot {
   cycleNo: number | null;
   cycleLabel: string | null;
   crop: string | null;
-  variety: string | null;
+  /** Round 37 — `variety` is deliberately absent. พันธุ์/สายพันธุ์ is
+   * Chiatai-internal (round 8-25O) and the backend no longer sends it on this
+   * unauthenticated channel at all, so there is nothing here to render, cache
+   * or search. Read it in the logged-in admin web instead. */
   /** Round 8-19 — plot+ACTIVE-CYCLE level, not per access phone: true when
    * the active cycle has an active record dated today, whichever authorized
    * number made it. Every number on a plot therefore sees the same status. */
@@ -173,7 +176,10 @@ export interface PublicSelectPlotResult {
   cycleNo: number;
   cycleLabel: string | null;
   currentCrop: string | null;
-  currentVariety: string | null;
+  /** Round 37 — `variety` is deliberately absent. พันธุ์/สายพันธุ์ is
+   * Chiatai-internal (round 8-25O) and the backend no longer sends it on this
+   * unauthenticated channel at all, so there is nothing here to render, cache
+   * or search. Read it in the logged-in admin web instead. */
   currentLotNo: string | null;
   currentPlantingDate: string | null;
   plantCount: number | null;

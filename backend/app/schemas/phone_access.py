@@ -115,7 +115,13 @@ class PublicPhoneAccessPlotItem(CamelBaseModel):
     cycle_no: int | None = None
     cycle_label: str | None = None
     crop: str | None = None
-    variety: str | None = None
+    # Round 37 — พันธุ์/สายพันธุ์ is Chiatai-internal data and is NOT sent on
+    # the unauthenticated channel. Removing the FIELD, rather than nulling it,
+    # is deliberate: a field that still exists is one a later edit can quietly
+    # start populating again. The logged-in admin web is the only place it is
+    # read (see canViewVariety / round 8-25O). The cycle's variety is still
+    # stamped onto the record server-side in public_records.py — that is a
+    # write the client never sees, and it must keep working.
     # Round 8-19 — inspectedToday is now PLOT+CYCLE level, not per-access-row:
     # it is true when the plot's ACTIVE cycle has an active record dated today,
     # no matter which of the plot's authorized numbers made it. It used to be
@@ -194,7 +200,13 @@ class PublicPhoneAccessSelectPlotResponse(CamelBaseModel):
     cycle_no: int
     cycle_label: str | None = None
     current_crop: str | None = None
-    current_variety: str | None = None
+    # Round 37 — พันธุ์/สายพันธุ์ is Chiatai-internal data and is NOT sent on
+    # the unauthenticated channel. Removing the FIELD, rather than nulling it,
+    # is deliberate: a field that still exists is one a later edit can quietly
+    # start populating again. The logged-in admin web is the only place it is
+    # read (see canViewVariety / round 8-25O). The cycle's variety is still
+    # stamped onto the record server-side in public_records.py — that is a
+    # write the client never sees, and it must keep working.
     current_lot_no: str | None = None
     current_planting_date: date | None = None
     plant_count: int | None = None

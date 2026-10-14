@@ -13,7 +13,10 @@
  */
 import { publicApiClient } from './publicInspection';
 
-export type PublicMasterDataType = 'crop' | 'variety' | 'growth_stage' | 'weather';
+// Round 37 — 'variety' removed: the backend's Literal no longer accepts it
+// (api/v1/public_masterdata.py), so asking for it would 422. The public form
+// only ever requests growth_stage and weather.
+export type PublicMasterDataType = 'crop' | 'growth_stage' | 'weather';
 
 export interface PublicMasterDataItem {
   value: string;

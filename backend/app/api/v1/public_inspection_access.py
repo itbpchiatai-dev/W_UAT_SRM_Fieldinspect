@@ -103,7 +103,7 @@ def _plot_item(access_row, plot, supplier, latest_dates) -> PublicPhoneAccessPlo
 
     Round 8-4C.1 Part E: EVERY cycle/yield-plan/inspection-derived field below
     is null whenever the plot has no active cycle right now — not just the
-    active-cycle-owned ones (crop/variety/lot_no/planting_date/plant_count/
+    active-cycle-owned ones (crop/lot_no/planting_date/plant_count/
     expected_yield_*), but ALSO the Plot-owned inspection snapshot
     (current_yield_pct/current_stage/last_inspected_at). Round 8-4C originally
     left the snapshot trio unconditional (matching the pre-existing
@@ -138,7 +138,6 @@ def _plot_item(access_row, plot, supplier, latest_dates) -> PublicPhoneAccessPlo
         cycle_no=cycle.cycle_no if cycle is not None else None,
         cycle_label=cycle.cycle_label if cycle is not None else None,
         crop=cycle.crop if cycle is not None else None,
-        variety=cycle.variety if cycle is not None else None,
         inspected_today=last_inspection_date == _today(),
         last_inspection_date=last_inspection_date,
         last_inspected_at=getattr(current_snapshot, "last_inspected_at", None),
@@ -652,7 +651,6 @@ async def phone_access_select_plot(
         cycle_no=cycle.cycle_no,
         cycle_label=cycle.cycle_label,
         current_crop=cycle.crop,
-        current_variety=cycle.variety,
         current_lot_no=cycle.lot_no,
         current_planting_date=cycle.planting_date,
         plant_count=cycle.plant_count,

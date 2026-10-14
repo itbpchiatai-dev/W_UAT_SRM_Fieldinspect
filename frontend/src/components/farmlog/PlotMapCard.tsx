@@ -12,6 +12,7 @@ import { MapPin } from 'lucide-react';
 import { listPlots, type PlotSummary } from '../../api/plots';
 import { fetchAllPages } from '../../lib/paginate';
 import { ThailandPlotMap } from './ThailandPlotMap';
+import { normalizeProvinceName } from './provinceLocator';
 import { cropColor } from './cropColor';
 
 const PAGE_SIZE = 200;
@@ -40,7 +41,15 @@ export function PlotMapCard() {
   // Filter option lists derived from the full dataset (not the filtered
   // view), so choosing one filter never empties the others' menus.
   const cropOptions = useMemo(() => uniqueSorted(plots.map((p) => p.currentCrop)), [plots]);
-  const provinceOptions = useMemo(() => uniqueSorted(plots.map((p) => p.province)), [plots]);
+  // Round 38 — normalised before de-duplicating. The same province reaches
+  // this list spelled two ways ("จ.ขอนแก่น" and "ขอนแก่น" on UAT, 157 plots and
+  // 30), because the Plots form writes the master_data value while the Excel
+  // import never checked the field. Unnormalised, the filter offered BOTH as
+  // separate options and either choice hid most of the province.
+  const provinceOptions = useMemo(
+    () => uniqueSorted(plots.map((p) => normalizeProvinceName(p.province) || null)),
+    [plots],
+  );
   const suppliers = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of plots) {
@@ -61,7 +70,7 @@ export function PlotMapCard() {
         (p: PlotSummary) =>
           (crop === '' || (p.currentCrop ?? '') === crop) &&
           (supplierId === '' || p.supplierId === supplierId) &&
-          (province === '' || (p.province ?? '') === province),
+          (province === '' || normalizeProvinceName(p.province) === province),
       ),
     [plots, crop, supplierId, province],
   );

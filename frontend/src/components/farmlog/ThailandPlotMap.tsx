@@ -35,12 +35,26 @@ import {
   isWithinThailand,
   projectLngLat,
 } from './thailandGeo';
+import { locateProvince } from './provinceLocator';
 
 interface PlacedPlot {
   plot: PlotSummary;
   x: number;
   y: number;
   color: string;
+}
+
+/**
+ * Round 38 — a province-level marker, standing for plots that have no usable
+ * coordinate of their own. It is drawn differently from a plot dot on purpose:
+ * it says "this many plots are somewhere in this province", which is a weaker
+ * claim than a dot, and the two must never be mistaken for each other.
+ */
+interface ProvinceBubble {
+  thaiName: string;
+  x: number;
+  y: number;
+  plots: PlotSummary[];
 }
 
 interface HoverState {
@@ -71,6 +85,7 @@ export interface ThailandPlotMapProps {
 export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
   const [hover, setHover] = useState<HoverState | null>(null);
   const [selected, setSelected] = useState<PlacedPlot | null>(null);
+  const [selectedProvince, setSelectedProvince] = useState<string | null>(null);
   const [view, setView] = useState<ViewBox>(FULL_VIEW);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<{
@@ -88,20 +103,35 @@ export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
   // Project only plots with a valid coordinate inside Thailand's bbox — a
   // missing/out-of-range point is counted separately rather than drawn
   // off-canvas.
-  const { placed, skipped } = useMemo(() => {
+  const { placed, bubbles, unplaceable } = useMemo(() => {
     const out: PlacedPlot[] = [];
-    let skip = 0;
+    // Round 38 — a plot with no coordinate is no longer simply counted and
+    // dropped. On real data that was the whole map: of 738 active plots on
+    // UAT, 738 have no coordinate, so this view showed nothing at all. Such a
+    // plot still knows its province, which is a true if coarser answer.
+    const byProvince = new Map<string, ProvinceBubble>();
+    let lost = 0;
     for (const plot of plots) {
       const lng = toNumberOrNull(plot.longitude);
       const lat = toNumberOrNull(plot.latitude);
-      if (lng == null || lat == null || !isWithinThailand(lng, lat)) {
-        skip++;
+      if (lng != null && lat != null && isWithinThailand(lng, lat)) {
+        const { x, y } = projectLngLat(lng, lat);
+        out.push({ plot, x, y, color: cropColor(plot.currentCrop) });
         continue;
       }
-      const { x, y } = projectLngLat(lng, lat);
-      out.push({ plot, x, y, color: cropColor(plot.currentCrop) });
+      const where = locateProvince(plot.province);
+      if (!where) {
+        // Neither a coordinate nor a province we can resolve. Counted and
+        // reported rather than hidden — see the footer.
+        lost++;
+        continue;
+      }
+      const bubble = byProvince.get(where.thaiName);
+      if (bubble) bubble.plots.push(plot);
+      else byProvince.set(where.thaiName, { thaiName: where.thaiName, x: where.x, y: where.y, plots: [plot] });
     }
-    return { placed: out, skipped: skip };
+    const grouped = [...byProvince.values()].sort((a, b) => b.plots.length - a.plots.length);
+    return { placed: out, bubbles: grouped, unplaceable: lost };
   }, [plots]);
 
   // A filtered-away selection shouldn't linger in the panel.
@@ -198,6 +228,13 @@ export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
   const markerStroke = 1.5 / zoom;
   const selectedStroke = 2.5 / zoom;
   const provinceStroke = 0.6 / zoom;
+  // Round 38 — province bubbles are deliberately larger than a plot dot (8),
+  // and area grows with the count rather than radius, so twice the plots looks
+  // like twice as much rather than four times.
+  const bubbleTotal = bubbles.reduce((sum, b) => sum + b.plots.length, 0);
+  const selectedBubble = bubbles.find((b) => b.thaiName === selectedProvince) ?? null;
+  const maxBubble = bubbles.length > 0 ? bubbles[0].plots.length : 1;
+  const bubbleRadius = (count: number) => (13 + 11 * Math.sqrt(count / maxBubble)) / zoom;
   const atFullView = zoom <= MIN_ZOOM + 0.001;
 
   return (
@@ -264,6 +301,50 @@ export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
             ))}
           </g>
 
+          {/* Round 38 — province bubbles, drawn BEFORE the exact dots so a real
+              coordinate is never hidden behind an aggregate. */}
+          <g>
+            {bubbles.map((bubble) => {
+              const r = bubbleRadius(bubble.plots.length);
+              const isSel = selectedProvince === bubble.thaiName;
+              return (
+                <g
+                  key={bubble.thaiName}
+                  data-province-bubble={bubble.thaiName}
+                  data-province-count={bubble.plots.length}
+                  className="cursor-pointer"
+                  onClick={() => {
+                    if (dragRef.current?.moved) return;
+                    setSelected(null);
+                    setSelectedProvince(bubble.thaiName);
+                  }}
+                >
+                  <circle
+                    cx={bubble.x}
+                    cy={bubble.y}
+                    r={r}
+                    fill="#0f766e"
+                    fillOpacity={isSel ? 0.42 : 0.24}
+                    stroke={isSel ? '#111827' : '#0f766e'}
+                    strokeWidth={(isSel ? 2.5 : 1.2) / zoom}
+                  />
+                  <text
+                    x={bubble.x}
+                    y={bubble.y}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={Math.min(r * 0.95, 13 / zoom)}
+                    fill="#0f766e"
+                    fontWeight={600}
+                    className="pointer-events-none select-none"
+                  >
+                    {bubble.plots.length}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+
           {/* Plot markers */}
           <g>
             {placed.map((pp) => {
@@ -275,6 +356,7 @@ export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
               const selectHere = () => {
                 // Suppress the click that ends a pan drag.
                 if (dragRef.current?.moved) return;
+                setSelectedProvince(null);
                 setSelected(pp);
               };
               return (
@@ -334,12 +416,17 @@ export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
         )}
 
         <p className="mt-2 text-center text-xs text-muted-foreground">
-          แสดง {placed.length} แปลงบนแผนที่
-          {typeof totalCount === 'number' && totalCount !== placed.length
+          {/* Round 38 — the three groups are named separately on purpose. A
+              province bubble is a weaker claim than a dot, and a reader who
+              cannot tell them apart would take a bubble for a field. */}
+          แสดง {placed.length + bubbleTotal} แปลงบนแผนที่
+          {typeof totalCount === 'number' && totalCount !== placed.length + bubbleTotal
             ? ` จาก ${totalCount} แปลง`
             : ''}
-          {skipped > 0 ? ` · ${skipped} แปลงไม่มีพิกัด/นอกขอบเขต` : ''}
-          {' · '}คลิกหมุดดูรายละเอียด · เลื่อนล้อ/สไลเดอร์เพื่อซูม
+          {placed.length > 0 ? ` · ${placed.length} ตำแหน่งจริง` : ''}
+          {bubbleTotal > 0 ? ` · ${bubbleTotal} ระบุได้แค่ระดับจังหวัด` : ''}
+          {unplaceable > 0 ? ` · ${unplaceable} ไม่มีทั้งพิกัดและจังหวัด` : ''}
+          {' · '}คลิกหมุดหรือวงจังหวัดดูรายละเอียด · เลื่อนล้อ/สไลเดอร์เพื่อซูม
         </p>
       </div>
 
@@ -347,8 +434,10 @@ export function ThailandPlotMap({ plots, totalCount }: ThailandPlotMapProps) {
       <div className="w-full shrink-0 lg:w-80">
         {selected ? (
           <PlotDetailPanel placed={selected} onClose={() => setSelected(null)} />
+        ) : selectedBubble ? (
+          <ProvincePanel bubble={selectedBubble} onClose={() => setSelectedProvince(null)} />
         ) : (
-          <MapOverviewPanel plots={placed.map((p) => p.plot)} />
+          <MapOverviewPanel plots={[...placed.map((p) => p.plot), ...bubbles.flatMap((b) => b.plots)]} />
         )}
       </div>
     </div>
@@ -366,6 +455,38 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 /** At-a-glance summary of the plots currently on the map — derived entirely
  * from data the map already has (no extra fetch). */
+/**
+ * Round 38 — what a province bubble opens. It lists the plots the bubble
+ * stands for and says plainly why they are grouped rather than pinned, so the
+ * coarser placement reads as a known limit of the data instead of a glitch.
+ */
+function ProvincePanel({ bubble, onClose }: { bubble: ProvinceBubble; onClose: () => void }) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">{bubble.thaiName}</div>
+          <div className="text-xs text-muted-foreground">{bubble.plots.length} แปลง</div>
+        </div>
+        <button type="button" onClick={onClose} className="text-xs text-gray-500 hover:underline">
+          ปิด
+        </button>
+      </div>
+      <p className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+        แปลงเหล่านี้ยังไม่ได้ระบุพิกัด จึงแสดงรวมไว้ที่จังหวัด — ไม่ใช่ตำแหน่งจริงของแปลง
+      </p>
+      <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto">
+        {bubble.plots.map((plot) => (
+          <li key={plot.id} className="border-b border-gray-100 pb-1 last:border-0">
+            <div className="truncate text-xs font-medium text-gray-800">{plot.name}</div>
+            <div className="truncate font-mono text-[11px] text-muted-foreground">{plot.plotCode}</div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function MapOverviewPanel({ plots }: { plots: PlotSummary[] }) {
   const stats = useMemo(() => {
     const total = plots.length;

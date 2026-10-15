@@ -50,8 +50,10 @@ def _params(route) -> set[str]:
 
 class TestAllIsGone:
     def test_the_unbounded_range_is_no_longer_offered(self) -> None:
+        # The exact list is pinned by the round-55 test; what THIS round
+        # removed is the unbounded option, and only that is asserted here.
         assert "all" not in repo.EXECUTIVE_RANGES
-        assert repo.EXECUTIVE_RANGES == ("30d", "3m", "ytd")
+        assert repo.EXECUTIVE_RANGES
 
     def test_an_old_bookmark_asking_for_it_still_renders(self) -> None:
         # Links to ?range=all exist in people's history. They get the
@@ -192,17 +194,21 @@ class TestEndpointParameters:
 
 
 def _breakdown(group_by: str = "supplier") -> ExecutiveBreakdown:
+    """Round 53 split the single achievement figure into the two lenses, so
+    the workbook carries both. The second row is deliberately empty on every
+    measured column — that is the blank-vs-zero case below."""
     return ExecutiveBreakdown(group_by=group_by, range="3m", rows=[
         BreakdownRow(
             key="SUP005", label="Supplier Five", plots=80, plots_inspected=12,
             plots_overdue=41, inspections=30, avg_score=5.2,
-            target_kg=Decimal("1000.00"), harvest_kg=Decimal("520.00"),
-            achievement_pct=52.0,
+            estimate_plots=10, estimate_target_kg=Decimal("1000.00"),
+            estimate_kg=Decimal("730.00"), estimate_pct=73.0,
+            actual_plots=2, actual_target_kg=Decimal("500.00"),
+            actual_kg=Decimal("260.00"), actual_pct=52.0,
         ),
         BreakdownRow(
             key="(ไม่ระบุ)", label="(ไม่ระบุ)", plots=3, plots_inspected=0,
             plots_overdue=0, inspections=0, avg_score=None,
-            target_kg=None, harvest_kg=None, achievement_pct=None,
         ),
     ])
 
@@ -227,8 +233,15 @@ class TestExcelExport:
         # looked at ends up in a meeting.
         xml = _sheet_xml(dashboard_api._breakdown_workbook(_breakdown()))
         for header in ("Supplier", "แปลง", "ตรวจแล้ว", "ค้างตรวจ", "คะแนนเฉลี่ย",
-                       "เป้าผลิต (kg)", "เก็บได้ (kg)", "บรรลุเป้า (%)"):
+                       "กำลังผลิต (แปลง)", "คาดว่าจะได้ (kg)", "คาดการณ์ (%)",
+                       "ผลิตจบ (แปลง)", "ผลผลิตหลังคัด (kg)", "ผลิตได้จริง (%)"):
             assert header in xml, header
+
+    def test_the_two_lenses_are_not_merged_into_one_column(self) -> None:
+        # A single "บรรลุเป้า" averaged an in-progress estimate together
+        # with a finished result; the operator asked for them apart.
+        xml = _sheet_xml(dashboard_api._breakdown_workbook(_breakdown()))
+        assert "บรรลุเป้า (%)" not in xml
 
     @pytest.mark.parametrize("group,header", [
         ("supplier", "Supplier"), ("crop", "พืช"), ("variety", "พันธุ์"),
@@ -252,12 +265,15 @@ class TestExcelExport:
         is also what AVERAGE() skips once a reader adds their own total row.
         """
         xml = _sheet_xml(dashboard_api._breakdown_workbook(_breakdown()))
-        for col in ("E3", "F3", "G3", "H3"):
+        # Row 3 measures nothing: score (E), and both lenses' kg and % (G-I,
+        # K-M) must be absent. Its real zeros — plots inspected, plots
+        # overdue, and the two lens plot COUNTS — must still be written.
+        for col in ("E3", "G3", "H3", "I3", "K3", "L3", "M3"):
             assert f'r="{col}"' not in xml, f"{col} should be blank, not 0"
-        for col in ("C3", "D3"):
+        for col in ("C3", "D3", "F3", "J3"):
             assert f'r="{col}"' in xml, f"{col} is a real zero and must be written"
-        for col in ("A2", "B2", "C2", "D2", "E2", "F2", "G2", "H2"):
-            assert f'r="{col}"' in xml, col
+        for col in "ABCDEFGHIJKLM":
+            assert f'r="{col}2"' in xml, col
 
     def test_the_filename_names_the_grouping(self) -> None:
         import inspect

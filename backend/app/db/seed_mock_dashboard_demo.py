@@ -51,19 +51,33 @@ from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
 from app.db.models.plot import Plot
-from app.db.models.plot_cycle import CYCLE_STATUS_ACTIVE, PlotCycle
+from app.db.models.master_data import MasterData
+from app.db.models.plot_cycle import (
+    CYCLE_STATUS_ACTIVE,
+    CYCLE_STATUS_HARVESTED,
+    PlotCycle,
+)
 from app.db.models.record import Record
 from app.db.models.role import Role
 from app.db.models.user import User
 from app.db.seed_helpers import active_cycle_map
 from app.db.session import close_db, get_db_session, init_db
 from app.repositories.plot_repository import resync_current_status_from_latest
+from app.services.p_code_master import P_CODE_TYPE
 from app.services.yield_calculation import YieldValidationError, derive_yield
 
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
 _NO_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 SEED_TAG = "dashboard-demo"
+# Written to plot_cycles.close_reason so --clean can re-open exactly the
+# cycles this script closed, and never one a person closed.
+CYCLE_CLOSE_TAG = "ปิดโดยข้อมูลจำลอง (dashboard-demo)"
+# P.Code rows this script creates. UAT carries 494 active P.Codes, one
+# per variety, and every plot has one — the demo had seven of a hundred,
+# so the P.Code grouping and filter had nothing to show. The prefix is
+# what lets --clean remove exactly these and no real code.
+P_CODE_PREFIX = "DEMO-"
 _RANDOM_SEED = 20261015
 
 # Reference "today". A constant, not date.today(), so a dataset stays
@@ -82,6 +96,17 @@ _SHAPE = {
     # so "35% of every record" would be a number no real season can
     # produce. Lands around 8-9% of all rows, close to UAT's 3.7%.
     "cleaned_share_of_harvest": 0.35,
+    # Round 50 — two shapes the demo was missing entirely, which made two
+    # real features invisible on this machine:
+    #
+    #   never_visited_share: plots with NO record at all. UAT has 641 of
+    #     763; the seeder gave every covered plot a record, so the
+    #     "ไม่เคยตรวจ" row of the follow-up list could never appear.
+    #   closed_cycle_share: cycles a member of staff has marked harvested.
+    #     The seeder never closed one, so the cycle-status filter and the
+    #     "closed but no cleaned weight" concern had nothing to show.
+    "never_visited_share": 0.18,
+    "closed_cycle_share": 0.12,
     "problem_plot_share": 0.12,    # 12%      exists
     "notes_share": 0.10,           # 10%      3%
     "recommendation_share": 0.20,  # 20%      6%
@@ -206,6 +231,35 @@ async def _clean(session, condition=None) -> int:
     )).rowcount
     await session.flush()
 
+    # The demo P.Codes go with the records they were created for. Matched
+    # on the prefix, so a real code is never touched. The cycles that
+    # referenced them are cleared first: plot_cycles.p_code is a plain
+    # string, so a dangling value would survive the delete and keep
+    # appearing in a grouping with nothing behind it.
+    cleared = (await session.execute(
+        PlotCycle.__table__.update()
+        .where(PlotCycle.p_code.like(f"{P_CODE_PREFIX}%"))
+        .values(p_code=None)
+    )).rowcount
+    removed = (await session.execute(
+        MasterData.__table__.delete().where(
+            MasterData.type == P_CODE_TYPE,
+            MasterData.value.like(f"{P_CODE_PREFIX}%"),
+        )
+    )).rowcount
+    if removed or cleared:
+        print(f"removed {removed} demo P.Codes · cleared them off {cleared} cycles")
+
+    # Re-open the cycles this script closed. Matched on the marker, never
+    # on status alone — a cycle a person closed must stay closed.
+    reopened = (await session.execute(
+        PlotCycle.__table__.update()
+        .where(PlotCycle.close_reason == CYCLE_CLOSE_TAG)
+        .values(status=CYCLE_STATUS_ACTIVE, close_reason=None)
+    )).rowcount
+    if reopened:
+        print(f"re-opened {reopened} cycles this script had closed")
+
     for plot_id in plot_ids:
         await resync_current_status_from_latest(session, plot_id)
     await session.commit()
@@ -307,10 +361,21 @@ async def _generate(session, rng: random.Random) -> None:
         print(f"note: {len(plots) - len(eligible)} active plots have no open cycle "
               "and are left out")
 
+    # Hold a slice back with NO records at all before sampling — a plot
+    # that is merely under-covered still shows up somewhere, while one with
+    # zero records is invisible to every query built from the records
+    # table, which is exactly the gap round 50 closes.
+    never_visited_count = round(len(eligible) * _SHAPE["never_visited_share"])
+    never_visited = set(rng.sample(eligible, never_visited_count)) if never_visited_count else set()
+    visitable = [p for p in eligible if p not in never_visited]
+    if never_visited:
+        print(f"holding {len(never_visited)} plots back with no records at all")
+
     # Coverage is measured against ALL active plots, because that is the
     # denominator the dashboard's own KPI uses.
-    covered_count = min(len(eligible), max(1, round(len(plots) * _SHAPE["plot_coverage"])))
-    covered = rng.sample(eligible, covered_count)
+    covered_count = min(len(visitable),
+                        max(1, round(len(plots) * _SHAPE["plot_coverage"])))
+    covered = rng.sample(visitable, covered_count)
     covered.sort(key=lambda p: p.plot_code or "")  # deterministic insert order
 
     factors = _supplier_factors([p.supplier_id for p in plots], rng)
@@ -327,6 +392,43 @@ async def _generate(session, rng: random.Random) -> None:
             plans_filled += 1
     if plans_filled:
         await session.flush()
+
+    # One P.Code per variety, mirroring how UAT is set up, so the grouping
+    # and the filter both have something real to work with. Created in
+    # master_data as well as written onto the cycle — the filter's options
+    # come from master_data, so a code that exists only on the cycle could
+    # never be selected.
+    varieties = sorted({p.current_variety for p in covered if p.current_variety})
+    p_code_for: dict[str, str] = {}
+    created_codes = 0
+    for i, variety in enumerate(varieties, start=1):
+        existing = (await session.execute(
+            select(MasterData).where(
+                MasterData.type == P_CODE_TYPE,
+                MasterData.parent == variety,
+                MasterData.active.is_(True),
+            ).limit(1)
+        )).scalars().first()
+        if existing is not None:
+            p_code_for[variety] = existing.value
+            continue
+        code = f"{P_CODE_PREFIX}{i:03d}"
+        session.add(MasterData(
+            type=P_CODE_TYPE, value=code, parent=variety,
+            order_index=i, active=True,
+        ))
+        p_code_for[variety] = code
+        created_codes += 1
+    if created_codes:
+        await session.flush()
+        print(f"created {created_codes} demo P.Codes in master_data "
+              f"(prefix {P_CODE_PREFIX})")
+
+    for plot in covered:
+        code = p_code_for.get(plot.current_variety or "")
+        if code:
+            cycle_by_plot[plot.id].p_code = code
+    await session.flush()
 
     rows: list[Record] = []
     skipped_no_target = 0
@@ -438,6 +540,20 @@ async def _generate(session, rng: random.Random) -> None:
     await session.commit()
     print(f"re-synced current status for {len(touched)} plots")
 
+    # Some cycles get marked harvested, the way a member of staff would.
+    # Deliberately NOT the same plots whose last record carries a cleaned
+    # weight: on real data the two signals barely overlap, and a demo where
+    # they always agree would hide the reason both exist.
+    closable = sorted(touched, key=str)
+    closed = rng.sample(closable, round(len(closable) * _SHAPE["closed_cycle_share"]))
+    for plot_id in closed:
+        cycle = cycle_by_plot[plot_id]
+        cycle.status = CYCLE_STATUS_HARVESTED
+        cycle.close_reason = CYCLE_CLOSE_TAG
+    if closed:
+        await session.commit()
+        print(f"marked {len(closed)} cycles as harvested (staff-closed)")
+
 
 async def _report(session) -> None:
     """Print the same KPIs the executive dashboard will compute, so round 42
@@ -475,6 +591,24 @@ async def _report(session) -> None:
     print(f"   บันทึก 7 วัน / 30 วัน     {r.d7} / {r.d30}")
     print(f"   ช่วงวันที่               {r.first_day} ถึง {r.last_day}")
 
+    r = await one("""SELECT
+        count(*) FILTER (WHERE NOT EXISTS (
+            SELECT 1 FROM records r WHERE r.plot_id = p.id AND r.is_active)) AS never,
+        count(*) AS total
+        FROM plots p WHERE p.is_active""")
+    print(f"   แปลงที่ไม่เคยตรวจเลย        {r.never} / {r.total}")
+
+    r = await one("""SELECT
+        count(*) FILTER (WHERE c.p_code IS NOT NULL AND btrim(c.p_code) <> '') AS with_code,
+        count(*) AS plots
+        FROM plots p LEFT JOIN plot_cycles c ON c.plot_id = p.id AND c.status = 'active'
+        WHERE p.is_active""")
+    print(f"   แปลงที่มี P.Code            {r.with_code} / {r.plots}")
+
+    r = await one("""SELECT count(DISTINCT plot_id) AS n FROM plot_cycles
+                     WHERE status = 'harvested'""")
+    print(f"   แปลงที่พนักงานปิดรอบแล้ว    {r.n}")
+
     r = await one(f"""SELECT count(*) AS stale FROM (
         SELECT plot_id, max(record_date) AS last_visit
         FROM records WHERE is_active GROUP BY plot_id) t
@@ -490,16 +624,30 @@ async def _report(session) -> None:
     print(f"   คะแนนเฉลี่ย              {r.avg_score}")
     print(f"   บันทึกที่มีคะแนน <= 3     {r.low}")
 
-    r = await one("""SELECT
-        round(sum(yield_target_kg_snapshot), 0) AS target,
-        round(sum(yield_quantity_kg), 0)        AS harvest,
-        count(*) FILTER (WHERE final_yield_after_clean IS NOT NULL) AS cleaned,
-        count(*) AS total
-        FROM records WHERE is_active""")
-    ach = (r.harvest / r.target * 100) if r.target else 0
-    cleaned_pct = (r.cleaned / r.total * 100) if r.total else 0
-    print(f"   เป้า / เก็บได้ (kg)       {r.target} / {r.harvest}  = {ach:.0f}%")
-    print(f"   กรอกผลผลิตหลังคัด        {r.cleaned} / {r.total} ({cleaned_pct:.0f}%)")
+    # ONE ROW PER PLOT, its last inspection — the same basis the dashboard
+    # uses since round 50. Summing every record counted each plot's target
+    # once per visit and reported totals 2.5x too large; a seeder report
+    # that still did that would contradict the page it exists to fill.
+    r = await one("""
+        WITH last_rec AS (
+          SELECT DISTINCT ON (r.plot_id)
+                 r.yield_target_kg_snapshot AS tgt,
+                 r.yield_quantity_kg        AS got,
+                 r.final_yield_after_clean  AS cleaned
+          FROM records r JOIN plots p ON p.id = r.plot_id AND p.is_active
+          WHERE r.is_active
+          ORDER BY r.plot_id, r.record_date DESC, r.created_at DESC, r.id DESC)
+        SELECT round(sum(tgt)) AS target, round(sum(got)) AS harvest,
+               count(*) FILTER (WHERE cleaned IS NOT NULL) AS done,
+               count(*) AS plots,
+               round(100.0 * sum(got) FILTER (WHERE cleaned IS NULL)
+                     / nullif(sum(tgt) FILTER (WHERE cleaned IS NULL), 0)) AS growing_pct,
+               round(100.0 * sum(cleaned) / nullif(sum(tgt) FILTER (WHERE cleaned IS NOT NULL), 0))
+                     AS finished_pct
+        FROM last_rec""")
+    print(f"   เป้า / เก็บได้ (kg)       {r.target} / {r.harvest}   (นับแปลงละครั้ง)")
+    print(f"   กำลังผลิต                {r.plots - r.done} แปลง  {r.growing_pct}% ของเป้า")
+    print(f"   ผลิตจบแล้ว               {r.done} แปลง  {r.finished_pct}% ของเป้า")
 
     r = await one("""SELECT
         round(100.0 * count(*) FILTER (WHERE notes IS NOT NULL AND notes <> '')

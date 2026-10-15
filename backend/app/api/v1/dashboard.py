@@ -17,10 +17,12 @@ from app.repositories import dashboard_repository as repo
 from app.services.excel_workbook import CellValue, build_xlsx
 from app.schemas.dashboard import (
     DashboardSummary,
+    ExecutiveConcerns,
     ExecutiveBreakdown,
     ExecutiveFollowUp,
     ExecutiveSummary,
     ExecutiveTrend,
+    ProductionStatus,
 )
 
 router = APIRouter(tags=["dashboard"])
@@ -31,13 +33,22 @@ _SUPPLIER_VISIBLE_ROLES = {"internal:super_admin", "internal:admin", "farmlog:su
 # once so a parameter cannot be spelled one way on the trend and another on
 # the table; the names match the report endpoints (supplier_id / date_from /
 # date_to) so the whole app asks for a filtered period the same way.
-_RANGE_Q = Query(repo.DEFAULT_RANGE, description="30d | 3m | ytd (ignored when date_from/date_to given)")
+_RANGE_Q = Query(
+    repo.DEFAULT_RANGE,
+    description="30d | 3m | 6m | ytd (ignored when date_from/date_to given)",
+)
 _FROM_Q = Query(None, description="Start of a custom window; overrides `range`")
 _TO_Q = Query(None, description="End of a custom window; overrides `range`")
 _SUPPLIER_Q = Query(None, description="Narrow the whole page to one supplier")
 # Round 49 — P.Code is how production strains are analysed here, so it
 # narrows the page the same way a supplier does.
 _PCODE_Q = Query(None, description="Narrow the whole page to one P.Code")
+# Round 50 — a VIEW, never the thing that decides which production lens
+# a plot falls in. No default: closing a cycle is a staff action that may
+# never happen, so the page must not quietly depend on it.
+_CYCLE_STATUS_Q = Query(
+    None, description="active | harvested | cancelled (default: all)",
+)
 
 
 
@@ -72,6 +83,7 @@ async def get_executive(
     date_to: datetime.date | None = _TO_Q,
     supplier_id: UUID | None = _SUPPLIER_Q,
     p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
     db: AsyncSession = DbDep,
 ) -> ExecutiveSummary:
     """Company-wide overview — adoption, overdue plots, and yield against plan.
@@ -88,7 +100,7 @@ async def get_executive(
     """
     return await repo.get_executive_summary(
         db, range_key=range, date_from=date_from, date_to=date_to,
-        supplier_id=supplier_id, p_code=p_code,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
     )
 
 
@@ -108,6 +120,7 @@ async def get_executive_trend(
     date_to: datetime.date | None = _TO_Q,
     supplier_id: UUID | None = _SUPPLIER_Q,
     p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
     db: AsyncSession = DbDep,
 ) -> ExecutiveTrend:
     """Inspections per week/month with the average score riding on top.
@@ -117,7 +130,7 @@ async def get_executive_trend(
     """
     return await repo.get_executive_trend(
         db, range_key=range, date_from=date_from, date_to=date_to,
-        supplier_id=supplier_id, p_code=p_code,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
     )
 
 
@@ -131,13 +144,14 @@ async def get_executive_breakdown(
     date_to: datetime.date | None = _TO_Q,
     supplier_id: UUID | None = _SUPPLIER_Q,
     p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
     db: AsyncSession = DbDep,
 ) -> ExecutiveBreakdown:
     """The comparison table. One shape, three groupings — see the repository
     for why grouping on the PLOT is what makes that possible."""
     return await repo.get_executive_breakdown(
         db, range_key=range, group_by=by, date_from=date_from, date_to=date_to,
-        supplier_id=supplier_id, p_code=p_code,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
     )
 
 
@@ -148,6 +162,7 @@ async def get_executive_follow_up(
     limit: int = Query(10, ge=1, le=200),
     supplier_id: UUID | None = _SUPPLIER_Q,
     p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
     db: AsyncSession = DbDep,
 ) -> ExecutiveFollowUp:
     """Plots worth a visit, worst reason first. Deliberately NOT range-scoped
@@ -155,6 +170,7 @@ async def get_executive_follow_up(
     is the one most worth finding."""
     return await repo.get_executive_follow_up(
         db, limit=limit, supplier_id=supplier_id, p_code=p_code,
+        cycle_status=cycle_status,
     )
 
 
@@ -176,7 +192,8 @@ def _breakdown_workbook(result: ExecutiveBreakdown) -> bytes:
     head = _BREAKDOWN_HEADERS.get(result.group_by, "Supplier")
     rows: list[list[CellValue]] = [[
         head, "แปลง", "ตรวจแล้ว", "ค้างตรวจ", "คะแนนเฉลี่ย",
-        "เป้าผลิต (kg)", "เก็บได้ (kg)", "บรรลุเป้า (%)",
+        "กำลังผลิต (แปลง)", "เป้า (kg)", "คาดว่าจะได้ (kg)", "คาดการณ์ (%)",
+        "ผลิตจบ (แปลง)", "เป้า (kg)", "ผลผลิตหลังคัด (kg)", "ผลิตได้จริง (%)",
     ]]
     for r in result.rows:
         rows.append([
@@ -189,9 +206,14 @@ def _breakdown_workbook(result: ExecutiveBreakdown) -> bytes:
             # blank cell is also what AVERAGE() skips, which is the right
             # behaviour once someone adds a total row of their own.
             float(r.avg_score) if r.avg_score is not None else None,
-            float(r.target_kg) if r.target_kg is not None else None,
-            float(r.harvest_kg) if r.harvest_kg is not None else None,
-            float(r.achievement_pct) if r.achievement_pct is not None else None,
+            r.estimate_plots,
+            float(r.estimate_target_kg) if r.estimate_target_kg is not None else None,
+            float(r.estimate_kg) if r.estimate_kg is not None else None,
+            float(r.estimate_pct) if r.estimate_pct is not None else None,
+            r.actual_plots,
+            float(r.actual_target_kg) if r.actual_target_kg is not None else None,
+            float(r.actual_kg) if r.actual_kg is not None else None,
+            float(r.actual_pct) if r.actual_pct is not None else None,
         ])
     return build_xlsx([("executive-breakdown", rows)])
 
@@ -205,6 +227,7 @@ async def export_executive_breakdown(
     date_to: datetime.date | None = _TO_Q,
     supplier_id: UUID | None = _SUPPLIER_Q,
     p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
     db: AsyncSession = DbDep,
 ) -> Response:
     """The same rows the table shows, as .xlsx.
@@ -215,8 +238,64 @@ async def export_executive_breakdown(
     """
     result = await repo.get_executive_breakdown(
         db, range_key=range, group_by=by, date_from=date_from, date_to=date_to,
-        supplier_id=supplier_id, p_code=p_code,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
     )
     return xlsx_response(
         _breakdown_workbook(result), f"executive-breakdown-{result.group_by}.xlsx",
+    )
+
+
+@router.get("/executive/production", response_model=ProductionStatus,
+            dependencies=_EXECUTIVE_GATE)
+async def get_production_status(
+    _rls: RLSContext,
+    range: str = _RANGE_Q,
+    date_from: datetime.date | None = _FROM_Q,
+    date_to: datetime.date | None = _TO_Q,
+    supplier_id: UUID | None = _SUPPLIER_Q,
+    p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
+    db: AsyncSession = DbDep,
+) -> ProductionStatus:
+    """The same plots through two lenses, split by their LAST record.
+
+    Still growing -> judged on the yield ESTIMATE. Finished (that last
+    record carries ผลผลิตหลังทำความสะอาด) -> judged on the cleaned weight,
+    which is what was actually produced. Cycle status is not the test: it
+    is a staff action that may never happen, and a mis-tapped "เก็บเกี่ยว"
+    mid-season must not move a plot out of production.
+    """
+    return await repo.get_production_status(
+        db, range_key=range, date_from=date_from, date_to=date_to,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
+    )
+
+
+@router.get("/executive/concerns", response_model=ExecutiveConcerns,
+            dependencies=_EXECUTIVE_GATE)
+async def get_concerns(
+    _rls: RLSContext,
+    range: str = _RANGE_Q,
+    # Clamped, not validated: a number typed into a filter box must never
+    # produce an error page on a read-only dashboard.
+    threshold_pct: float | None = Query(
+        None, description="Below this share of plan is a concern (default 70)",
+    ),
+    date_from: datetime.date | None = _FROM_Q,
+    date_to: datetime.date | None = _TO_Q,
+    supplier_id: UUID | None = _SUPPLIER_Q,
+    p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
+    db: AsyncSession = DbDep,
+) -> ExecutiveConcerns:
+    """What to act on, summarised per P.Code.
+
+    Returns structured rows, not sentences: the wording belongs to the page,
+    and a row carrying its own prose cannot be re-sorted or re-grouped
+    without rewriting it.
+    """
+    return await repo.get_concerns(
+        db, range_key=range, date_from=date_from, date_to=date_to,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
+        threshold_pct=threshold_pct,
     )

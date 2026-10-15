@@ -110,9 +110,19 @@ class BreakdownRow(CamelBaseModel):
     plots_overdue: int
     inspections: int
     avg_score: float | None = None
-    target_kg: Decimal | None = None
-    harvest_kg: Decimal | None = None
-    achievement_pct: float | None = None
+    # Round 53 — one number per lens, not one blended one. The old
+    # achievement_pct summed every record, so a plot's target was counted
+    # once per visit AND an in-progress estimate was averaged together with
+    # a finished result. Both halves divide by the same target, so the two
+    # percentages are comparable and the dumbbell chart can draw the gap.
+    estimate_plots: int = 0
+    estimate_target_kg: Decimal | None = None
+    estimate_kg: Decimal | None = None
+    estimate_pct: float | None = None
+    actual_plots: int = 0
+    actual_target_kg: Decimal | None = None
+    actual_kg: Decimal | None = None
+    actual_pct: float | None = None
 
 
 class ExecutiveBreakdown(CamelBaseModel):
@@ -141,3 +151,77 @@ class FollowUpRow(CamelBaseModel):
 class ExecutiveFollowUp(CamelBaseModel):
     total: int              # distinct plots flagged, before the limit
     rows: list[FollowUpRow]
+
+# --- Round 50: the two lenses ------------------------------------------
+#
+# A plot is read through exactly one of them, decided by its LAST record:
+# carries ผลผลิตหลังทำความสะอาด -> finished, otherwise still in production.
+# Cycle status is NOT the test — closing a cycle is a staff action that may
+# never happen, and someone can mis-tap "เก็บเกี่ยว" mid-season and keep
+# inspecting afterwards. The last record is the only thing that always
+# reflects what actually happened.
+
+
+class LensFigures(CamelBaseModel):
+    """One lens: how many plots, the plan, what came of it.
+
+    `value_kg` is the yield ESTIMATE for plots still in production and the
+    CLEANED weight for finished ones — two different measurements, which is
+    the whole reason the lenses are separate. The field is shared because
+    both answer "what will this produce", and `pct` divides it by the same
+    target either way, so the two percentages are directly comparable.
+    """
+
+    plots: int
+    target_kg: Decimal | None = None
+    value_kg: Decimal | None = None
+    pct: float | None = None
+
+
+class StageCount(CamelBaseModel):
+    stage: str
+    plots: int
+
+
+class ProductionStatus(CamelBaseModel):
+    """Round 50 — the block that sits above the comparison table."""
+
+    in_production: LensFigures
+    finished: LensFigures
+    # The harvest weight of the SAME plots the finished lens counted — the
+    # matching base for retention. Dividing cleaned by anything else turns
+    # "most records are unfilled" into "most of the crop was lost".
+    finished_harvest_kg: Decimal | None = None
+    finished_retention_pct: float | None = None
+    by_stage: list[StageCount] = []
+    range: str = "3m"
+
+
+CONCERN_IN_PRODUCTION_LOW = "in_production_low"
+CONCERN_FINISHED_LOW = "finished_low"
+CONCERN_MISSING_CLEANED = "missing_cleaned"
+CONCERN_LOW_RETENTION = "low_retention"
+
+
+class ConcernRow(CamelBaseModel):
+    """One thing worth acting on, summarised at P.Code level.
+
+    Carries data, not a sentence: the wording belongs to the page, and a
+    row that already contains its own Thai prose cannot be re-grouped or
+    re-sorted without rewriting it.
+    """
+
+    severity: str          # "high" | "medium"
+    kind: str
+    key: str               # the P.Code, or UNSPECIFIED_LABEL
+    plots: int
+    # Reading depends on `kind`: the worst (or average) percentage for the
+    # yield kinds, the retention percentage for low_retention, unset for
+    # missing_cleaned where the count IS the message.
+    value: float | None = None
+
+
+class ExecutiveConcerns(CamelBaseModel):
+    threshold_pct: float   # echoed so the page cannot caption a different number
+    rows: list[ConcernRow]
+

@@ -73,7 +73,7 @@ export async function getExecutiveSummary(f: ExecutiveFilters): Promise<Executiv
 /** Round 44/45 — the three blocks the overview is assembled from.
  *  Kept as separate calls because the range tabs refetch the trend and the
  *  comparison table while the follow-up list never changes with the range. */
-export type ExecutiveRangeKey = '30d' | '3m' | 'ytd' | 'custom';
+export type ExecutiveRangeKey = '30d' | '3m' | '6m' | 'ytd' | 'custom';
 export type BreakdownGroup = 'supplier' | 'crop' | 'variety' | 'p_code';
 
 /** Round 47 — what the page is filtered to. One object because every
@@ -92,10 +92,15 @@ export interface ExecutiveFilters {
    *  planting cycle, not the plot, which is why the server reads it from
    *  the plot's ACTIVE cycle and from each record's OWN cycle. */
   pCode: string | null;
+  /** Round 50 — a VIEW over the plot's LATEST cycle, never the thing that
+   *  decides which production lens a plot falls in. No default: closing a
+   *  cycle is a staff action that may never happen. */
+  cycleStatus: string | null;
 }
 
 export const DEFAULT_EXECUTIVE_FILTERS: ExecutiveFilters = {
-  range: '3m', dateFrom: null, dateTo: null, supplierId: null, pCode: null,
+  range: '3m', dateFrom: null, dateTo: null,
+  supplierId: null, pCode: null, cycleStatus: null,
 };
 
 /** camelCase -> the snake_case the API declares. Omit (not null) for an
@@ -108,6 +113,7 @@ export function executiveParams(f: ExecutiveFilters): Record<string, unknown> {
     date_to: f.dateTo || undefined,
     supplier_id: f.supplierId || undefined,
     p_code: f.pCode || undefined,
+    cycle_status: f.cycleStatus || undefined,
   };
 }
 
@@ -134,9 +140,17 @@ export interface BreakdownRow {
   plotsOverdue: number;
   inspections: number;
   avgScore: number | null;
-  targetKg: string | null;
-  harvestKg: string | null;
-  achievementPct: number | null;
+  /** Round 53 — one figure per lens, not one blended one. Both divide by
+   *  the same target, so the pair is comparable and the gap between them
+   *  is the thing worth reading. */
+  estimatePlots: number;
+  estimateTargetKg: string | null;
+  estimateKg: string | null;
+  estimatePct: number | null;
+  actualPlots: number;
+  actualTargetKg: string | null;
+  actualKg: string | null;
+  actualPct: number | null;
 }
 
 export interface ExecutiveBreakdown {
@@ -145,7 +159,11 @@ export interface ExecutiveBreakdown {
   rows: BreakdownRow[];
 }
 
-export type FollowUpReason = 'low_score' | 'overdue' | 'low_yield';
+/** Round 50 added never_inspected and made it the worst reason: an
+ *  overdue plot still has data to look at, one nobody has ever visited has
+ *  none. Its value is days since the plot was registered. */
+export type FollowUpReason =
+  | 'never_inspected' | 'low_score' | 'overdue' | 'low_yield';
 
 export interface FollowUpRow {
   plotId: string;
@@ -204,6 +222,79 @@ export async function getExecutiveFollowUp(
   const { range: _r, date_from: _f, date_to: _t, ...scope } = executiveParams(f);
   const { data } = await apiClient.get<ExecutiveFollowUp>(
     '/api/v1/dashboard/executive/follow-up', { params: { ...scope, limit } },
+  );
+  return data;
+}
+
+/** Round 50 — production seen through two lenses, split by each plot's
+ *  LAST record: still growing (judged on the yield estimate) or finished
+ *  (judged on the cleaned weight, which is what was actually produced). */
+export interface LensFigures {
+  plots: number;
+  targetKg: string | null;
+  /** The yield estimate for the growing lens, the cleaned weight for the
+   *  finished one — read it together with which lens it came from. */
+  valueKg: string | null;
+  pct: number | null;
+}
+
+export interface StageCount {
+  stage: string;
+  plots: number;
+}
+
+export interface ProductionStatus {
+  inProduction: LensFigures;
+  finished: LensFigures;
+  /** Harvest weight of the finished plots only — retention's matching
+   *  base, never the whole window's harvest. */
+  finishedHarvestKg: string | null;
+  finishedRetentionPct: number | null;
+  byStage: StageCount[];
+  range: string;
+}
+
+export type ConcernKind =
+  | 'in_production_low' | 'finished_low' | 'missing_cleaned' | 'low_retention';
+
+export interface ConcernRow {
+  severity: 'high' | 'medium';
+  kind: ConcernKind;
+  /** The P.Code, or the unspecified label. */
+  key: string;
+  plots: number;
+  /** Reading depends on `kind`; unset for missing_cleaned, where the count
+   *  is the whole message. */
+  value: number | null;
+}
+
+export interface ExecutiveConcerns {
+  /** Echoed so a caption can never claim a threshold the server did not use. */
+  thresholdPct: number;
+  rows: ConcernRow[];
+}
+
+export async function getProductionStatus(f: ExecutiveFilters): Promise<ProductionStatus> {
+  const { data } = await apiClient.get<ProductionStatus>(
+    '/api/v1/dashboard/executive/production', { params: executiveParams(f) },
+  );
+  return data;
+}
+
+/** The default the server falls back to when no threshold is sent. Kept
+ *  here so the input can start on the same number the caption would show. */
+export const DEFAULT_CONCERN_PCT = 70;
+
+/** `thresholdPct` belongs to this block alone, not to ExecutiveFilters —
+ *  putting it there would invalidate the other five queries every time
+ *  somebody nudged the number. The server clamps it and echoes back what
+ *  it used, which is what the caption reads. */
+export async function getConcerns(
+  f: ExecutiveFilters, thresholdPct?: number | null,
+): Promise<ExecutiveConcerns> {
+  const { data } = await apiClient.get<ExecutiveConcerns>(
+    '/api/v1/dashboard/executive/concerns',
+    { params: { ...executiveParams(f), threshold_pct: thresholdPct ?? undefined } },
   );
   return data;
 }

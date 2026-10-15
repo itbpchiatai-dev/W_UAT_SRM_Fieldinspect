@@ -15,12 +15,25 @@ const CUSTOM_VALUE: PeriodValue = {
 };
 
 describe('PeriodFilter — the options', () => {
-  it('offers the three presets the backend accepts, and no "ทั้งหมด"', () => {
-    // backend: dashboard_repository.EXECUTIVE_RANGES, which round 47 cut
-    // down to three. "ทั้งหมด" is gone on both sides or on neither.
-    expect(PRESETS.map((p) => p.value)).toEqual(['30d', '3m', 'ytd']);
+  it('offers the presets the backend accepts, and no "ทั้งหมด"', () => {
+    // backend: dashboard_repository.EXECUTIVE_RANGES. "ทั้งหมด" is gone on
+    // both sides or on neither; 6m was added to both in round 55.
+    expect(PRESETS.map((p) => p.value)).toEqual(['30d', '3m', '6m', 'ytd']);
     render(<PeriodFilter value={PRESET_VALUE} onChange={() => {}} />);
     expect(screen.queryByRole('button', { name: 'ทั้งหมด' })).toBeNull();
+  });
+
+  it('offers 6 เดือน between 3 เดือน and ปีนี้', () => {
+    render(<PeriodFilter value={PRESET_VALUE} onChange={() => {}} />);
+    const labels = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(labels).toEqual(['30 วัน', '3 เดือน', '6 เดือน', 'ปีนี้', CUSTOM_LABEL]);
+  });
+
+  it('reports 6m when 6 เดือน is picked', () => {
+    const onChange = vi.fn();
+    render(<PeriodFilter value={PRESET_VALUE} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: '6 เดือน' }));
+    expect(onChange).toHaveBeenCalledWith({ range: '6m', dateFrom: null, dateTo: null });
   });
 
   it('adds the custom option alongside them', () => {

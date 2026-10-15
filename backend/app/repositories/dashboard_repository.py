@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Date, and_, cast, func, select
+from sqlalchemy import Date, and_, cast, exists, func, select
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +19,16 @@ from app.db.models.plot_cycle import (
 from app.db.models.record import Record
 from app.db.models.supplier import Supplier
 from app.schemas.dashboard import (
+    CONCERN_FINISHED_LOW,
+    CONCERN_IN_PRODUCTION_LOW,
+    CONCERN_LOW_RETENTION,
+    CONCERN_MISSING_CLEANED,
     BreakdownRow,
+    ConcernRow,
+    ExecutiveConcerns,
+    LensFigures,
+    ProductionStatus,
+    StageCount,
     CropTypeStat,
     DashboardSummary,
     ExecutiveBreakdown,
@@ -159,18 +168,41 @@ def achievement_pct(
 # is echoed back in the payload.
 RANGE_30D = "30d"
 RANGE_3M = "3m"
+RANGE_6M = "6m"
 RANGE_YTD = "ytd"
 RANGE_CUSTOM = "custom"
 # Round 47 — "ทั้งหมด" is gone, replaced by an explicit date_from/date_to.
 # A preset answers "lately"; a named pair of dates answers "that season",
 # and an unbounded "everything" answered neither while quietly growing
 # slower as the table grew.
-EXECUTIVE_RANGES: tuple[str, ...] = (RANGE_30D, RANGE_3M, RANGE_YTD)
+EXECUTIVE_RANGES: tuple[str, ...] = (RANGE_30D, RANGE_3M, RANGE_6M, RANGE_YTD)
 DEFAULT_RANGE = RANGE_3M
 
 # Where a custom window stops being readable as weeks. 17 weeks already
 # crowds the axis; past that the chart buckets by month.
 _WEEKLY_SPAN_DAYS = 120
+
+# Bounds for a caller-supplied concern threshold. Clamped rather than
+# rejected: this is a read-only dashboard and a number typed into a filter
+# box should never produce an error page. The ceiling is above 100 on
+# purpose — "show me everything under 120% of plan" is a question somebody
+# will reasonably ask.
+CONCERN_PCT_MIN = Decimal("1")
+CONCERN_PCT_MAX = Decimal("200")
+
+
+def normalize_concern_pct(value) -> Decimal:
+    """A usable threshold from whatever arrived, falling back to the default."""
+    if value is None:
+        return PRODUCTION_LOW_PCT
+    try:
+        pct = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return PRODUCTION_LOW_PCT
+    if pct.is_nan():
+        return PRODUCTION_LOW_PCT
+    return max(CONCERN_PCT_MIN, min(CONCERN_PCT_MAX, pct))
+
 
 # A harvested cycle that came in under this share of plan is worth a visit.
 # Only CLOSED cycles are judged: an inspection at ระยะงอก legitimately
@@ -180,17 +212,26 @@ LOW_YIELD_PCT = Decimal("80")
 # Severity order for the follow-up list. A low score is a CONFIRMED problem
 # somebody already saw; overdue is an unknown; a missed yield target is
 # history. One row per plot carries the worst of them.
+# Round 50 — a plot nobody has ever visited outranks every other reason.
+# An overdue plot still has data to look at; this one has none, and until
+# now it never appeared in the list at all (the overdue query is built from
+# records, so a plot with zero records could not be in it). On UAT that is
+# 641 of 763 plots invisible.
+FOLLOW_UP_NEVER = "never_inspected"
 FOLLOW_UP_LOW_SCORE = "low_score"
 FOLLOW_UP_OVERDUE = "overdue"
 FOLLOW_UP_LOW_YIELD = "low_yield"
 _FOLLOW_UP_SEVERITY = {
-    FOLLOW_UP_LOW_SCORE: 0,
-    FOLLOW_UP_OVERDUE: 1,
-    FOLLOW_UP_LOW_YIELD: 2,
+    FOLLOW_UP_NEVER: 0,
+    FOLLOW_UP_LOW_SCORE: 1,
+    FOLLOW_UP_OVERDUE: 2,
+    FOLLOW_UP_LOW_YIELD: 3,
 }
-# Which way "worse" runs for each reason's value: more days overdue is
-# worse, a lower score is worse, a lower % of plan is worse.
+# Which way "worse" runs for each reason's value: more days is worse for
+# both the never-visited and the overdue, a lower score is worse, a lower
+# % of plan is worse.
 _FOLLOW_UP_DIRECTION = {
+    FOLLOW_UP_NEVER: -1,
     FOLLOW_UP_LOW_SCORE: 1,
     FOLLOW_UP_OVERDUE: -1,
     FOLLOW_UP_LOW_YIELD: 1,
@@ -213,24 +254,52 @@ class Window:
     key: str
     granularity: str
 
-    def conditions(self) -> list:
-        """WHERE fragments for records inside this window."""
+    def conditions_on(self, column) -> list:
+        """WHERE fragments bounding any date column by this window."""
         out = []
         if self.start is not None:
-            out.append(Record.record_date >= self.start)
+            out.append(column >= self.start)
         if self.end is not None:
-            out.append(Record.record_date <= self.end)
+            out.append(column <= self.end)
         return out
 
+    def conditions(self) -> list:
+        """WHERE fragments for records inside this window."""
+        return self.conditions_on(Record.record_date)
 
-def _plot_scope(supplier_id: UUID | None, p_code: str | None = None) -> list:
+
+def _latest_cycle_sq():
+    """plot_id -> the status of the plot's MOST RECENT planting cycle.
+
+    "Most recent", not "has any cycle with": a plot that closed last season
+    and opened a new one is growing, not closed. cycle_no is sequential per
+    plot (see the PlotCycle model), so it orders them without a date.
+    """
+    return (
+        select(PlotCycle.plot_id.label("plot_id"), PlotCycle.status.label("status"))
+        .distinct(PlotCycle.plot_id)
+        .order_by(PlotCycle.plot_id, PlotCycle.cycle_no.desc(),
+                  PlotCycle.started_at.desc())
+        .subquery()
+    )
+
+
+def _plot_scope(
+    supplier_id: UUID | None,
+    p_code: str | None = None,
+    cycle_status: str | None = None,
+) -> list:
     """Conditions that pick the active plots this page is about.
 
     P.Code is not a column on plots — it lives on the planting cycle
     (plot_cycles.p_code, round 8-5A). For a PLOT, "is this P.Code" can only
     mean "is growing it now", so the filter asks about the plot's ACTIVE
-    cycle. Written as an IN-subquery rather than a join so this stays a
-    plain list of conditions every caller can splat into its own WHERE.
+    cycle. Written as IN-subqueries rather than joins so this stays a plain
+    list of conditions every caller can splat into its own WHERE.
+
+    cycle_status (round 50) is a VIEW, never the thing that decides which
+    production lens a plot belongs to — the two disagree completely on real
+    data, which is exactly why the operator asked for both.
     """
     out = [Plot.is_active.is_(True)]
     if supplier_id is not None:
@@ -241,6 +310,11 @@ def _plot_scope(supplier_id: UUID | None, p_code: str | None = None) -> list:
                 PlotCycle.status == CYCLE_STATUS_ACTIVE,
                 PlotCycle.p_code == p_code,
             )
+        ))
+    if cycle_status:
+        latest = _latest_cycle_sq()
+        out.append(Plot.id.in_(
+            select(latest.c.plot_id).where(latest.c.status == cycle_status)
         ))
     return out
 
@@ -305,6 +379,10 @@ def resolve_window(
         return Window(today - datetime.timedelta(days=30), None, key, "week")
     if key == RANGE_3M:
         return Window(today - datetime.timedelta(days=90), None, key, "week")
+    # Six months weekly is ~26 bars on one axis; monthly is six. The cut-off
+    # is the same _WEEKLY_SPAN_DAYS a custom window is judged by.
+    if key == RANGE_6M:
+        return Window(today - datetime.timedelta(days=180), None, key, "month")
     return Window(datetime.date(today.year, 1, 1), None, key, "month")
 
 
@@ -335,6 +413,60 @@ def follow_up_sort_key(reason: str, value: float) -> tuple[int, float]:
     return (_FOLLOW_UP_SEVERITY[reason], _FOLLOW_UP_DIRECTION[reason] * value)
 
 
+# --- Round 50: one row per plot, its LAST inspection --------------------
+#
+# Everything about production is read off this: which lens a plot falls in,
+# what it is expected to produce, what it actually produced, and when. One
+# row per plot also removes the double-count that made the old figures
+# wrong — summing every record added the same plot's target once per visit,
+# which inflated the kg totals 2.5x AND moved the percentage (77% vs 93%),
+# because plots inspected more often are the ones further along.
+
+# Where the estimate becomes a result. A plot whose last record carries a
+# cleaned weight has finished; everything else is still growing, including
+# a plot whose EARLIER record carried one (someone mis-tapped "เก็บเกี่ยว"
+# and kept inspecting — that plot belongs in production until its real
+# last visit says otherwise).
+PRODUCTION_LOW_PCT = Decimal("70")
+
+# How far below the page's own average retention counts as a concern.
+RETENTION_GAP_PTS = 15.0
+
+
+def _last_record_sq(
+    supplier_id: UUID | None = None,
+    p_code: str | None = None,
+    cycle_status: str | None = None,
+):
+    """plot_id -> its most recent active record, with the yield columns."""
+    return (
+        select(
+            Record.plot_id.label("plot_id"),
+            Record.record_date.label("record_date"),
+            Record.growth_stage.label("growth_stage"),
+            Record.yield_target_kg_snapshot.label("target_kg"),
+            Record.yield_quantity_kg.label("yield_kg"),
+            Record.final_yield_after_clean.label("cleaned_kg"),
+        )
+        .select_from(Record)
+        .join(Plot, Plot.id == Record.plot_id)
+        .where(Record.is_active.is_(True),
+               *_plot_scope(supplier_id, p_code, cycle_status))
+        .distinct(Record.plot_id)
+        .order_by(Record.plot_id, Record.record_date.desc(),
+                  Record.created_at.desc(), Record.id.desc())
+        .subquery()
+    )
+
+
+def lens_pct(value_kg, target_kg) -> float | None:
+    """Shared by both lenses so they stay comparable, and None (not 0) when
+    there is no plan — the same rule achievement_pct follows."""
+    if value_kg is None or target_kg is None or target_kg <= 0:
+        return None
+    return round(float(value_kg) / float(target_kg) * 100, 1)
+
+
 async def get_executive_summary(
     db: AsyncSession,
     *,
@@ -343,6 +475,7 @@ async def get_executive_summary(
     date_to: datetime.date | None = None,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
+    cycle_status: str | None = None,
 ) -> ExecutiveSummary:
     """Company-wide figures for the executive overview.
 
@@ -361,7 +494,7 @@ async def get_executive_summary(
     # The supplier filter narrows EVERYTHING on the page, including the
     # counts that are otherwise "as of now" — picking one supplier changes
     # what "this" is, not just which period is in view.
-    plot_scope = _plot_scope(supplier_id, p_code)
+    plot_scope = _plot_scope(supplier_id, p_code, cycle_status)
     record_scope = _record_scope(supplier_id, p_code)
 
     plots_total = (await db.scalar(
@@ -389,7 +522,7 @@ async def get_executive_summary(
     )) or 0
 
     overdue_cutoff = today - datetime.timedelta(days=OVERDUE_DAYS)
-    last_visit = _last_visit_sq(supplier_id, p_code)
+    last_visit = _last_visit_sq(supplier_id, p_code, cycle_status)
     plots_overdue = (await db.scalar(
         select(func.count()).select_from(last_visit)
         .where(last_visit.c.last_visit < overdue_cutoff)
@@ -430,24 +563,29 @@ async def get_executive_summary(
         select(func.count(Plot.id)).where(*plot_scope, _low_score_expr() <= LOW_SCORE)
     )) or 0
 
+    # Round 50 — ONE ROW PER PLOT, its last inspection. Summing every
+    # record added the same plot's target once per visit: the kg totals
+    # came out 2.5x too big AND the percentage moved (77% vs 93%), because
+    # the plots inspected most often are the ones furthest along. The
+    # production block reads the same subquery, so the card and the block
+    # cannot disagree.
+    lr = _last_record_sq(supplier_id, p_code, cycle_status)
     yields = (await db.execute(
         select(
-            func.sum(Record.yield_target_kg_snapshot),
-            func.sum(Record.yield_quantity_kg),
-            func.sum(Record.final_yield_after_clean),
-            func.count(Record.id).filter(Record.final_yield_after_clean.isnot(None)),
-            func.count(Record.id),
-            # The harvest of ONLY the records that also reported a cleaned
+            func.sum(lr.c.target_kg),
+            func.sum(lr.c.yield_kg),
+            func.sum(lr.c.cleaned_kg),
+            func.count().filter(lr.c.cleaned_kg.isnot(None)),
+            func.count(),
+            # The harvest of ONLY the plots that also reported a cleaned
             # weight — the matching base for cleaned_retention_pct below.
-            func.sum(Record.yield_quantity_kg).filter(
-                Record.final_yield_after_clean.isnot(None)
-            ),
-        ).where(*record_scope, *window.conditions())
+            func.sum(lr.c.yield_kg).filter(lr.c.cleaned_kg.isnot(None)),
+        ).select_from(lr).where(*window.conditions_on(lr.c.record_date))
     )).one()
-    (target_kg, harvest_kg, cleaned_kg, cleaned_count, records_in_range,
+    (target_kg, harvest_kg, cleaned_kg, cleaned_count, plots_in_range,
      harvest_kg_of_cleaned) = yields
     cleaned_count = cleaned_count or 0
-    records_in_range = records_in_range or 0
+    plots_in_range = plots_in_range or 0
 
     # cleaned / harvested, over the SAME records — not over every record in
     # the window. Dividing by the whole window's harvest turned "12 of 305
@@ -455,7 +593,7 @@ async def get_executive_summary(
     # is a different and alarming claim about a real harvest.
     cleaned_retention_pct = retention_pct(cleaned_kg, harvest_kg_of_cleaned)
 
-    actionable = await _actionable_counts(db, today, supplier_id, p_code)
+    actionable = await _actionable_counts(db, today, supplier_id, p_code, cycle_status)
 
     return ExecutiveSummary(
         plots_total=plots_total,
@@ -474,7 +612,7 @@ async def get_executive_summary(
         achievement_pct=achievement_pct(target_kg, harvest_kg),
         cleaned_kg_total=cleaned_kg,
         cleaned_record_count=cleaned_count,
-        cleaned_missing_count=max(0, records_in_range - cleaned_count),
+        cleaned_missing_count=max(0, plots_in_range - cleaned_count),
         cleaned_retention_pct=cleaned_retention_pct,
         supplier_total=supplier_total,
         range=window.key,
@@ -492,7 +630,11 @@ async def get_executive_summary(
 # disagree about what they are counting.
 
 
-def _last_visit_sq(supplier_id: UUID | None = None, p_code: str | None = None):
+def _last_visit_sq(
+    supplier_id: UUID | None = None,
+    p_code: str | None = None,
+    cycle_status: str | None = None,
+):
     """plot_id -> the most recent inspection date, over ALL time.
 
     Never range-scoped: a plot is overdue because nobody has been there
@@ -506,7 +648,8 @@ def _last_visit_sq(supplier_id: UUID | None = None, p_code: str | None = None):
         )
         .select_from(Record)
         .join(Plot, Plot.id == Record.plot_id)
-        .where(Record.is_active.is_(True), *_plot_scope(supplier_id, p_code))
+        .where(Record.is_active.is_(True),
+               *_plot_scope(supplier_id, p_code, cycle_status))
         .group_by(Record.plot_id)
         .subquery()
     )
@@ -528,6 +671,7 @@ async def _flag_sets(
     today: datetime.date,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
+    cycle_status: str | None = None,
 ) -> dict[str, dict]:
     """{reason: {plot_id: value}} for the three things worth a visit.
 
@@ -536,7 +680,22 @@ async def _flag_sets(
     total, and computing those from one merged list would lose the overlap.
     """
     cutoff = today - datetime.timedelta(days=OVERDUE_DAYS)
-    last_visit = _last_visit_sq(supplier_id, p_code)
+
+    # Never visited at all. Valued in days since the plot was registered,
+    # so the list answers "which one has been waiting longest" rather than
+    # just naming them.
+    never_rows = (await db.execute(
+        select(Plot.id, Plot.created_at)
+        .where(*_plot_scope(supplier_id, p_code, cycle_status),
+               ~exists(select(Record.id).where(
+                   Record.plot_id == Plot.id, Record.is_active.is_(True))))
+    )).all()
+    never = {
+        r.id: float((today - r.created_at.date()).days)
+        for r in never_rows if r.created_at is not None
+    }
+
+    last_visit = _last_visit_sq(supplier_id, p_code, cycle_status)
     overdue_rows = (await db.execute(
         select(last_visit.c.plot_id, last_visit.c.last_visit)
         .where(last_visit.c.last_visit < cutoff)
@@ -545,7 +704,8 @@ async def _flag_sets(
 
     low_score_rows = (await db.execute(
         select(Plot.id, _low_score_expr().label("worst"))
-        .where(*_plot_scope(supplier_id, p_code), _low_score_expr() <= LOW_SCORE)
+        .where(*_plot_scope(supplier_id, p_code, cycle_status),
+               _low_score_expr() <= LOW_SCORE)
     )).all()
     low_score = {r.id: float(r.worst) for r in low_score_rows}
 
@@ -557,7 +717,7 @@ async def _flag_sets(
         .select_from(PlotCycle)
         .join(Plot, Plot.id == PlotCycle.plot_id)
         .where(
-            *_plot_scope(supplier_id, p_code),
+            *_plot_scope(supplier_id, p_code, cycle_status),
             PlotCycle.status == CYCLE_STATUS_HARVESTED,
             PlotCycle.final_yield_pct.isnot(None),
             PlotCycle.final_yield_pct < LOW_YIELD_PCT,
@@ -567,6 +727,7 @@ async def _flag_sets(
     low_yield = {r.plot_id: float(r.pct) for r in low_yield_rows}
 
     return {
+        FOLLOW_UP_NEVER: never,
         FOLLOW_UP_OVERDUE: overdue,
         FOLLOW_UP_LOW_SCORE: low_score,
         FOLLOW_UP_LOW_YIELD: low_yield,
@@ -578,8 +739,9 @@ async def _actionable_counts(
     today: datetime.date,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
+    cycle_status: str | None = None,
 ) -> dict:
-    sets = await _flag_sets(db, today, supplier_id, p_code)
+    sets = await _flag_sets(db, today, supplier_id, p_code, cycle_status)
     union: set = set()
     for ids in sets.values():
         union |= set(ids)
@@ -596,6 +758,7 @@ async def get_executive_trend(
     date_to: datetime.date | None = None,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
+    cycle_status: str | None = None,
 ) -> ExecutiveTrend:
     """Inspections per bucket, with the average condition score on top.
 
@@ -665,6 +828,7 @@ async def get_executive_breakdown(
     date_to: datetime.date | None = None,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
+    cycle_status: str | None = None,
 ) -> ExecutiveBreakdown:
     """The comparison table, grouped by one attribute OF THE PLOT.
 
@@ -702,6 +866,17 @@ async def get_executive_breakdown(
     join_on = [Record.plot_id == Plot.id, Record.is_active.is_(True)]
     join_on.extend(window.conditions())
 
+    # Inspection counts and scores come from EVERY record in the window —
+    # "how much work happened" is a count of visits. The yield figures do
+    # not: they come from the last-record subquery joined in below, one row
+    # per plot, because a plot's target must be counted once however many
+    # times somebody walked it.
+    lr = _last_record_sq(supplier_id, p_code, cycle_status)
+    lr_in_window = and_(lr.c.plot_id == Plot.id,
+                        *window.conditions_on(lr.c.record_date))
+    growing = lr.c.cleaned_kg.is_(None)
+    done = lr.c.cleaned_kg.isnot(None)
+
     stmt = (
         select(
             key_col.label("key"),
@@ -713,12 +888,17 @@ async def get_executive_breakdown(
             func.avg(Record.weather_score),
             func.avg(Record.care_score),
             func.avg(Record.variety_resistance_score),
-            func.sum(Record.yield_target_kg_snapshot).label("target_kg"),
-            func.sum(Record.yield_quantity_kg).label("harvest_kg"),
+            func.count(func.distinct(lr.c.plot_id)).filter(growing).label("est_plots"),
+            func.sum(lr.c.target_kg).filter(growing).label("est_target"),
+            func.sum(lr.c.yield_kg).filter(growing).label("est_kg"),
+            func.count(func.distinct(lr.c.plot_id)).filter(done).label("act_plots"),
+            func.sum(lr.c.target_kg).filter(done).label("act_target"),
+            func.sum(lr.c.cleaned_kg).filter(done).label("act_kg"),
         )
         .select_from(Plot)
         .outerjoin(Record, and_(*join_on))
-        .where(*_plot_scope(supplier_id, p_code))
+        .outerjoin(lr, lr_in_window)
+        .where(*_plot_scope(supplier_id, p_code, cycle_status))
         .group_by(key_col, label_col)
     )
     if group_by == GROUP_SUPPLIER:
@@ -732,13 +912,14 @@ async def get_executive_breakdown(
 
     # Overdue is a fact about today, so it is counted over all time and
     # merged in rather than folded into the range-scoped query above.
-    last_visit = _last_visit_sq(supplier_id, p_code)
+    last_visit = _last_visit_sq(supplier_id, p_code, cycle_status)
     cutoff = today - datetime.timedelta(days=OVERDUE_DAYS)
     overdue_stmt = (
         select(key_col.label("key"), func.count(func.distinct(Plot.id)).label("n"))
         .select_from(Plot)
         .join(last_visit, last_visit.c.plot_id == Plot.id)
-        .where(*_plot_scope(supplier_id, p_code), last_visit.c.last_visit < cutoff)
+        .where(*_plot_scope(supplier_id, p_code, cycle_status),
+               last_visit.c.last_visit < cutoff)
         .group_by(key_col)
     )
     if group_by == GROUP_SUPPLIER:
@@ -762,19 +943,26 @@ async def get_executive_breakdown(
             plots_overdue=overdue_by_key.get(r.key, 0),
             inspections=r.inspections or 0,
             avg_score=round(sum(present) / len(present), 1) if present else None,
-            target_kg=r.target_kg,
-            harvest_kg=r.harvest_kg,
-            achievement_pct=achievement_pct(r.target_kg, r.harvest_kg),
+            estimate_plots=r.est_plots or 0,
+            estimate_target_kg=r.est_target,
+            estimate_kg=r.est_kg,
+            estimate_pct=lens_pct(r.est_kg, r.est_target),
+            actual_plots=r.act_plots or 0,
+            actual_target_kg=r.act_target,
+            actual_kg=r.act_kg,
+            actual_pct=lens_pct(r.act_kg, r.act_target),
         ))
 
     # Worst first: this table exists to find where to go, not to rank the
     # winners. Rows with nothing to compare sink to the bottom rather than
     # masquerading as the worst performers.
-    out.sort(key=lambda row: (
-        row.achievement_pct is None,
-        row.achievement_pct if row.achievement_pct is not None else 0.0,
-        -row.plots,
-    ))
+    def _rank(row: BreakdownRow) -> tuple:
+        # A measured shortfall is worse news than an estimated one, so the
+        # finished percentage leads when there is one.
+        best = row.actual_pct if row.actual_pct is not None else row.estimate_pct
+        return (best is None, best if best is not None else 0.0, -row.plots)
+
+    out.sort(key=_rank)
     return ExecutiveBreakdown(group_by=group_by, range=window.key, rows=out)
 
 
@@ -784,6 +972,7 @@ async def get_executive_follow_up(
     limit: int = 10,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
+    cycle_status: str | None = None,
 ) -> ExecutiveFollowUp:
     """Plots worth a visit, worst reason first, one row per plot.
 
@@ -792,13 +981,14 @@ async def get_executive_follow_up(
     four months, which is the one that most needs finding.
     """
     today = datetime.date.today()
-    sets = await _flag_sets(db, today, supplier_id, p_code)
+    sets = await _flag_sets(db, today, supplier_id, p_code, cycle_status)
 
     # One row per plot carrying its most serious reason: the list is a
     # worklist, and a plot that is both overdue and low-scoring is still one
     # trip.
     worst: dict = {}
-    for reason in (FOLLOW_UP_LOW_SCORE, FOLLOW_UP_OVERDUE, FOLLOW_UP_LOW_YIELD):
+    for reason in (FOLLOW_UP_NEVER, FOLLOW_UP_LOW_SCORE, FOLLOW_UP_OVERDUE,
+                   FOLLOW_UP_LOW_YIELD):
         for plot_id, value in sets[reason].items():
             current = worst.get(plot_id)
             if current is None or _FOLLOW_UP_SEVERITY[reason] < _FOLLOW_UP_SEVERITY[current[0]]:
@@ -817,7 +1007,7 @@ async def get_executive_follow_up(
     )[:limit]
     wanted = [plot_id for plot_id, _ in ordered]
 
-    last_visit = _last_visit_sq(supplier_id, p_code)
+    last_visit = _last_visit_sq(supplier_id, p_code, cycle_status)
     detail_rows = (await db.execute(
         select(
             Plot.id, Plot.plot_code, Plot.name,
@@ -846,3 +1036,183 @@ async def get_executive_follow_up(
             last_inspected=d.last_visit,
         ))
     return ExecutiveFollowUp(total=total, rows=rows)
+
+
+# --- Round 50: the two lenses -------------------------------------------
+
+
+def _active_cycle_pcode_sq():
+    """plot_id -> the P.Code of the plot's open cycle, for grouping."""
+    return (
+        select(PlotCycle.plot_id.label("plot_id"), PlotCycle.p_code.label("p_code"))
+        .where(PlotCycle.status == CYCLE_STATUS_ACTIVE)
+        .distinct(PlotCycle.plot_id)
+        .order_by(PlotCycle.plot_id, PlotCycle.cycle_no.desc())
+        .subquery()
+    )
+
+
+async def get_production_status(
+    db: AsyncSession,
+    *,
+    range_key: str = DEFAULT_RANGE,
+    date_from: datetime.date | None = None,
+    date_to: datetime.date | None = None,
+    supplier_id: UUID | None = None,
+    p_code: str | None = None,
+    cycle_status: str | None = None,
+) -> ProductionStatus:
+    """The same plots, split by whether their LAST record finished them.
+
+    Both lenses divide by `yield_target_kg_snapshot` from that same record,
+    so "คาดว่าจะได้ 93%" and "ผลิตได้จริง 90%" sit on one scale and the
+    comparison between them means something.
+
+    The window bounds the LAST record's date. A plot last seen outside the
+    period is not shown as current production — "ไม่ได้ตรวจนาน" is the
+    follow-up list's job, and it is deliberately not period-scoped.
+    """
+    today = datetime.date.today()
+    window = resolve_window(range_key, date_from, date_to, today)
+    lr = _last_record_sq(supplier_id, p_code, cycle_status)
+    in_window = window.conditions_on(lr.c.record_date)
+
+    growing = lr.c.cleaned_kg.is_(None)
+    done = lr.c.cleaned_kg.isnot(None)
+
+    agg = (await db.execute(
+        select(
+            func.count().filter(growing),
+            func.sum(lr.c.target_kg).filter(growing),
+            func.sum(lr.c.yield_kg).filter(growing),
+            func.count().filter(done),
+            func.sum(lr.c.target_kg).filter(done),
+            func.sum(lr.c.cleaned_kg).filter(done),
+            # The harvest weight of the finished plots only — retention's
+            # matching base, never the whole window's harvest.
+            func.sum(lr.c.yield_kg).filter(done),
+        ).select_from(lr).where(*in_window)
+    )).one()
+    (g_plots, g_target, g_yield, d_plots, d_target, d_clean, d_harvest) = agg
+
+    stage_rows = (await db.execute(
+        select(lr.c.growth_stage, func.count().label("plots"))
+        .select_from(lr)
+        .where(growing, *in_window)
+        .group_by(lr.c.growth_stage)
+        .order_by(func.count().desc())
+    )).all()
+
+    return ProductionStatus(
+        in_production=LensFigures(
+            plots=g_plots or 0, target_kg=g_target, value_kg=g_yield,
+            pct=lens_pct(g_yield, g_target),
+        ),
+        finished=LensFigures(
+            plots=d_plots or 0, target_kg=d_target, value_kg=d_clean,
+            pct=lens_pct(d_clean, d_target),
+        ),
+        finished_harvest_kg=d_harvest,
+        finished_retention_pct=retention_pct(d_clean, d_harvest),
+        by_stage=[
+            StageCount(stage=r.growth_stage or UNSPECIFIED_LABEL, plots=r.plots)
+            for r in stage_rows
+        ],
+        range=window.key,
+    )
+
+
+async def get_concerns(
+    db: AsyncSession,
+    *,
+    range_key: str = DEFAULT_RANGE,
+    date_from: datetime.date | None = None,
+    date_to: datetime.date | None = None,
+    supplier_id: UUID | None = None,
+    p_code: str | None = None,
+    cycle_status: str | None = None,
+    threshold_pct=None,
+) -> ExecutiveConcerns:
+    """What to act on, summarised per P.Code.
+
+    P.Code because that is what production strains are analysed by here;
+    the per-plot detail already has a home in the follow-up list, and a
+    concern strip that lists 60 plots is a strip nobody reads.
+    """
+    today = datetime.date.today()
+    window = resolve_window(range_key, date_from, date_to, today)
+    lr = _last_record_sq(supplier_id, p_code, cycle_status)
+    pc = _active_cycle_pcode_sq()
+    in_window = window.conditions_on(lr.c.record_date)
+    key = func.coalesce(func.nullif(pc.c.p_code, ""), UNSPECIFIED_LABEL).label("key")
+
+    growing = lr.c.cleaned_kg.is_(None)
+    done = lr.c.cleaned_kg.isnot(None)
+    threshold = normalize_concern_pct(threshold_pct)
+    low = threshold / Decimal(100)
+
+    base = select(key).select_from(lr).outerjoin(pc, pc.c.plot_id == lr.c.plot_id)
+    rows: list[ConcernRow] = []
+
+    # 1 + 2 — below plan, in either lens. Same threshold, different column:
+    # an estimate that is short is a warning, a cleaned weight that is short
+    # is a result.
+    for kind, cond, value_col in (
+        (CONCERN_IN_PRODUCTION_LOW, growing, lr.c.yield_kg),
+        (CONCERN_FINISHED_LOW, done, lr.c.cleaned_kg),
+    ):
+        found = (await db.execute(
+            base.add_columns(
+                func.count().label("plots"),
+                func.min(value_col / lr.c.target_kg).label("worst"),
+            )
+            .where(cond, lr.c.target_kg > 0, value_col / lr.c.target_kg < low,
+                   *in_window)
+            .group_by(key).order_by(func.count().desc())
+        )).all()
+        rows.extend(ConcernRow(
+            severity="high", kind=kind, key=r.key, plots=r.plots,
+            value=round(float(r.worst) * 100, 1) if r.worst is not None else None,
+        ) for r in found)
+
+    # 3 — staff closed the cycle but the last record has no cleaned weight.
+    # Keyed on cycle STATUS rather than on growth_stage == "เก็บเกี่ยว":
+    # growth_stage is editable master data and an admin renaming it would
+    # silently switch this check off.
+    latest = _latest_cycle_sq()
+    closed_without = (await db.execute(
+        base.add_columns(func.count().label("plots"))
+        .join(latest, latest.c.plot_id == lr.c.plot_id)
+        .where(growing, latest.c.status == CYCLE_STATUS_HARVESTED, *in_window)
+        .group_by(key).order_by(func.count().desc())
+    )).all()
+    rows.extend(ConcernRow(
+        severity="medium", kind=CONCERN_MISSING_CLEANED, key=r.key, plots=r.plots,
+    ) for r in closed_without)
+
+    # 4 — cleaning losing more than it does elsewhere. Compared against this
+    # page's own average rather than a fixed number: what is normal depends
+    # on the crop, and the filters may already have narrowed it to one.
+    overall = (await db.execute(
+        select(func.sum(lr.c.cleaned_kg), func.sum(lr.c.yield_kg))
+        .select_from(lr).where(done, *in_window)
+    )).one()
+    avg_retention = retention_pct(overall[0], overall[1])
+    if avg_retention is not None:
+        per_group = (await db.execute(
+            base.add_columns(
+                func.count().label("plots"),
+                func.sum(lr.c.cleaned_kg).label("cleaned"),
+                func.sum(lr.c.yield_kg).label("harvest"),
+            ).where(done, *in_window).group_by(key)
+        )).all()
+        for r in per_group:
+            got = retention_pct(r.cleaned, r.harvest)
+            if got is not None and avg_retention - got >= RETENTION_GAP_PTS:
+                rows.append(ConcernRow(
+                    severity="medium", kind=CONCERN_LOW_RETENTION,
+                    key=r.key, plots=r.plots, value=got,
+                ))
+
+    rows.sort(key=lambda r: (r.severity != "high", -r.plots))
+    return ExecutiveConcerns(threshold_pct=float(threshold), rows=rows)

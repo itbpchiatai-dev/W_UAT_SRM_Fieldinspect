@@ -18,6 +18,7 @@ import type { ExecutiveRangeKey } from '../../api/dashboard';
 export const PRESETS: { value: ExecutiveRangeKey; label: string }[] = [
   { value: '30d', label: '30 วัน' },
   { value: '3m',  label: '3 เดือน' },
+  { value: '6m',  label: '6 เดือน' },
   { value: 'ytd', label: 'ปีนี้' },
 ];
 

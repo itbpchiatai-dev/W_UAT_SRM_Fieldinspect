@@ -18,6 +18,7 @@ _SEED_FILES = [
     "seed.py",
     "seed_mock_farmlog.py",
     "seed_mock_records_extra.py",
+    "seed_mock_dashboard_demo.py",
     "seed_reset_farmlog_full.py",
 ]
 

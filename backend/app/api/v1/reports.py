@@ -65,8 +65,9 @@ def _workbook(
     return build_xlsx([(sheet, data)])
 
 
-def _xlsx(content: bytes, filename: str) -> Response:
-    """One workbook response shape for every report export (round 29): the
+def xlsx_response(content: bytes, filename: str) -> Response:
+    """One workbook response shape for every spreadsheet download (round 29,
+    shared with the executive overview in round 47): the
     spreadsheet media type, an attachment name, and no-store — a report may
     carry commercial figures and must not sit in a shared cache."""
     return Response(
@@ -243,7 +244,7 @@ async def export_plot_status_report(
         invoice=invoice,
     )
     content = _plot_status_workbook(rows)
-    return _xlsx(content, "plot-status-report.xlsx")
+    return xlsx_response(content, "plot-status-report.xlsx")
 
 
 # --- Report #2 "ผลผลิตตามรอบปลูก" (Cycle Yield, round 8-2.8B) ---------------
@@ -421,7 +422,7 @@ async def export_cycle_yield_report(
         invoice=invoice,
     )
     content = _cycle_yield_workbook(rows)
-    return _xlsx(content, "cycle-yield-report.xlsx")
+    return xlsx_response(content, "cycle-yield-report.xlsx")
 
 # --- The Supplier's own two reports (round 29) ----------------------------
 #
@@ -515,7 +516,7 @@ async def export_supplier_plot_status_report(
         date_to=date_to,
         invoice=invoice,
     )
-    return _xlsx(
+    return xlsx_response(
         _plot_status_workbook(rows, SUPPLIER_HIDDEN_PLOT_STATUS),
         "plot-status-report.xlsx",
     )
@@ -563,7 +564,7 @@ async def export_supplier_cycle_yield_report(
         date_to=date_to,
         invoice=invoice,
     )
-    return _xlsx(
+    return xlsx_response(
         _cycle_yield_workbook(rows, SUPPLIER_HIDDEN_CYCLE_YIELD),
         "cycle-yield-report.xlsx",
     )

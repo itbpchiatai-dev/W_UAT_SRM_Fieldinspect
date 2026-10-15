@@ -12,56 +12,10 @@ import {
   MapPin,
   TrendingUp,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 import { getDashboardSummary, type CropTypeStat } from '../api/dashboard';
 import { useHasPermission } from '../hooks/useHasPermission';
 import { PlotMapCard } from '../components/farmlog/PlotMapCard';
-
-type StatTone = 'primary' | 'green' | 'red' | 'orange' | 'blue' | 'purple';
-
-const TONE: Record<StatTone, string> = {
-  primary: 'bg-primary/10 text-primary',
-  green:   'bg-green-50 text-green-700',
-  red:     'bg-red-50 text-red-700',
-  orange:  'bg-orange-50 text-orange-700',
-  blue:    'bg-blue-50 text-blue-700',
-  purple:  'bg-purple-50 text-purple-700',
-};
-
-interface KpiCardProps {
-  label: string;
-  value: string | number;
-  hint: string;
-  Icon: LucideIcon;
-  tone: StatTone;
-  to?: string;
-}
-
-function KpiCard({ label, value, hint, Icon, tone, to }: KpiCardProps) {
-  const inner = (
-    <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium text-muted-foreground">{label}</p>
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${TONE[tone]}`}>
-          <Icon className="h-4 w-4" />
-        </span>
-      </div>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-    </div>
-  );
-  return to ? <Link to={to}>{inner}</Link> : inner;
-}
-
-function SkeletonCard() {
-  return (
-    <div className="rounded-lg border bg-card p-4 shadow-sm animate-pulse">
-      <div className="h-4 w-1/2 rounded bg-muted" />
-      <div className="mt-3 h-7 w-1/3 rounded bg-muted" />
-      <div className="mt-2 h-3 w-2/3 rounded bg-muted" />
-    </div>
-  );
-}
+import { KpiCard, SkeletonCard } from '../components/dashboard/KpiCard';
 
 function CropTable({ rows }: { rows: CropTypeStat[] }) {
   if (rows.length === 0) return null;

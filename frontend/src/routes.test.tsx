@@ -15,6 +15,9 @@ vi.mock('./pages/farmlog/RecordPreview', () => ({
 vi.mock('./pages/farmlog/RecordForm', () => ({
   RecordForm: () => <div>__record_form_should_never_mount_here__</div>,
 }));
+vi.mock('./pages/farmlog/ExecutiveDashboard', () => ({
+  ExecutiveDashboard: () => <div>__executive_overview_page__</div>,
+}));
 
 function renderAt(path: string) {
   return render(
@@ -73,5 +76,31 @@ describe('routes — /farmlog/records/new permission gate (round 8-4F)', () => {
     // The 403 panel renders (a heading), and the create form never mounts.
     expect(await screen.findByRole('heading')).toBeTruthy();
     expect(screen.queryByText('__record_form_should_never_mount_here__')).toBeNull();
+  });
+});
+
+/**
+ * Round 43 — /farmlog/executive is gated on its OWN key.
+ *
+ * plots.read would have been the easy reuse and is exactly the mistake
+ * migration 0058 had to undo for the four reports: supplier:owner holds
+ * plots.read, and this page is whole-company totals.
+ */
+describe('routes — /farmlog/executive is gated on executive_dashboard.read', () => {
+  it('mounts the overview for a holder of the key', async () => {
+    useAuthStore.setState({ permissionKeys: new Set(['executive_dashboard.read']) });
+    renderAt('/farmlog/executive');
+
+    expect(await screen.findByText('__executive_overview_page__')).toBeTruthy();
+  });
+
+  it('refuses a supplier-shaped permission set that only has plots.read', async () => {
+    useAuthStore.setState({
+      permissionKeys: new Set(['plots.read', 'suppliers.read', 'records.read']),
+    });
+    renderAt('/farmlog/executive');
+
+    expect(await screen.findByRole('heading')).toBeTruthy();
+    expect(screen.queryByText('__executive_overview_page__')).toBeNull();
   });
 });

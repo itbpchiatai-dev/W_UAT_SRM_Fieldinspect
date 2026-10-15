@@ -87,6 +87,14 @@ class PermissionKey:
     REPORTS_PLOT_STATUS_SUPPLIER = "reports.plot_status_supplier"
     REPORTS_CYCLE_YIELD_SUPPLIER = "reports.cycle_yield_supplier"
 
+    # FarmLog — Executive overview (round 42). Its own key rather than
+    # plots.read: the page aggregates every supplier into one set of company
+    # totals, and plots.read is held by supplier:owner too. The holders
+    # (super_admin / admin / supervisor) are exactly the roles already in
+    # scope.py's _FULL_ACCESS_ROLES, so the permission grants a new VIEW of
+    # rows they can already read one at a time — never new rows.
+    EXECUTIVE_DASHBOARD_READ = "executive_dashboard.read"
+
     # FarmLog — Records
     RECORDS_READ   = "records.read"
     RECORDS_CREATE = "records.create"

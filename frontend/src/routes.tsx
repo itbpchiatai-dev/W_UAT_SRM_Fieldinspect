@@ -17,6 +17,11 @@ import { LazyRoute } from './components/LazyRoute';
  * reachable only after login, so none of them belong in the bundle a
  * /public/inspect visitor downloads.
  */
+const ExecutiveDashboard = lazy(() =>
+  import('./pages/farmlog/ExecutiveDashboard').then((m) => ({
+    default: m.ExecutiveDashboard,
+  })),
+);
 const Suppliers = lazy(() =>
   import('./pages/farmlog/admin/Suppliers').then((m) => ({ default: m.Suppliers })),
 );
@@ -69,6 +74,14 @@ function RecordDetailRedirect() {
 }
 
 export const MODULE_ROUTES: ReactElement[] = [
+  // Round 43 — the executive overview. Its own permission, not plots.read:
+  // the page is company-wide totals and plots.read is held by supplier:owner
+  // too (the reuse migration 0058 had to undo for the reports).
+  <Route key="farmlog-executive" path="/farmlog/executive" element={
+    <RequirePermission perm="executive_dashboard.read">
+      <LazyRoute><ExecutiveDashboard /></LazyRoute>
+    </RequirePermission>
+  } />,
   <Route key="farmlog-suppliers" path="/farmlog/admin/suppliers" element={
     <RequirePermission perm="suppliers.read"><LazyRoute><Suppliers /></LazyRoute></RequirePermission>
   } />,

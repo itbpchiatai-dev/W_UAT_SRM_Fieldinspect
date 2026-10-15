@@ -93,6 +93,9 @@ DEFAULT_PERMISSIONS: list[tuple[str, str, str, bool]] = [
      "รายงานสถานะแปลงปัจจุบัน (Supplier)", "farmlog", True),
     ("reports.cycle_yield_supplier",
      "รายงานผลผลิตตามรอบปลูก (Supplier)", "farmlog", True),
+    # FarmLog — Executive overview (round 42). is_menu=True: the same key
+    # gates the sidebar entry and the endpoint behind it.
+    ("executive_dashboard.read", "ดูภาพรวมผู้บริหาร", "farmlog", True),
     # FarmLog — Records
     ("records.read",   "ดูบันทึกการตรวจแปลง", "farmlog", True),
     ("records.create", "สร้างบันทึก",           "farmlog", False),
@@ -144,6 +147,9 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
         # supplier:owner only; an admin who needs to see exactly what a
         # Supplier sees is given that key deliberately, not by default.
         "reports.plot_status", "reports.cycle_yield",
+        # Round 42 — admin is already in scope.py's _FULL_ACCESS_ROLES, so the
+        # overview shows it nothing it could not open one row at a time.
+        "executive_dashboard.read",
     ]),
     ("internal:super_user",  "Super User",   "internal", [
         "menus.read", "menus.update", "menus.reorder",
@@ -155,6 +161,8 @@ DEFAULT_ROLES: list[tuple[str, str, str, list[str] | None]] = [
         "records.read", "records.create", "records.update",
         # Round 29 — a supervisor reads the internal reports.
         "reports.plot_status", "reports.cycle_yield",
+        # Round 42 — the executive overview. Same reasoning as admin above.
+        "executive_dashboard.read",
         # manageMaster — supervisor curates dropdown options (Spec §10.4)
         "masterdata.read", "masterdata.create", "masterdata.update", "masterdata.delete",
     ]),
@@ -233,6 +241,9 @@ DEFAULT_MENUS: list[tuple[str, str, str, str | None, str, str | None, int, str]]
     ("settings.activity_logs", "ประวัติการใช้งาน", "Activity Logs", "History", "/settings/activity-logs", "settings", 55, "activity_logs.read"),
     # FarmLog section
     ("farmlog",                "FarmLog",       "FarmLog",       "Leaf",         "/farmlog",                     None,       20, ""),
+    # Round 42 — first child of FarmLog: the company-wide overview reads as a
+    # starting point, not as something filed under administration.
+    ("farmlog.executive",      "ภาพรวมผู้บริหาร", "Executive Overview", "Gauge", "/farmlog/executive",          "farmlog",   5, "executive_dashboard.read"),
     ("farmlog.admin",          "จัดการข้อมูล", "Admin",          "Database",     "/farmlog/admin",               "farmlog",  10, "suppliers.read"),
     # Round 8-25Q — gated on suppliers.update (not suppliers.read): the
     # Suppliers admin CRUD page/menu is internal:admin/super_admin only.

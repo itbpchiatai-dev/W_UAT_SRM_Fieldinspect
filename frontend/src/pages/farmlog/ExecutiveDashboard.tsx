@@ -29,7 +29,8 @@ import {
   Package, Sprout,
 } from 'lucide-react';
 import {
-  downloadExecutiveBreakdown, getConcerns, getExecutiveBreakdown,
+  downloadExecutiveBreakdown, downloadExecutiveConcerns, downloadExecutiveFollowUp,
+  getConcerns, getExecutiveBreakdown,
   getExecutiveFollowUp, getExecutiveSummary, getExecutiveTrend,
   getProductionStatus, DEFAULT_EXECUTIVE_FILTERS, DEFAULT_CONCERN_PCT,
   type BreakdownGroup, type BreakdownRow, type ConcernRow, type ExecutiveFilters,
@@ -46,6 +47,8 @@ import { ProgressRow } from '../../components/charts/ProgressRow';
 import { StageBar } from '../../components/charts/StageBar';
 
 const DASH = '—';
+/** Rows per page in the two lists (round 56). */
+export const PAGE_SIZE = 10;
 const CONCERNS_ANCHOR = 'exec-concerns';
 const FOLLOW_UP_ANCHOR = 'exec-follow-up';
 
@@ -153,6 +156,88 @@ function SectionTitle({ children, clock }: { children: ReactNode; clock: string 
       {children} <span className="font-normal">({clock})</span>
     </h2>
   );
+}
+
+/** A page number that drops back to the first page whenever `key` changes.
+ *  Worked out during render rather than reset in an effect, so a filter
+ *  change never fetches page 3 of the NEW result first and then corrects
+ *  itself with a second request. */
+function usePageFor(key: string): [number, (page: number) => void] {
+  const [state, setState] = useState({ key, page: 0 });
+  const page = state.key === key ? state.page : 0;
+  return [page, (next: number) => setState({ key, page: next })];
+}
+
+/** Round 56 — only drawn when there is more than one page. */
+export function Pager(
+  { page, total, label, onChange }:
+  { page: number; total: number; label: string; onChange: (page: number) => void },
+) {
+  const pages = Math.ceil(total / PAGE_SIZE);
+  if (pages <= 1) return null;
+  return (
+    <nav
+      aria-label={`เปลี่ยนหน้า ${label}`}
+      className="flex items-center justify-end gap-3 border-t px-4 py-2 text-sm"
+    >
+      <button
+        type="button"
+        disabled={page === 0}
+        onClick={() => onChange(page - 1)}
+        className="rounded px-2 py-1 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        ← ก่อนหน้า
+      </button>
+      <span className="tabular-nums text-muted-foreground">
+        หน้า {page + 1} / {pages}
+      </span>
+      <button
+        type="button"
+        disabled={page >= pages - 1}
+        onClick={() => onChange(page + 1)}
+        className="rounded px-2 py-1 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        ถัดไป →
+      </button>
+    </nav>
+  );
+}
+
+/** Hands a downloaded workbook to the browser. */
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Three of these on one page, so each is named after its block —
+ *  "Export Excel" three times is three buttons nobody can tell apart with
+ *  a screen reader. The visible text stays the same. */
+function ExportButton(
+  { block, pending, disabled, onClick }:
+  { block: string; pending: boolean; disabled: boolean; onClick: () => void },
+) {
+  return (
+    <button
+      type="button"
+      aria-label={`Export Excel ${block}`}
+      onClick={onClick}
+      disabled={pending || disabled}
+      className="inline-flex items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <Download className="h-4 w-4" />
+      {pending ? 'กำลังสร้างไฟล์…' : 'Export Excel'}
+    </button>
+  );
+}
+
+function ExportError() {
+  return <p className="mb-2 text-sm text-destructive">ดาวน์โหลดไม่สำเร็จ — โปรดลองอีกครั้ง</p>;
 }
 
 // --- row 1 ---------------------------------------------------------------
@@ -305,26 +390,36 @@ function ProductionBlock({ data }: { data: ProductionStatus }) {
 // --- row 4: concerns -----------------------------------------------------
 
 function ConcernStrip(
-  { rows, thresholdPct }: { rows: ConcernRow[]; thresholdPct: number },
+  { rows, total, thresholdPct, page, onPage }:
+  { rows: ConcernRow[]; total: number; thresholdPct: number;
+    page: number; onPage: (page: number) => void },
 ) {
-  if (rows.length === 0) {
+  // `total`, not rows.length: a page past the end of a list that just got
+  // shorter is empty, and must not claim there is nothing to worry about.
+  if (total === 0) {
     return <BlockEmpty text="ไม่พบสัญญาณที่ต้องกังวลในตัวกรองนี้" />;
   }
   return (
-    <ul className="divide-y rounded-lg border bg-card shadow-sm">
-      {rows.map((r, i) => (
-        <li key={`${r.kind}-${r.key}-${i}`} className="flex items-start gap-3 px-4 py-2.5">
-          <span
-            className={
-              'mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full ' +
-              (r.severity === 'high' ? 'bg-red-600' : 'bg-orange-500')
-            }
-            aria-label={r.severity === 'high' ? 'รุนแรง' : 'เฝ้าระวัง'}
-          />
-          <span className="text-sm">{concernText(r, thresholdPct)}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="rounded-lg border bg-card shadow-sm">
+      <ul className="divide-y">
+        {rows.length === 0 && (
+          <li className="px-4 py-2.5 text-sm text-muted-foreground">ไม่มีรายการในหน้านี้</li>
+        )}
+        {rows.map((r, i) => (
+          <li key={`${r.kind}-${r.key}-${i}`} className="flex items-start gap-3 px-4 py-2.5">
+            <span
+              className={
+                'mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full ' +
+                (r.severity === 'high' ? 'bg-red-600' : 'bg-orange-500')
+              }
+              aria-label={r.severity === 'high' ? 'รุนแรง' : 'เฝ้าระวัง'}
+            />
+            <span className="text-sm">{concernText(r, thresholdPct)}</span>
+          </li>
+        ))}
+      </ul>
+      <Pager page={page} total={total} label="สิ่งที่ต้องกังวล" onChange={onPage} />
+    </div>
   );
 }
 
@@ -416,8 +511,11 @@ function BreakdownTable({ rows, groupBy }: { rows: BreakdownRow[]; groupBy: stri
 
 // --- row 6: the worklist -------------------------------------------------
 
-function FollowUpTable({ rows, total }: { rows: FollowUpRow[]; total: number }) {
-  if (rows.length === 0) {
+function FollowUpTable(
+  { rows, total, page, onPage }:
+  { rows: FollowUpRow[]; total: number; page: number; onPage: (page: number) => void },
+) {
+  if (total === 0) {
     return <BlockEmpty text="ไม่มีแปลงที่ต้องตามงาน — ทุกแปลงได้รับการตรวจตามเกณฑ์" />;
   }
   return (
@@ -456,9 +554,12 @@ function FollowUpTable({ rows, total }: { rows: FollowUpRow[]; total: number }) 
         </tbody>
       </table>
       <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-        แสดง {rows.length} จาก {total.toLocaleString()} แปลง ·
-        {' '}แปลงที่มีหมายเหตุและผู้รับผิดชอบจะเพิ่มเข้ามาได้เมื่อเริ่มมีการกรอก
+        {rows.length === 0
+          ? 'ไม่มีรายการในหน้านี้'
+          : `แสดง ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + rows.length} จาก ${total.toLocaleString()} แปลง`}
+        {' '}· แปลงที่มีหมายเหตุและผู้รับผิดชอบจะเพิ่มเข้ามาได้เมื่อเริ่มมีการกรอก
       </p>
+      <Pager page={page} total={total} label="แปลงที่ต้องตามงาน" onChange={onPage} />
     </div>
   );
 }
@@ -485,6 +586,13 @@ export function ExecutiveDashboard() {
   }, [thresholdText]);
   const { range, dateFrom, dateTo, supplierId, pCode, cycleStatus } = filters;
   const scope = [range, dateFrom, dateTo, supplierId, pCode, cycleStatus];
+  // Each list goes back to its first page when anything that changes WHAT
+  // it lists changes. The worklist ignores the period, so the period does
+  // not reset it either.
+  const [concernsPage, setConcernsPage] = usePageFor(
+    JSON.stringify([...scope, thresholdPct]));
+  const [followUpPage, setFollowUpPage] = usePageFor(
+    JSON.stringify([supplierId, pCode, cycleStatus]));
 
   const suppliers = useQuery({
     queryKey: ['suppliers', 'active-for-executive'],
@@ -511,8 +619,9 @@ export function ExecutiveDashboard() {
     queryFn: () => getProductionStatus(filters), ...common,
   });
   const concerns = useQuery({
-    queryKey: ['executive-concerns', ...scope, thresholdPct],
-    queryFn: () => getConcerns(filters, thresholdPct), ...common,
+    queryKey: ['executive-concerns', ...scope, thresholdPct, concernsPage],
+    queryFn: () => getConcerns(
+      filters, thresholdPct, PAGE_SIZE, concernsPage * PAGE_SIZE), ...common,
   });
   const trend = useQuery({
     queryKey: ['executive-trend', ...scope],
@@ -525,22 +634,23 @@ export function ExecutiveDashboard() {
   // No period in the key: this list is about today. The scope filters ARE
   // in it — picking a supplier changes what "this" is.
   const followUp = useQuery({
-    queryKey: ['executive-follow-up', supplierId, pCode, cycleStatus],
-    queryFn: () => getExecutiveFollowUp(filters, 10), ...common,
+    queryKey: ['executive-follow-up', supplierId, pCode, cycleStatus, followUpPage],
+    queryFn: () => getExecutiveFollowUp(
+      filters, PAGE_SIZE, followUpPage * PAGE_SIZE), ...common,
   });
 
   const exportM = useMutation({
     mutationFn: () => downloadExecutiveBreakdown(filters, groupBy),
-    onSuccess: (blob) => {
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `executive-breakdown-${groupBy}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    },
+    onSuccess: (blob) => saveBlob(blob, `executive-breakdown-${groupBy}.xlsx`),
+  });
+  // The two list exports carry every row, not the page on screen.
+  const exportConcernsM = useMutation({
+    mutationFn: () => downloadExecutiveConcerns(filters, thresholdPct),
+    onSuccess: (blob) => saveBlob(blob, 'executive-concerns.xlsx'),
+  });
+  const exportFollowUpM = useMutation({
+    mutationFn: () => downloadExecutiveFollowUp(filters),
+    onSuccess: (blob) => saveBlob(blob, 'executive-follow-up.xlsx'),
   });
 
   const trendPoints: BarLinePoint[] = (trend.data?.points ?? []).map((p) => ({
@@ -630,26 +740,41 @@ export function ExecutiveDashboard() {
           <h2 className="text-sm font-semibold text-muted-foreground">
             สิ่งที่ต้องกังวล <span className="font-normal">({IN_RANGE})</span>
           </h2>
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">แจ้งเตือนเมื่อต่ำกว่า</span>
-            <input
-              type="number"
-              aria-label="เกณฑ์แจ้งเตือน (% ของเป้า)"
-              min={1}
-              max={200}
-              value={thresholdText}
-              onChange={(e) => setThresholdText(e.target.value)}
-              className="w-20 rounded-md border px-2 py-1 text-sm tabular-nums"
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">แจ้งเตือนเมื่อต่ำกว่า</span>
+              <input
+                type="number"
+                aria-label="เกณฑ์แจ้งเตือน (% ของเป้า)"
+                min={1}
+                max={200}
+                value={thresholdText}
+                onChange={(e) => setThresholdText(e.target.value)}
+                className="w-20 rounded-md border px-2 py-1 text-sm tabular-nums"
+              />
+              <span className="text-muted-foreground">% ของเป้า</span>
+            </label>
+            <ExportButton
+              block="สิ่งที่ต้องกังวล"
+              pending={exportConcernsM.isPending}
+              disabled={!concerns.data?.total}
+              onClick={() => exportConcernsM.mutate()}
             />
-            <span className="text-muted-foreground">% ของเป้า</span>
-          </label>
+          </div>
         </div>
+        {exportConcernsM.isError && <ExportError />}
         {concerns.isError ? (
           <BlockError what="สัญญาณเตือน" />
         ) : concerns.isLoading ? (
           <SkeletonCard />
         ) : concerns.data ? (
-          <ConcernStrip rows={concerns.data.rows} thresholdPct={concerns.data.thresholdPct} />
+          <ConcernStrip
+            rows={concerns.data.rows}
+            total={concerns.data.total}
+            thresholdPct={concerns.data.thresholdPct}
+            page={concernsPage}
+            onPage={setConcernsPage}
+          />
         ) : null}
       </section>
 
@@ -677,20 +802,15 @@ export function ExecutiveDashboard() {
                 </button>
               ))}
             </div>
-            <button
-              type="button"
+            <ExportButton
+              block="เทียบผลงาน"
+              pending={exportM.isPending}
+              disabled={!breakdown.data?.rows.length}
               onClick={() => exportM.mutate()}
-              disabled={exportM.isPending || !breakdown.data?.rows.length}
-              className="inline-flex items-center gap-1.5 rounded-md border bg-card px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Download className="h-4 w-4" />
-              {exportM.isPending ? 'กำลังสร้างไฟล์…' : 'Export Excel'}
-            </button>
+            />
           </div>
         </div>
-        {exportM.isError && (
-          <p className="mb-2 text-sm text-destructive">ดาวน์โหลดไม่สำเร็จ — โปรดลองอีกครั้ง</p>
-        )}
+        {exportM.isError && <ExportError />}
         {breakdown.isError ? (
           <BlockError what="ตารางเทียบผลงาน" />
         ) : breakdown.isLoading ? (
@@ -720,13 +840,29 @@ export function ExecutiveDashboard() {
       </section>
 
       <section className="mt-6" id={FOLLOW_UP_ANCHOR} aria-label="แปลงที่ต้องตามงาน">
-        <SectionTitle clock={NOW}>แปลงที่ต้องตามงาน</SectionTitle>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            แปลงที่ต้องตามงาน <span className="font-normal">({NOW})</span>
+          </h2>
+          <ExportButton
+            block="แปลงที่ต้องตามงาน"
+            pending={exportFollowUpM.isPending}
+            disabled={!followUp.data?.total}
+            onClick={() => exportFollowUpM.mutate()}
+          />
+        </div>
+        {exportFollowUpM.isError && <ExportError />}
         {followUp.isError ? (
           <BlockError what="รายการแปลงที่ต้องตามงาน" />
         ) : followUp.isLoading ? (
           <SkeletonCard />
         ) : followUp.data ? (
-          <FollowUpTable rows={followUp.data.rows} total={followUp.data.total} />
+          <FollowUpTable
+            rows={followUp.data.rows}
+            total={followUp.data.total}
+            page={followUpPage}
+            onPage={setFollowUpPage}
+          />
         ) : null}
       </section>
     </div>

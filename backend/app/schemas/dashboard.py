@@ -149,7 +149,7 @@ class FollowUpRow(CamelBaseModel):
 
 
 class ExecutiveFollowUp(CamelBaseModel):
-    total: int              # distinct plots flagged, before the limit
+    total: int              # distinct plots flagged, before the page is cut
     rows: list[FollowUpRow]
 
 # --- Round 50: the two lenses ------------------------------------------
@@ -223,5 +223,6 @@ class ConcernRow(CamelBaseModel):
 
 class ExecutiveConcerns(CamelBaseModel):
     threshold_pct: float   # echoed so the page cannot caption a different number
+    total: int             # every concern found, before the page is cut
     rows: list[ConcernRow]
 

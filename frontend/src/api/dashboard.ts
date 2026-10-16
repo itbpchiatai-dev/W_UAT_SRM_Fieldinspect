@@ -177,8 +177,7 @@ export interface FollowUpRow {
 }
 
 export interface ExecutiveFollowUp {
-  /** Distinct plots flagged BEFORE the limit, so the page can say
-   *  "ดูทั้งหมด N" without a second call. */
+  /** Distinct plots flagged across EVERY page — what the pager counts to. */
   total: number;
   rows: FollowUpRow[];
 }
@@ -214,16 +213,27 @@ export async function downloadExecutiveBreakdown(
 /** Not period-filtered — "who should I visit" is a question about today —
  *  but it IS supplier-filtered, like everything else on the page. */
 export async function getExecutiveFollowUp(
-  f: ExecutiveFilters, limit = 10,
+  f: ExecutiveFilters, limit = 10, offset = 0,
 ): Promise<ExecutiveFollowUp> {
   // Takes the whole filter object but sends only the non-period parts: the
   // list is about today, and a window would hide the plot nobody has
   // visited in four months.
   const { range: _r, date_from: _f, date_to: _t, ...scope } = executiveParams(f);
   const { data } = await apiClient.get<ExecutiveFollowUp>(
-    '/api/v1/dashboard/executive/follow-up', { params: { ...scope, limit } },
+    '/api/v1/dashboard/executive/follow-up', { params: { ...scope, limit, offset } },
   );
   return data;
+}
+
+/** Every plot on the worklist, not the page on screen. Same non-period
+ *  filters as the list, for the same reason. */
+export async function downloadExecutiveFollowUp(f: ExecutiveFilters): Promise<Blob> {
+  const { range: _r, date_from: _f, date_to: _t, ...scope } = executiveParams(f);
+  const res = await apiClient.get<Blob>(
+    '/api/v1/dashboard/executive/follow-up/export',
+    { params: scope, responseType: 'blob' },
+  );
+  return res.data;
 }
 
 /** Round 50 — production seen through two lenses, split by each plot's
@@ -271,6 +281,8 @@ export interface ConcernRow {
 export interface ExecutiveConcerns {
   /** Echoed so a caption can never claim a threshold the server did not use. */
   thresholdPct: number;
+  /** Every concern found, across all pages. */
+  total: number;
   rows: ConcernRow[];
 }
 
@@ -290,11 +302,28 @@ export const DEFAULT_CONCERN_PCT = 70;
  *  somebody nudged the number. The server clamps it and echoes back what
  *  it used, which is what the caption reads. */
 export async function getConcerns(
-  f: ExecutiveFilters, thresholdPct?: number | null,
+  f: ExecutiveFilters, thresholdPct?: number | null, limit?: number, offset?: number,
 ): Promise<ExecutiveConcerns> {
   const { data } = await apiClient.get<ExecutiveConcerns>(
     '/api/v1/dashboard/executive/concerns',
-    { params: { ...executiveParams(f), threshold_pct: thresholdPct ?? undefined } },
+    { params: {
+      ...executiveParams(f), threshold_pct: thresholdPct ?? undefined, limit, offset,
+    } },
   );
   return data;
+}
+
+/** Every concern for these filters AND this threshold — without the
+ *  threshold the file would list different P.Codes from the screen. */
+export async function downloadExecutiveConcerns(
+  f: ExecutiveFilters, thresholdPct?: number | null,
+): Promise<Blob> {
+  const res = await apiClient.get<Blob>(
+    '/api/v1/dashboard/executive/concerns/export',
+    {
+      params: { ...executiveParams(f), threshold_pct: thresholdPct ?? undefined },
+      responseType: 'blob',
+    },
+  );
+  return res.data;
 }

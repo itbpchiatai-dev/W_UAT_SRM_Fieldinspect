@@ -160,6 +160,7 @@ async def get_executive_breakdown(
 async def get_executive_follow_up(
     _rls: RLSContext,
     limit: int = Query(10, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     supplier_id: UUID | None = _SUPPLIER_Q,
     p_code: str | None = _PCODE_Q,
     cycle_status: str | None = _CYCLE_STATUS_Q,
@@ -169,7 +170,7 @@ async def get_executive_follow_up(
     — a window would hide the plot nobody has touched in four months, which
     is the one most worth finding."""
     return await repo.get_executive_follow_up(
-        db, limit=limit, supplier_id=supplier_id, p_code=p_code,
+        db, limit=limit, offset=offset, supplier_id=supplier_id, p_code=p_code,
         cycle_status=cycle_status,
     )
 
@@ -281,6 +282,9 @@ async def get_concerns(
     threshold_pct: float | None = Query(
         None, description="Below this share of plan is a concern (default 70)",
     ),
+    # Unset = every row, which is what callers before round 56 received.
+    limit: int | None = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     date_from: datetime.date | None = _FROM_Q,
     date_to: datetime.date | None = _TO_Q,
     supplier_id: UUID | None = _SUPPLIER_Q,
@@ -297,5 +301,116 @@ async def get_concerns(
     return await repo.get_concerns(
         db, range_key=range, date_from=date_from, date_to=date_to,
         supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
-        threshold_pct=threshold_pct,
+        threshold_pct=threshold_pct, limit=limit, offset=offset,
     )
+
+
+# Round 56 — the two lists, downloadable.
+#
+# EVERY row, not the page on screen: the pager exists to keep the page
+# light, and an export that stopped at ten would be a worse screenshot.
+# Same filters, same repository call, so the file can never disagree with
+# the list it came from. The wording mirrors the page's (concernText /
+# REASON_TEXT in ExecutiveDashboard.tsx); the figures go in their own
+# columns instead of inside a sentence, so they can be sorted and summed.
+_SEVERITY_TEXT: dict[str, str] = {"high": "รุนแรง", "medium": "เฝ้าระวัง"}
+
+_CONCERN_TEXT: dict[str, str] = {
+    repo.CONCERN_IN_PRODUCTION_LOW: "กำลังผลิต — ต่ำกว่าเกณฑ์ของเป้า",
+    repo.CONCERN_FINISHED_LOW: "ผลิตจบแล้ว — ได้ไม่ถึงเกณฑ์ของเป้า",
+    repo.CONCERN_MISSING_CLEANED: "ปิดรอบแล้ว แต่ยังไม่กรอกผลผลิตหลังทำความสะอาด",
+    repo.CONCERN_LOW_RETENTION: "อัตราคงเหลือหลังคัดต่ำกว่าค่าเฉลี่ยมาก",
+}
+
+# Only these two are measured against the typed threshold; a threshold
+# printed beside the other two would claim a test that was never applied.
+_THRESHOLD_KINDS = {repo.CONCERN_IN_PRODUCTION_LOW, repo.CONCERN_FINISHED_LOW}
+
+_REASON_TEXT: dict[str, str] = {
+    repo.FOLLOW_UP_NEVER: "ไม่เคยตรวจ",
+    repo.FOLLOW_UP_LOW_SCORE: "คะแนนต่ำ",
+    repo.FOLLOW_UP_OVERDUE: "ค้างตรวจ",
+    repo.FOLLOW_UP_LOW_YIELD: "ผลผลิตต่ำกว่าเป้า",
+}
+
+# The value column means a different thing per reason; on screen the unit
+# is glued to the number, in a spreadsheet it gets a column of its own.
+_REASON_UNIT: dict[str, str] = {
+    repo.FOLLOW_UP_NEVER: "วัน นับจากลงทะเบียนแปลง",
+    repo.FOLLOW_UP_LOW_SCORE: "คะแนน (เต็ม 10)",
+    repo.FOLLOW_UP_OVERDUE: "วัน นับจากตรวจล่าสุด",
+    repo.FOLLOW_UP_LOW_YIELD: "% ของเป้า",
+}
+
+
+def _concerns_workbook(result: ExecutiveConcerns) -> bytes:
+    rows: list[list[CellValue]] = [[
+        "ระดับ", "P.Code", "ประเด็น", "แปลง", "ค่า (%)", "เกณฑ์ (% ของเป้า)",
+    ]]
+    for r in result.rows:
+        rows.append([
+            _SEVERITY_TEXT.get(r.severity, r.severity),
+            r.key,
+            _CONCERN_TEXT.get(r.kind, r.kind),
+            r.plots,
+            float(r.value) if r.value is not None else None,
+            result.threshold_pct if r.kind in _THRESHOLD_KINDS else None,
+        ])
+    return build_xlsx([("executive-concerns", rows)])
+
+
+def _follow_up_workbook(result: ExecutiveFollowUp) -> bytes:
+    rows: list[list[CellValue]] = [[
+        "รหัสแปลง", "ชื่อแปลง", "Supplier", "เหตุผล", "ค่า", "หน่วย", "ตรวจล่าสุด",
+    ]]
+    for r in result.rows:
+        rows.append([
+            r.plot_code,
+            r.plot_name,
+            r.supplier_code,
+            _REASON_TEXT.get(r.reason, r.reason),
+            float(r.value),
+            _REASON_UNIT.get(r.reason, ""),
+            r.last_inspected.isoformat() if r.last_inspected else "ยังไม่เคยตรวจ",
+        ])
+    return build_xlsx([("executive-follow-up", rows)])
+
+
+@router.get("/executive/concerns/export", dependencies=_EXECUTIVE_GATE)
+async def export_concerns(
+    _rls: RLSContext,
+    range: str = _RANGE_Q,
+    threshold_pct: float | None = Query(
+        None, description="Below this share of plan is a concern (default 70)",
+    ),
+    date_from: datetime.date | None = _FROM_Q,
+    date_to: datetime.date | None = _TO_Q,
+    supplier_id: UUID | None = _SUPPLIER_Q,
+    p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
+    db: AsyncSession = DbDep,
+) -> Response:
+    """Every concern for these filters and this threshold, as .xlsx."""
+    result = await repo.get_concerns(
+        db, range_key=range, date_from=date_from, date_to=date_to,
+        supplier_id=supplier_id, p_code=p_code, cycle_status=cycle_status,
+        threshold_pct=threshold_pct, limit=None,
+    )
+    return xlsx_response(_concerns_workbook(result), "executive-concerns.xlsx")
+
+
+@router.get("/executive/follow-up/export", dependencies=_EXECUTIVE_GATE)
+async def export_follow_up(
+    _rls: RLSContext,
+    supplier_id: UUID | None = _SUPPLIER_Q,
+    p_code: str | None = _PCODE_Q,
+    cycle_status: str | None = _CYCLE_STATUS_Q,
+    db: AsyncSession = DbDep,
+) -> Response:
+    """Every plot on the worklist, worst first, as .xlsx. No period, like
+    the list itself — it is about today."""
+    result = await repo.get_executive_follow_up(
+        db, limit=None, supplier_id=supplier_id, p_code=p_code,
+        cycle_status=cycle_status,
+    )
+    return xlsx_response(_follow_up_workbook(result), "executive-follow-up.xlsx")

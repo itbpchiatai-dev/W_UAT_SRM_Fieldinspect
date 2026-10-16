@@ -413,6 +413,20 @@ def follow_up_sort_key(reason: str, value: float) -> tuple[int, float]:
     return (_FOLLOW_UP_SEVERITY[reason], _FOLLOW_UP_DIRECTION[reason] * value)
 
 
+def paginate(rows: list, limit: int | None, offset: int) -> list:
+    """One page of an already-ranked list; ``limit=None`` means every row.
+
+    Round 56. Both lists are ranked in Python — the ranking needs every
+    flagged row, so there is nothing to push into SQL — and what a page
+    saves is the payload, the detail lookup, and the rendering. Shared so
+    the two blocks cannot disagree about where page 2 starts. A negative
+    offset is treated as 0 rather than slicing from the end, which is what
+    Python would otherwise quietly do.
+    """
+    start = max(0, offset)
+    return rows[start:] if limit is None else rows[start:start + limit]
+
+
 # --- Round 50: one row per plot, its LAST inspection --------------------
 #
 # Everything about production is read off this: which lens a plot falls in,
@@ -969,7 +983,8 @@ async def get_executive_breakdown(
 async def get_executive_follow_up(
     db: AsyncSession,
     *,
-    limit: int = 10,
+    limit: int | None = 10,
+    offset: int = 0,
     supplier_id: UUID | None = None,
     p_code: str | None = None,
     cycle_status: str | None = None,
@@ -979,6 +994,10 @@ async def get_executive_follow_up(
     Never range-scoped — "who should I send someone to" is a question about
     today, and a 30-day window would hide the plot nobody has touched in
     four months, which is the one that most needs finding.
+
+    ``limit``/``offset`` page through the ranked list (round 56);
+    ``limit=None`` returns all of it, which is what the export asks for.
+    ``total`` is always the whole list, so the pager knows how far it goes.
     """
     today = datetime.date.today()
     sets = await _flag_sets(db, today, supplier_id, p_code, cycle_status)
@@ -1001,10 +1020,15 @@ async def get_executive_follow_up(
     # Worse-first INSIDE each reason, and "worse" points the other way for
     # two of the three: more days overdue is worse, but a LOWER score and a
     # LOWER percentage of plan are worse. One sign per reason.
-    ordered = sorted(
+    ranked = sorted(
         worst.items(),
         key=lambda item: follow_up_sort_key(item[1][0], item[1][1]),
-    )[:limit]
+    )
+    # Only the page's plots are looked up — the detail join is the part
+    # that grows with the list.
+    ordered = paginate(ranked, limit, offset)
+    if not ordered:          # paged past the end
+        return ExecutiveFollowUp(total=total, rows=[])
     wanted = [plot_id for plot_id, _ in ordered]
 
     last_visit = _last_visit_sq(supplier_id, p_code, cycle_status)
@@ -1132,6 +1156,8 @@ async def get_concerns(
     p_code: str | None = None,
     cycle_status: str | None = None,
     threshold_pct=None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> ExecutiveConcerns:
     """What to act on, summarised per P.Code.
 
@@ -1215,4 +1241,9 @@ async def get_concerns(
                 ))
 
     rows.sort(key=lambda r: (r.severity != "high", -r.plots))
-    return ExecutiveConcerns(threshold_pct=float(threshold), rows=rows)
+    # Ranked over everything first, THEN sliced: page 2 has to continue
+    # page 1's order, not restart it.
+    return ExecutiveConcerns(
+        threshold_pct=float(threshold), total=len(rows),
+        rows=paginate(rows, limit, offset),
+    )

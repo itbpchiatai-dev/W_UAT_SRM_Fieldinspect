@@ -17,7 +17,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
-  ExecutiveDashboard, periodLabel, formatKg, achievementTone, reasonValue, concernText,
+  ExecutiveDashboard, Pager, periodLabel, formatKg, achievementTone, reasonValue, concernText,
 } from './ExecutiveDashboard';
 import type {
   ConcernRow, ExecutiveBreakdown, ExecutiveConcerns, ExecutiveFollowUp,
@@ -53,6 +53,8 @@ const trendMock = vi.fn();
 const breakdownMock = vi.fn();
 const followUpMock = vi.fn();
 const downloadMock = vi.fn();
+const downloadConcernsMock = vi.fn();
+const downloadFollowUpMock = vi.fn();
 
 vi.mock('../../api/dashboard', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/dashboard')>();
@@ -65,6 +67,8 @@ vi.mock('../../api/dashboard', async (importOriginal) => {
     getExecutiveBreakdown: (...a: unknown[]) => breakdownMock(...a),
     getExecutiveFollowUp: (...a: unknown[]) => followUpMock(...a),
     downloadExecutiveBreakdown: (...a: unknown[]) => downloadMock(...a),
+    downloadExecutiveConcerns: (...a: unknown[]) => downloadConcernsMock(...a),
+    downloadExecutiveFollowUp: (...a: unknown[]) => downloadFollowUpMock(...a),
   };
 });
 
@@ -108,7 +112,7 @@ function concerns(rows: ConcernRow[] = [
   { severity: 'high', kind: 'finished_low', key: 'WM-141', plots: 1, value: 49.2 },
   { severity: 'medium', kind: 'missing_cleaned', key: '(ไม่ระบุ)', plots: 3, value: null },
 ]): ExecutiveConcerns {
-  return { thresholdPct: 70, rows };
+  return { thresholdPct: 70, total: rows.length, rows };
 }
 
 function trend(o: Partial<ExecutiveTrend> = {}): ExecutiveTrend {
@@ -172,7 +176,8 @@ function renderPage() {
 
 beforeEach(() => {
   for (const m of [summaryMock, productionMock, concernsMock, trendMock,
-                   breakdownMock, followUpMock, downloadMock]) m.mockReset();
+                   breakdownMock, followUpMock, downloadMock,
+                   downloadConcernsMock, downloadFollowUpMock]) m.mockReset();
   summaryMock.mockResolvedValue(summary());
   productionMock.mockResolvedValue(production());
   concernsMock.mockResolvedValue(concerns());
@@ -180,6 +185,8 @@ beforeEach(() => {
   breakdownMock.mockResolvedValue(breakdown());
   followUpMock.mockResolvedValue(followUp());
   downloadMock.mockResolvedValue(new Blob(['x']));
+  downloadConcernsMock.mockResolvedValue(new Blob(['x']));
+  downloadFollowUpMock.mockResolvedValue(new Blob(['x']));
 });
 
 // --- pure helpers --------------------------------------------------------
@@ -351,7 +358,7 @@ describe('concern strip', () => {
     const box = await screen.findByLabelText('เกณฑ์แจ้งเตือน (% ของเป้า)');
     expect((box as HTMLInputElement).value).toBe('70');
     await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(
-      expect.anything(), 70,
+      expect.anything(), 70, 10, 0,
     ));
   });
 
@@ -360,7 +367,7 @@ describe('concern strip', () => {
     const box = await screen.findByLabelText('เกณฑ์แจ้งเตือน (% ของเป้า)');
     fireEvent.change(box, { target: { value: '85' } });
     await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(
-      expect.anything(), 85,
+      expect.anything(), 85, 10, 0,
     ), { timeout: 2000 });
   });
 
@@ -373,7 +380,7 @@ describe('concern strip', () => {
     // "8" on the way to "85" must never reach the server — it would flag
     // almost nothing and the list would flicker empty.
     await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(
-      expect.anything(), 85,
+      expect.anything(), 85, 10, 0,
     ), { timeout: 2000 });
     const asked = concernsMock.mock.calls.slice(before).map((c) => c[1]);
     expect(asked).not.toContain(8);
@@ -396,6 +403,7 @@ describe('concern strip', () => {
     // number still sitting in the box.
     concernsMock.mockResolvedValue({
       thresholdPct: 200,
+      total: 1,
       rows: [{ severity: 'high', kind: 'in_production_low', key: 'WM-141',
                plots: 4, value: 59.3 }],
     });
@@ -410,7 +418,7 @@ describe('concern strip', () => {
     const before = summaryMock.mock.calls.length;
     fireEvent.change(box, { target: { value: '90' } });
     await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(
-      expect.anything(), 90,
+      expect.anything(), 90, 10, 0,
     ), { timeout: 2000 });
     expect(summaryMock.mock.calls.length).toBe(before);
   });
@@ -509,7 +517,7 @@ describe('follow-up list', () => {
 
   it('says how many more there are beyond the ten shown', async () => {
     renderPage();
-    expect(await screen.findByText(/แสดง 3 จาก 65 แปลง/)).toBeTruthy();
+    expect(await screen.findByText(/แสดง 1–3 จาก 65 แปลง/)).toBeTruthy();
   });
 
   it('names the two things it still cannot show', async () => {
@@ -550,10 +558,10 @@ describe('filters', () => {
       expect(productionMock).toHaveBeenCalledWith(f);
       // getConcerns also carries its own threshold, which the scope
       // filters must not disturb.
-      expect(concernsMock).toHaveBeenCalledWith(f, 70);
+      expect(concernsMock).toHaveBeenCalledWith(f, 70, 10, 0);
       expect(trendMock).toHaveBeenCalledWith(f);
       expect(breakdownMock).toHaveBeenCalledWith(f, 'p_code');
-      expect(followUpMock).toHaveBeenCalledWith(f, 10);
+      expect(followUpMock).toHaveBeenCalledWith(f, 10, 0);
     });
   });
 
@@ -599,7 +607,7 @@ describe('Excel export', () => {
     await waitFor(() => expect(breakdownMock).toHaveBeenCalledWith(
       expect.anything(), 'crop',
     ));
-    fireEvent.click(screen.getByRole('button', { name: /Export Excel/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export Excel เทียบผลงาน' }));
     await waitFor(() => expect(downloadMock).toHaveBeenCalledWith(
       expect.anything(), 'crop',
     ));
@@ -609,7 +617,7 @@ describe('Excel export', () => {
     downloadMock.mockRejectedValue(new Error('boom'));
     renderPage();
     await screen.findByRole('table', { name: 'เทียบผลงาน' });
-    fireEvent.click(screen.getByRole('button', { name: /Export Excel/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export Excel เทียบผลงาน' }));
     expect(await screen.findByText(/ดาวน์โหลดไม่สำเร็จ/)).toBeTruthy();
   });
 });
@@ -643,5 +651,224 @@ describe('one block failing does not blank the page', () => {
     renderPage();
     await screen.findByText('20 ราย');
     expect(screen.queryByText(/แผนที่/)).toBeNull();
+  });
+});
+
+// --- round 56: paging ----------------------------------------------------
+
+async function nav(block: string) {
+  return screen.findByRole('navigation', { name: `เปลี่ยนหน้า ${block}` });
+}
+
+describe('Pager', () => {
+  function renderPager(page: number, total: number) {
+    const onChange = vi.fn();
+    render(<Pager page={page} total={total} label="x" onChange={onChange} />);
+    return onChange;
+  }
+
+  it('draws nothing when everything fits on one page', () => {
+    renderPager(0, 10);
+    expect(screen.queryByRole('navigation')).toBeNull();
+  });
+
+  it('appears at eleven rows', () => {
+    renderPager(0, 11);
+    expect(screen.getByText('หน้า 1 / 2')).toBeTruthy();
+  });
+
+  it('cannot go back from the first page', () => {
+    renderPager(0, 65);
+    expect((screen.getByRole('button', { name: '← ก่อนหน้า' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'ถัดไป →' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('cannot go forward from the last page', () => {
+    renderPager(6, 65);
+    expect(screen.getByText('หน้า 7 / 7')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'ถัดไป →' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('reports the page it moves to', () => {
+    const onChange = renderPager(2, 65);
+    fireEvent.click(screen.getByRole('button', { name: 'ถัดไป →' }));
+    fireEvent.click(screen.getByRole('button', { name: '← ก่อนหน้า' }));
+    expect(onChange.mock.calls).toEqual([[3], [1]]);
+  });
+});
+
+describe('paging the two lists (round 56)', () => {
+  it('asks for the first ten of each list', async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(concernsMock).toHaveBeenCalledWith(expect.anything(), 70, 10, 0);
+      expect(followUpMock).toHaveBeenCalledWith(expect.anything(), 10, 0);
+    });
+  });
+
+  it('pages the worklist when it is longer than ten', async () => {
+    renderPage();
+    expect(within(await nav('แปลงที่ต้องตามงาน')).getByText('หน้า 1 / 7')).toBeTruthy();
+  });
+
+  it('shows no pager when the concerns fit on one page', async () => {
+    renderPage();
+    await screen.findByText(/กำลังผลิต 4 แปลง/);
+    expect(screen.queryByRole('navigation', { name: 'เปลี่ยนหน้า สิ่งที่ต้องกังวล' })).toBeNull();
+  });
+
+  it('asks the server for the next ten on ถัดไป', async () => {
+    renderPage();
+    fireEvent.click(within(await nav('แปลงที่ต้องตามงาน')).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenCalledWith(expect.anything(), 10, 10));
+    expect(await screen.findByText('หน้า 2 / 7')).toBeTruthy();
+  });
+
+  it('counts the footer from where the page starts', async () => {
+    renderPage();
+    fireEvent.click(within(await nav('แปลงที่ต้องตามงาน')).getByRole('button', { name: 'ถัดไป →' }));
+    expect(await screen.findByText(/แสดง 11–13 จาก 65 แปลง/)).toBeTruthy();
+  });
+
+  it('pages the concerns too', async () => {
+    concernsMock.mockResolvedValue({ ...concerns(), total: 23 });
+    renderPage();
+    const pager = await nav('สิ่งที่ต้องกังวล');
+    expect(within(pager).getByText('หน้า 1 / 3')).toBeTruthy();
+    fireEvent.click(within(pager).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(expect.anything(), 70, 10, 10));
+  });
+
+  it('goes back to page one when a filter changes what is listed', async () => {
+    // Page 4 of the OLD list is meaningless for the new one — and may not
+    // exist at all.
+    renderPage();
+    fireEvent.click(within(await nav('แปลงที่ต้องตามงาน')).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenCalledWith(expect.anything(), 10, 10));
+    fireEvent.click(screen.getByRole('button', { name: 'ตัวกรอง' }));
+    fireEvent.click(screen.getByRole('button', { name: /กรองสถานะรอบปลูก/ }));
+    fireEvent.click(await screen.findByRole('option', { name: 'เก็บเกี่ยวแล้ว' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cycleStatus: 'harvested' }), 10, 0,
+    ));
+  });
+
+  it('never asks the new filter for the old page first', async () => {
+    // The page is derived during render; resetting it in an effect would
+    // fire one request for page 2 of the new filter before correcting.
+    renderPage();
+    fireEvent.click(within(await nav('แปลงที่ต้องตามงาน')).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenCalledWith(expect.anything(), 10, 10));
+    fireEvent.click(screen.getByRole('button', { name: 'ตัวกรอง' }));
+    fireEvent.click(screen.getByRole('button', { name: /กรองสถานะรอบปลูก/ }));
+    fireEvent.click(await screen.findByRole('option', { name: 'เก็บเกี่ยวแล้ว' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cycleStatus: 'harvested' }), 10, 0,
+    ));
+    const harvested = followUpMock.mock.calls.filter(
+      (c) => (c[0] as { cycleStatus: string | null }).cycleStatus === 'harvested');
+    expect(harvested.map((c) => c[2])).toEqual([0]);
+  });
+
+  it('goes back to page one of the concerns when the threshold changes', async () => {
+    concernsMock.mockResolvedValue({ ...concerns(), total: 23 });
+    renderPage();
+    fireEvent.click(within(await nav('สิ่งที่ต้องกังวล')).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(expect.anything(), 70, 10, 10));
+    fireEvent.change(screen.getByLabelText('เกณฑ์แจ้งเตือน (% ของเป้า)'), { target: { value: '85' } });
+    await waitFor(() => expect(concernsMock).toHaveBeenLastCalledWith(
+      expect.anything(), 85, 10, 0,
+    ), { timeout: 2000 });
+  });
+
+  it('keeps the worklist page when only the period changes', async () => {
+    // The worklist is about today; the period tabs do not touch it.
+    renderPage();
+    fireEvent.click(within(await nav('แปลงที่ต้องตามงาน')).getByRole('button', { name: 'ถัดไป →' }));
+    expect(await screen.findByText('หน้า 2 / 7')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '30 วัน' }));
+    await waitFor(() => expect(summaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ range: '30d' }),
+    ));
+    expect(screen.getByText('หน้า 2 / 7')).toBeTruthy();
+  });
+
+  it('does not refetch the other blocks when a list changes page', async () => {
+    renderPage();
+    const pager = await nav('แปลงที่ต้องตามงาน');
+    await waitFor(() => expect(summaryMock).toHaveBeenCalled());
+    const before = [summaryMock, productionMock, concernsMock, trendMock, breakdownMock]
+      .map((m) => m.mock.calls.length);
+    fireEvent.click(within(pager).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenCalledWith(expect.anything(), 10, 10));
+    expect([summaryMock, productionMock, concernsMock, trendMock, breakdownMock]
+      .map((m) => m.mock.calls.length)).toEqual(before);
+  });
+
+  it('says a page came back empty instead of claiming nothing is wrong', async () => {
+    // Rows can vanish between two clicks; "ไม่พบสัญญาณ" on page 3 of 23
+    // would be a false all-clear.
+    concernsMock.mockResolvedValue({ thresholdPct: 70, total: 23, rows: [] });
+    renderPage();
+    expect(await screen.findByText('ไม่มีรายการในหน้านี้')).toBeTruthy();
+    expect(screen.queryByText(/ไม่พบสัญญาณที่ต้องกังวล/)).toBeNull();
+    expect(await nav('สิ่งที่ต้องกังวล')).toBeTruthy();
+  });
+});
+
+// --- round 56: the two list exports --------------------------------------
+
+describe('list exports (round 56)', () => {
+  it('gives each block its own, distinguishable button', async () => {
+    renderPage();
+    await screen.findByRole('table', { name: 'แปลงที่ต้องตามงาน' });
+    for (const block of ['สิ่งที่ต้องกังวล', 'เทียบผลงาน', 'แปลงที่ต้องตามงาน']) {
+      expect(screen.getByRole('button', { name: `Export Excel ${block}` })).toBeTruthy();
+    }
+  });
+
+  it('downloads the concerns with the filters and the typed threshold', async () => {
+    renderPage();
+    await screen.findByText(/กำลังผลิต 4 แปลง/);
+    fireEvent.change(screen.getByLabelText('เกณฑ์แจ้งเตือน (% ของเป้า)'), { target: { value: '85' } });
+    await waitFor(() => expect(concernsMock).toHaveBeenCalledWith(
+      expect.anything(), 85, 10, 0,
+    ), { timeout: 2000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Export Excel สิ่งที่ต้องกังวล' }));
+    await waitFor(() => expect(downloadConcernsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ range: '3m' }), 85,
+    ));
+  });
+
+  it('downloads the whole worklist, not the page on screen', async () => {
+    renderPage();
+    fireEvent.click(within(await nav('แปลงที่ต้องตามงาน')).getByRole('button', { name: 'ถัดไป →' }));
+    await waitFor(() => expect(followUpMock).toHaveBeenCalledWith(expect.anything(), 10, 10));
+    fireEvent.click(screen.getByRole('button', { name: 'Export Excel แปลงที่ต้องตามงาน' }));
+    await waitFor(() => expect(downloadFollowUpMock).toHaveBeenCalledTimes(1));
+    // filters only — no limit, no offset
+    expect(downloadFollowUpMock.mock.calls[0]).toHaveLength(1);
+  });
+
+  it('cannot export an empty list', async () => {
+    followUpMock.mockResolvedValue(followUp({ total: 0, rows: [] }));
+    concernsMock.mockResolvedValue(concerns([]));
+    renderPage();
+    await screen.findByText(/ไม่มีแปลงที่ต้องตามงาน/);
+    for (const block of ['สิ่งที่ต้องกังวล', 'แปลงที่ต้องตามงาน']) {
+      const btn = screen.getByRole('button', { name: `Export Excel ${block}` }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    }
+  });
+
+  it('reports a failed download inside the block it came from', async () => {
+    downloadFollowUpMock.mockRejectedValue(new Error('boom'));
+    renderPage();
+    const region = await screen.findByRole('region', { name: 'แปลงที่ต้องตามงาน' });
+    await within(region).findByRole('table');
+    fireEvent.click(within(region).getByRole('button', { name: 'Export Excel แปลงที่ต้องตามงาน' }));
+    expect(await within(region).findByText(/ดาวน์โหลดไม่สำเร็จ/)).toBeTruthy();
+    const concernsRegion = screen.getByRole('region', { name: 'สิ่งที่ต้องกังวล' });
+    expect(within(concernsRegion).queryByText(/ดาวน์โหลดไม่สำเร็จ/)).toBeNull();
   });
 });

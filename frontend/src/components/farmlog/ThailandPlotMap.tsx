@@ -35,7 +35,7 @@ import {
   isWithinThailand,
   projectLngLat,
 } from './thailandGeo';
-import { locateProvince } from './provinceLocator';
+import { locateProvince, normalizeProvinceName } from './provinceLocator';
 
 interface PlacedPlot {
   plot: PlotSummary;
@@ -531,10 +531,13 @@ function MapOverviewPanel({ plots }: { plots: PlotSummary[] }) {
       (p) => describeYieldPlanGap(p.plantCount, p.expectedYieldFull) != null,
     ).length;
 
-    // Top provinces.
+    // Top provinces. Count by the normalised name, as the map's bubbles do:
+    // Excel imports store "จ.ขอนแก่น" while the form stores "ขอนแก่น", and
+    // counting the raw text split one province into two chips.
     const provCounts = new Map<string, number>();
     for (const p of plots) {
-      if (p.province) provCounts.set(p.province, (provCounts.get(p.province) ?? 0) + 1);
+      const name = normalizeProvinceName(p.province);
+      if (name) provCounts.set(name, (provCounts.get(name) ?? 0) + 1);
     }
     const topProvinces = [...provCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
 

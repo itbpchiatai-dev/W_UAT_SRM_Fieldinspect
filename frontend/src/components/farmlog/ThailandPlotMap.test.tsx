@@ -141,6 +141,25 @@ describe('ThailandPlotMap overview panel', () => {
     expect(screen.getByText('สัดส่วนชนิดพืช')).toBeTruthy();
   });
 
+  it('counts one province once in the top-provinces chips however it was written', () => {
+    render(
+      <ThailandPlotMap
+        plots={[
+          plot({ id: 'p1', province: 'จ.ขอนแก่น', latitude: null, longitude: null }),
+          plot({ id: 'p2', province: 'จ.ขอนแก่น', latitude: null, longitude: null }),
+          plot({ id: 'p3', province: 'ขอนแก่น', latitude: null, longitude: null }),
+          plot({ id: 'p4', province: 'จังหวัดกาฬสินธุ์', latitude: null, longitude: null }),
+          plot({ id: 'p5', province: 'กาฬสินธุ์', latitude: null, longitude: null }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('ขอนแก่น · 3')).toBeTruthy();
+    expect(screen.getByText('กาฬสินธุ์ · 2')).toBeTruthy();
+    expect(screen.queryByText(/^จ\./)).toBeNull();
+    expect(screen.queryByText(/^จังหวัดกาฬสินธุ์/)).toBeNull();
+  });
+
   it('switches from overview to plot detail when a marker is clicked, and back on close', () => {
     const { container } = render(
       <ThailandPlotMap plots={[plot({ plotCode: 'SUP001-P001' })]} />,

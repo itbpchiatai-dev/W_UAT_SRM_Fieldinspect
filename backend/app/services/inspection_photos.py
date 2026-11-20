@@ -248,7 +248,17 @@ def _reject_oversized_canvas(image: Image.Image) -> None:
 def _reject_animated(image: Image.Image) -> None:
     """Multi-frame input (animated WebP/PNG) is refused: only the first frame
     would survive the re-encode, silently discarding what the user sent.
+
+    MPO is the exception (round 58). It is a JPEG carrying a Multi-Picture
+    Format index: iPhones store their HDR gain map that way (other cameras a
+    depth map or a stereo pair), so Pillow reports two frames for an ordinary
+    photo. That is not animation. Frame 0 is the photo and the only frame the
+    rest of the pipeline decodes; the extra picture is dropped, as the
+    browser-side compression already drops it.
     """
+    if image.format == "MPO":
+        image.seek(0)
+        return
     if getattr(image, "n_frames", 1) > 1 or getattr(image, "is_animated", False):
         raise PhotoProcessingError("animated images are not supported")
 

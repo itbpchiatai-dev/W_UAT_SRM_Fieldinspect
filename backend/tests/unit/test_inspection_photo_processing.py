@@ -409,6 +409,60 @@ def test_animated_webp_is_rejected() -> None:
         normalize_inspection_photo(animated)
 
 
+def test_animated_png_is_still_rejected() -> None:
+    """The MPO exemption below must not open a door for real animation in a
+    format the upload allowlist accepts."""
+    frames = [_solid((80, 80), (255, 0, 0)), _solid((80, 80), (0, 0, 255))]
+    animated = _encode(frames[0], "PNG", save_all=True, append_images=frames[1:], duration=100)
+    assert getattr(_opened(animated), "n_frames", 1) > 1, "fixture must be animated"
+
+    with pytest.raises(PhotoProcessingError, match="animated"):
+        normalize_inspection_photo(animated)
+
+
+def _jpeg_with_second_picture(primary: Image.Image, extra: Image.Image) -> bytes:
+    """A JPEG carrying a Multi-Picture Format index — how an iPhone stores its
+    HDR gain map inside an ordinary .jpeg. Pillow opens it as MPO with two
+    frames."""
+    data = _encode(primary, "MPO", save_all=True, append_images=[extra], quality=90)
+    opened = _opened(data)
+    assert data.startswith(_JPEG_MAGIC), "fixture must still be a JPEG on the wire"
+    assert opened.format == "MPO" and opened.n_frames == 2, "fixture must carry a second picture"
+    return data
+
+
+def test_jpeg_with_a_second_picture_keeps_only_the_photo() -> None:
+    """Round 58 — iPhone photos sent unresized (the in-app browser could not
+    compress them) were refused as "animated" on UAT, 38 times in one morning.
+    The second picture is a gain map, not a frame: the photo itself is stored
+    and the extra picture is dropped, as browser-side compression already does."""
+    primary = _solid((640, 480), (200, 30, 30))
+    gain_map = _solid((160, 120), (30, 30, 200))
+
+    output = normalize_inspection_photo(_jpeg_with_second_picture(primary, gain_map))
+
+    _assert_is_webp(output)
+    stored = _opened(output)
+    assert getattr(stored, "n_frames", 1) == 1
+    assert stored.size == (640, 480)
+    red, green, blue = stored.convert("RGB").getpixel((320, 240))
+    assert red > 150 and blue < 100, "stored pixels must come from the photo, not the gain map"
+    assert len(output) <= MAX_STORED_PHOTO_BYTES
+
+
+def test_jpeg_with_a_second_picture_still_obeys_the_pixel_budget() -> None:
+    """The exemption skips the frame-count check only; the photo itself is
+    still held to MAX_IMAGE_PIXELS."""
+    edge = 8000  # 64M pixels > MAX_IMAGE_PIXELS
+    assert edge * edge > MAX_IMAGE_PIXELS
+    oversized = _jpeg_with_second_picture(
+        Image.new("L", (edge, edge), 0), Image.new("L", (64, 64), 0)
+    )
+
+    with pytest.raises(PhotoProcessingError, match="too large"):
+        normalize_inspection_photo(oversized)
+
+
 def test_pixel_bomb_is_rejected_from_the_header_without_decoding() -> None:
     """A small PNG declaring a canvas past the pixel budget is refused on the
     header alone — it never gets to allocate that bitmap."""

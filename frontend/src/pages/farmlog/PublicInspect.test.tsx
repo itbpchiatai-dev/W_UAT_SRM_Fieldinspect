@@ -1162,6 +1162,26 @@ describe('PublicInspect — submit and record payload', () => {
     expect(createJsonMock).not.toHaveBeenCalled();
   });
 
+  it('round 59 — a photo the server refuses is named by its slot, not reported as a typing error', async () => {
+    mockGeolocation('denied');
+    createWithPhotosMock.mockRejectedValue({
+      isAxiosError: true,
+      response: {
+        status: 422,
+        data: { detail: "Photo 'inspection-photo-2.webp' could not be processed: animated images are not supported" },
+      },
+    });
+    await goToFormStep();
+
+    await pickPhotoAndWait(1, jpegFile('IMG_1234.jpeg'));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการตรวจแปลง' }));
+
+    expect(
+      await screen.findByText('ระบบใช้รูป "ใบ/ลำต้น" ไม่ได้ กรุณาเปลี่ยนรูป หรือถ่ายใหม่ แล้วลองส่งอีกครั้ง'),
+    ).toBeTruthy();
+    expect(screen.queryByText('ข้อมูลไม่ถูกต้อง กรุณาตรวจสอบและลองใหม่')).toBeNull();
+  });
+
   it('41. sends the compressed (WebP) File through the public with-photos multipart, not the original', async () => {
     mockGeolocation('denied');
     createWithPhotosMock.mockResolvedValue({ plotCode: 'PLOT001', plotName: 'Plot One' });

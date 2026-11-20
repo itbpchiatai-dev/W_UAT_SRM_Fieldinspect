@@ -140,6 +140,97 @@ async def test_empty_file_is_rejected(tmp_path: Path) -> None:
     assert exc_info.value.status_code == 422
 
 
+# --- round 59: every refusal is logged, and says which photo -----------------
+
+_PRIVATE_NAME = "somchai-farm.jpg"
+_ANIMATED_PNG = _encode(
+    _solid((40, 40), (255, 0, 0)),
+    "PNG",
+    save_all=True,
+    append_images=[_solid((40, 40), (0, 0, 255))],
+    duration=100,
+)
+
+
+def _rejected_log(mocked_logger) -> dict:
+    calls = [
+        c for c in mocked_logger.warning.call_args_list if c.args == ("inspection_photo_rejected",)
+    ]
+    assert len(calls) == 1, "exactly one rejection log per refused request"
+    return calls[0].kwargs
+
+
+@pytest.mark.parametrize(
+    ("content", "status", "reason"),
+    [
+        pytest.param(b"", 422, "empty", id="empty"),
+        pytest.param(_NOT_AN_IMAGE, 400, "unsupported type", id="not-an-image"),
+        pytest.param(_ANIMATED_PNG, 422, "animated images are not supported", id="animated"),
+        pytest.param(
+            b"\xff\xd8\xff" + b"a" * MAX_PHOTO_UPLOAD_BYTES,
+            413,
+            "over upload limit",
+            id="oversized",
+        ),
+    ],
+)
+async def test_a_refused_photo_is_logged_with_its_reason_and_slot(
+    tmp_path: Path, content: bytes, status: int, reason: str
+) -> None:
+    """Round 59 — on 2026-11-20 UAT refused one iPhone 38 times and nothing
+    recorded why. The log names the reason and the slot (2nd photo here), and
+    never the client filename, which can carry a person's name."""
+    storage = LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
+    photos = [_upload(_JPEG), _upload(content, _PRIVATE_NAME), _upload(_PNG)]
+
+    with patch("app.services.inspection_photos.logger") as mocked_logger, \
+         pytest.raises(HTTPException) as exc_info:
+        await validate_and_save_photos(photos, storage)
+
+    assert exc_info.value.status_code == status
+    logged = _rejected_log(mocked_logger)
+    assert logged["status"] == status
+    assert logged["reason"] == reason
+    assert logged["photo_index"] == 2
+    assert logged["photo_count"] == 3
+    assert _PRIVATE_NAME not in " ".join(f"{k}={v}" for k, v in logged.items())
+
+
+async def test_a_refused_photo_count_is_logged(tmp_path: Path) -> None:
+    storage = LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
+
+    with patch("app.services.inspection_photos.logger") as mocked_logger, \
+         pytest.raises(HTTPException):
+        await validate_and_save_photos([], storage)
+
+    logged = _rejected_log(mocked_logger)
+    assert logged == {"status": 422, "reason": "photo count out of range", "photo_count": 0}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b"", id="empty"),
+        pytest.param(_NOT_AN_IMAGE, id="not-an-image"),
+        pytest.param(_ANIMATED_PNG, id="animated"),
+        pytest.param(b"\xff\xd8\xff" + b"a" * MAX_PHOTO_UPLOAD_BYTES, id="oversized"),
+    ],
+)
+async def test_every_per_photo_refusal_names_the_photo_in_its_detail(
+    tmp_path: Path, content: bytes
+) -> None:
+    """The field form (PublicInspect, lib/photo-rejection.ts) recognises a
+    photo refusal by this "Photo '<filename>'" prefix and turns it into "รูปที่ N
+    ใช้ไม่ได้". Changing the wording silently drops it back to the generic
+    "ข้อมูลไม่ถูกต้อง" — this test is the contract."""
+    storage = LocalPhotoStorage(root=tmp_path, url_prefix="/media/inspection-photos")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_and_save_photos([_upload(content, "IMG_1234.jpeg")], storage)
+
+    assert str(exc_info.value.detail).startswith("Photo 'IMG_1234.jpeg' ")
+
+
 async def test_malicious_filename_never_reaches_the_saved_path(tmp_path: Path) -> None:
     """Server always generates the on-disk filename (uuid4) — a client
     sending a path-traversal-shaped `filename` (e.g. "../../../etc/passwd")

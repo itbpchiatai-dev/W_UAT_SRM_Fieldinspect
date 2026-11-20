@@ -93,6 +93,7 @@ import {
 } from '../../lib/offline-inspection-store';
 import { extractOfflineErrorCode, describeOfflineErrorCode } from '../../lib/offline-submission-errors';
 import { isUploadTimeout, largeUploadWarning, UPLOAD_TIMEOUT_MESSAGE } from '../../lib/photo-upload-budget';
+import { describePhotoRejection } from '../../lib/photo-rejection';
 
 // Round 8-4H.1 — Offline inspection creation is temporarily disabled;
 // /public/inspect is Online-only until offline is redeveloped. See module
@@ -1184,6 +1185,15 @@ export function PublicInspect() {
           // user's own retry click safely replays instead of risking a
           // duplicate record — never claim success, never auto-retry.
           setSubmitError('เชื่อมต่อเครือข่ายไม่สำเร็จ กรุณาลองใหม่');
+          return;
+        }
+
+        // Round 59 — a refused photo names its slot. Checked before the
+        // status branches because it can arrive as 400, 413 or 422, and the
+        // generic 422 sentence below sent users back to re-check their typing.
+        const photoRejection = describePhotoRejection(err, photos);
+        if (photoRejection) {
+          setSubmitError(photoRejection);
           return;
         }
 

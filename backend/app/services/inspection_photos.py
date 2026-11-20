@@ -642,6 +642,25 @@ def get_photo_storage(*, plot_code: str = "") -> LocalPhotoStorage | OBSPhotoSto
     )
 
 
+def _log_photo_rejected(status_code: int, *, reason: str, **context: object) -> None:
+    """Round 59 — record WHY a photo was refused. Before this the only trace
+    was the status code in the access log: on 2026-11-20 UAT refused one
+    iPhone 38 times and the cause had to be inferred from the response size.
+
+    The client filename is deliberately NOT logged (a phone may name a file
+    after a person); the slot, byte size, sniffed type and the curated reason
+    are enough to diagnose, and none of them is user content.
+    """
+    logger.warning("inspection_photo_rejected", status=status_code, reason=reason, **context)
+
+
+def _photo_rejected(
+    status_code: int, detail: str, *, reason: str, **context: object
+) -> HTTPException:
+    _log_photo_rejected(status_code, reason=reason, **context)
+    return HTTPException(status_code=status_code, detail=detail)
+
+
 async def validate_and_save_photos(
     files: list[UploadFile], storage: PhotoStorage
 ) -> list[str]:
@@ -661,31 +680,50 @@ async def validate_and_save_photos(
     about URLs it received, which on a raised call is nothing.
     """
     if not 1 <= len(files) <= MAX_PHOTO_COUNT:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Between 1 and {MAX_PHOTO_COUNT} photos are allowed (got {len(files)})",
+        raise _photo_rejected(
+            422,
+            f"Between 1 and {MAX_PHOTO_COUNT} photos are allowed (got {len(files)})",
+            reason="photo count out of range",
+            photo_count=len(files),
         )
 
     normalized: list[bytes] = []
-    for file in files:
-        content = await _read_capped(file)
+    for index, file in enumerate(files, start=1):
+        try:
+            content = await _read_capped(file)
+        except HTTPException as exc:
+            _log_photo_rejected(
+                exc.status_code,
+                reason="over upload limit",
+                photo_index=index,
+                photo_count=len(files),
+            )
+            raise
+        context = {"photo_index": index, "photo_count": len(files), "bytes": len(content)}
         if not content:
-            raise HTTPException(status_code=422, detail=f"Photo '{file.filename}' is empty")
+            raise _photo_rejected(
+                422, f"Photo '{file.filename}' is empty", reason="empty", **context
+            )
         # Magic-byte allowlist first: cheapest possible rejection of anything
         # that isn't even claiming to be one of our three formats, before a
         # decoder is handed attacker-controlled bytes.
         if _sniff_extension(content) is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Photo '{file.filename}' is not a supported image type (jpg/png/webp only)",
+            raise _photo_rejected(
+                400,
+                f"Photo '{file.filename}' is not a supported image type (jpg/png/webp only)",
+                reason="unsupported type",
+                **context,
             )
         try:
             normalized.append(await normalize_inspection_photo_async(content))
         except PhotoProcessingError as exc:
             # `exc.reason` is a fixed, curated string — never a decoder message.
-            raise HTTPException(
-                status_code=422,
-                detail=f"Photo '{file.filename}' could not be processed: {exc.reason}",
+            raise _photo_rejected(
+                422,
+                f"Photo '{file.filename}' could not be processed: {exc.reason}",
+                reason=exc.reason,
+                sniffed_type=_sniff_extension(content),
+                **context,
             ) from exc
 
     saved: list[str] = []
